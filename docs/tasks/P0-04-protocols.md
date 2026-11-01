@@ -1,6 +1,6 @@
 # P0-04 — Contract: sim-protocol and control protocol
 
-Status: in-review
+Status: done
 Agent: Claude (Opus)
 Branch: ws/p0-04
 Depends on: P0-02
