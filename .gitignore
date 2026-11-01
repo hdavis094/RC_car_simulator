@@ -1,0 +1,9 @@
+node_modules/
+dist/
+out/
+.rcsim/
+logs/
+test-results/
+playwright-report/
+.pio/
+*.log
