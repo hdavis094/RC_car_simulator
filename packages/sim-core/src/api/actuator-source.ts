@@ -1,0 +1,91 @@
+import type { Car, Catalog } from '@rcsim/schema';
+import type {
+  Device,
+  GpioEdge,
+  GpioWrite,
+  LogLine,
+  NetEvent,
+  NetFaults,
+  PwmOutput,
+} from '@rcsim/sim-protocol';
+import type { SensorReading } from './sensors.ts';
+
+/** What the Run hands an actuator source before the first tick. */
+export interface ActuatorSourceSetup {
+  readonly car: Car;
+  readonly catalog: Catalog;
+  readonly seed: number;
+  readonly tickUs: number;
+  /** The sim-protocol device table, in car.json order (index = device id). */
+  readonly devices: readonly Device[];
+}
+
+/** Inputs for one tick, the content of a sim-protocol STEP. */
+export interface TickInput {
+  readonly tick: number;
+  readonly t0Us: number;
+  readonly t1Us: number;
+  /** Readings produced during the previous tick, tagged with their part. */
+  readonly readings: readonly (SensorReading & { readonly instanceId: string })[];
+  readonly gpioEdges: readonly GpioEdge[];
+  readonly serialRx: Uint8Array;
+  readonly netFaults?: NetFaults | undefined;
+}
+
+/** Outputs of one tick, the content of a sim-protocol STEP_DONE. */
+export interface TickOutput {
+  /** PWM channels that changed during the tick. */
+  readonly pwm: readonly PwmOutput[];
+  readonly gpioWrites: readonly GpioWrite[];
+  readonly serialTx: Uint8Array;
+  readonly netEvents: readonly NetEvent[];
+  readonly logs: readonly LogLine[];
+}
+
+/** Why an actuator source stopped producing ticks. */
+export type SourceEnd =
+  | { readonly kind: 'finished' }
+  | { readonly kind: 'stalled'; readonly afterMs: number }
+  | {
+      readonly kind: 'crashed';
+      readonly exitCode: number | null;
+      readonly signal: string | null;
+      /** The last lines of the firmware's stderr. */
+      readonly stderrTail: readonly string[];
+    }
+  | { readonly kind: 'error'; readonly message: string };
+
+/** Thrown by `step` when the source can't continue. */
+export class ActuatorSourceEnded extends Error {
+  readonly end: SourceEnd;
+  constructor(end: SourceEnd) {
+    super(`actuator source ended: ${end.kind}`);
+    this.name = 'ActuatorSourceEnded';
+    this.end = end;
+  }
+}
+
+/**
+ * Where PWM and GPIO outputs come from: the firmware bridge (P1-H, a real
+ * firmware process over sim-protocol) or a scripted timeline for tests
+ * (P1-A). The Run calls `start` once, then `step` once per tick, in order.
+ */
+export interface ActuatorSource {
+  start(setup: ActuatorSourceSetup): Promise<void>;
+  /** Runs one tick; rejects with `ActuatorSourceEnded` when the source is done. */
+  step(input: TickInput): Promise<TickOutput>;
+  /** Ends the source (kills the firmware). Safe to call twice. */
+  stop(): Promise<void>;
+}
+
+/** A scripted PWM change: at `tUs`, `gpio` starts outputting `pulseUs` (50 Hz). */
+export interface ScriptedPwm {
+  readonly tUs: number;
+  readonly gpio: number;
+  readonly pulseUs: number;
+  /** Default 20 000 (50 Hz). */
+  readonly periodUs?: number;
+}
+
+/** Builds a scripted source from a timeline (`--script timeline.json`). Implemented by P1-A. */
+export type CreateScriptedSource = (timeline: readonly ScriptedPwm[]) => ActuatorSource;

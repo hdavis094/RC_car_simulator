@@ -60,8 +60,13 @@ export default tseslint.config(
     files: ['apps/desktop/src/renderer/**/*.{ts,tsx}'],
     languageOptions: { globals: { ...globals.browser } },
     plugins: { 'react-hooks': reactHooks },
+    rules: reactHooks.configs.recommended.rules,
+  },
+  {
+    // Renderer code and the shared IPC contract it imports: no Node, no
+    // Electron, and only the Node-free entry points of the workspace packages.
+    files: ['apps/desktop/src/renderer/**/*.{ts,tsx}', 'apps/desktop/src/shared/**/*.ts'],
     rules: {
-      ...reactHooks.configs.recommended.rules,
       'no-restricted-imports': [
         'error',
         {
@@ -69,6 +74,15 @@ export default tseslint.config(
             {
               name: 'electron',
               message: 'The renderer talks to main only through the preload API.',
+            },
+            {
+              name: '@rcsim/control-protocol',
+              message: 'Its client needs Node. Import types from @rcsim/control-protocol/messages.',
+            },
+            {
+              name: '@rcsim/sim-core',
+              message:
+                'Import @rcsim/sim-core/api (types) or @rcsim/sim-core/stubs, which are Node-free.',
             },
           ],
           patterns: [
