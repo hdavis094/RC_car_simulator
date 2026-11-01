@@ -243,6 +243,8 @@ export class ControlClient extends EventEmitter<ControlClientEvents> {
     const delay = Math.min(maxMs, initialMs * factor ** this.#failures);
     this.#failures += 1;
     this.#setState('waiting');
+    // A state listener may have called close().
+    if (this.#state !== 'waiting') return;
     this.#retryTimer = setTimeout(() => {
       this.#retryTimer = undefined;
       if (this.#state === 'waiting') this.#open();

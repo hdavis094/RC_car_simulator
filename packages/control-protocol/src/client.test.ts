@@ -177,6 +177,27 @@ describe('ControlClient edge cases', () => {
     expect(client.drive({ throttle: 0.9, steer: 0 })).toBe(false);
   });
 
+  it('leaves no retry timer when close() is called on entering waiting', async () => {
+    const client = new ControlClient({
+      host: '127.0.0.1',
+      port: await freePort(),
+      reconnect: { initialMs: 60_000, maxMs: 60_000, factor: 1 },
+    });
+    client.on('error', () => {});
+    client.on('state', (s) => {
+      if (s === 'waiting') client.close();
+    });
+    client.connect();
+    await until(() => client.state === 'closed');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(client.state).toBe('closed');
+    // No live timer: the client holds no handle that would keep the process up.
+    const handles = (
+      process as unknown as { getActiveResourcesInfo(): string[] }
+    ).getActiveResourcesInfo();
+    expect(handles.filter((h) => h === 'Timeout').length).toBeLessThan(5);
+  });
+
   it('honours close() called from a state listener', async () => {
     const car = await startCar();
     const client = new ControlClient({ host: '127.0.0.1', port: car.port });

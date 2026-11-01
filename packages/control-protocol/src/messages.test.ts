@@ -66,6 +66,12 @@ describe('LineSplitter', () => {
     expect(bytewise).toEqual([]);
   });
 
+  it('counts a leading BOM toward the wire-byte limit', () => {
+    const body = `{"t":"estop"}${' '.repeat(4096 - 14)}`; // 4095 bytes + \n = 4096
+    const bytes = new TextEncoder().encode(`\uFEFF${body}\n`); // 4099 on the wire
+    expect(new LineSplitter().push(bytes)).toEqual([]);
+  });
+
   it('drops an over-long line whole and keeps going', () => {
     const overflows: number[] = [];
     const splitter = new LineSplitter((bytes) => overflows.push(bytes));

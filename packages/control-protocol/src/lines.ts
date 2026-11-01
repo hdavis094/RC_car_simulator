@@ -5,7 +5,8 @@ import { MAX_LINE_BYTES } from './messages.ts';
  * MAX_LINE_BYTES is dropped whole and reported through `onOverflow`.
  */
 export class LineSplitter {
-  readonly #decoder = new TextDecoder();
+  // ignoreBOM keeps a leading U+FEFF, so its 3 bytes count toward the wire-byte limit.
+  readonly #decoder = new TextDecoder('utf-8', { ignoreBOM: true });
   #pending = '';
   #overflowing = false;
   readonly #onOverflow: (bytes: number) => void;

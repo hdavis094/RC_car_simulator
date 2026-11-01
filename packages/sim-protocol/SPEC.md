@@ -57,30 +57,31 @@ A frame that exceeds any limit is malformed.
 firmware                         sim
    │── HELLO ───────────────────►│   protocol and hal versions
    │◄─────────────────── CONFIG ─│   or BYE(version-mismatch)
-   │◄─────────────────── STEP 0 ─│   firmware runs setup(), then loop()
-   │── STEP_DONE 0 ─────────────►│
-   │◄─────────────────── STEP 1 ─│
-   │── STEP_DONE 1 ─────────────►│
+   │◄─────────────────── STEP n ─│   first STEP of the connection: setup(), then loop()
+   │── STEP_DONE n ─────────────►│
+   │◄───────────────── STEP n+1 ─│
+   │── STEP_DONE n+1 ───────────►│
    │            …                │
    │◄────────────── BYE / BYE ──►│   either side, at any time after HELLO
 ```
 
 1. The firmware connects and sends `HELLO`.
 2. If the sim supports `HELLO.protocolVersion`, it replies `CONFIG`. Otherwise it sends `BYE(version-mismatch)` and closes.
-3. The sim sends `STEP n` (`n` = 0, 1, 2, …). The firmware runs user code: `setup()` during step 0, then `loop()` repeatedly. It keeps going until its virtual clock reaches `STEP.t1Us`, then replies `STEP_DONE n` and blocks until the next `STEP`. Exactly one `STEP_DONE` answers each `STEP`, in order, and the sim never sends `STEP n+1` before receiving `STEP_DONE n`.
+3. The sim sends `STEP` messages with consecutive `tick` values. The first one is `tick` 0 when the run starts, or the run's current tick when a restarted firmware connects. The firmware starts `setup()` in **the first `STEP` of its connection, whatever its `tick`**, then runs `loop()` repeatedly. In each step it runs until its virtual clock reaches the step's end, then replies `STEP_DONE` with the same `tick` and blocks until the next `STEP`. Exactly one `STEP_DONE` answers each `STEP`, in order, and the sim never sends `STEP n+1` before receiving `STEP_DONE n`.
 4. Either side may send `BYE` and then close. A side that receives a malformed frame sends `BYE(malformed)` with a reason, then closes. An unexpected message for the current state, such as `STEP` before `CONFIG`, also counts as malformed.
 
 The sim detects a stall (no `STEP_DONE` within its wall-clock timeout, 2 s by default). It then sends `BYE(stalled)` and kills the firmware process.
 
 ### Virtual time
 
-hal keeps a virtual clock `v`, in ns, that runs continuously across steps:
+hal keeps a virtual clock `v` in **nanoseconds of run sim time**, continuous across steps. Converting the message fields: `t0Ns = t0Us × 1000` and `t1Ns = t1Us × 1000`. `bootNs` is `t0Ns` of the first `STEP` of the connection.
 
-- `delay()` and `delayMicroseconds()` advance `v` exactly by their duration.
+- `delay(ms)` advances `v` by `ms × 1 000 000` ns, and `delayMicroseconds(us)` by `us × 1000` ns.
 - Every other hal call advances `v` by `CONFIG.halCallCostNs`, and every return from `loop()` by `CONFIG.loopCostNs`.
-- **`v` never passes the step's end.** When an advance would take `v` past `t1Us`, `v` stops at `t1Us`. The remainder is carried, and hal sends `STEP_DONE` without returning to user code. The next `STEP` consumes the carried remainder first, so a `delay(100)` spans 100 one-ms steps and returns in the step where it ends. Fractional ns carry the same way.
-- So `v` equals `t0Us` at the start of every step and `t1Us` at every `STEP_DONE`. `setup()` and any `loop()` iteration may span many steps.
-- `micros()` and `millis()` count from the firmware's own start, as after a real power-on or reboot: `micros()` = ⌊(v − t0Us of its first STEP) / 1000⌋, and `millis()` = ⌊micros() / 1000⌋.
+- **`v` never passes the step's end.** When an advance would take `v` past `t1Ns`, `v` stops at `t1Ns`. The remainder (in ns) is carried, and hal sends `STEP_DONE` without returning to user code. The next `STEP` consumes the carried remainder first, so a `delay(100)` with 1 ms ticks spans 100 steps and returns in the step where it ends.
+- So `v == t0Ns` at the start of every step and `v == t1Ns` at every `STEP_DONE`. `setup()` and any `loop()` iteration may span many steps.
+- `micros()` and `millis()` count from the firmware's own start, as after a real power-on or reboot: `micros()` = ⌊(v − bootNs) / 1000⌋, and `millis()` = ⌊(v − bootNs) / 1 000 000⌋.
+- GPIO edge and reading times in messages are run time in µs. An edge at `tUs` takes effect once `v ≥ tUs × 1000`.
 
 ### When things happen
 

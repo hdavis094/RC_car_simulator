@@ -113,6 +113,11 @@ The C++ side of either protocol (P1-C, P1-G); the sim-side bridge (P1-H).
   - a `hello.proto` mismatch gives a `warning` event;
   - SPEC.md uses "connection" rather than "session" (GLOSSARY: avoid "session");
   - run time carries on across firmware restarts, while `micros()`/`millis()` restart, as on a reboot.
+- **Review round 2** (Codex; the Claude round-2 review stopped at a usage limit before reporting). It confirmed the round 1 fixes and found four more, all fixed:
+  - **Clock units (blocking)**: the virtual clock is now specified entirely in ns: `t0Ns`, `t1Ns`, `bootNs`, `micros() = ⌊(v − bootNs)/1000⌋`.
+  - **Restart (blocking)**: `setup()` starts in the first STEP of each connection, whatever its tick, so a restarted firmware runs `setup()` at tick 1234.
+  - **Retry timer**: `close()` from a `waiting` listener no longer leaves a retry timer behind.
+  - **Line limit**: a leading BOM counts toward it.
 - **Contract change requests**: none (this is the contract).
 - **Open questions**:
   - Device kinds are strings (`vl53l0x`, `mpu6050`, `hc-sr04`, `servo`, `esc`, `analog`). The mapping from part definition to kind lives in the bridge (P1-H); P0-05 may want it in the sim-core API.
