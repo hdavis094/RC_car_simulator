@@ -3,6 +3,7 @@ import { Socket } from 'node:net';
 import { LineSplitter } from './lines.ts';
 import {
   DEFAULT_PORT,
+  PROTOCOL_VERSION,
   encodeLine,
   parseCarLine,
   type ClientMessage,
@@ -29,6 +30,12 @@ export interface ControlClientOptions {
   readonly reconnect?: Partial<ReconnectOptions>;
   /** How often a held drive command is resent, well inside the 500 ms failsafe. */
   readonly driveRepeatMs?: number;
+  /** Give up a connection attempt after this long and retry. */
+  readonly connectTimeoutMs?: number;
+  /** Treat the link as dead when nothing arrives for this long (telemetry is ~20 Hz). */
+  readonly silenceTimeoutMs?: number;
+  /** Reset the backoff only after a connection has stayed up this long. */
+  readonly stableAfterMs?: number;
 }
 
 export interface ControlClientEvents {
@@ -40,6 +47,8 @@ export interface ControlClientEvents {
   unknown: [detail: { line: string; reason: string }];
   /** A socket error. The client reconnects on its own; this is for display. */
   error: [error: Error];
+  /** Something worth telling the user, e.g. the car speaks another protocol version. */
+  warning: [message: string];
 }
 
 export const DEFAULT_RECONNECT: ReconnectOptions = { initialMs: 250, maxMs: 5000, factor: 2 };
@@ -48,8 +57,11 @@ const clampUnit = (v: number): number => (Number.isFinite(v) ? Math.min(1, Math.
 
 /**
  * A control-protocol client for a car, real or simulated. It reconnects with
- * exponential backoff until `close()`, and resends a held drive command every
- * `driveRepeatMs` so the car's failsafe stays off while a person is driving.
+ * exponential backoff until `close()`, gives up an attempt after
+ * `connectTimeoutMs`, and drops a link that has gone silent. It resends a held
+ * drive command every `driveRepeatMs` so the car's failsafe stays off while a
+ * person is driving. The backoff resets only after a connection stays up
+ * `stableAfterMs`, so two clients displacing each other back off.
  * Commands sent while disconnected are dropped, not queued: a stale drive
  * command must never reach the car late.
  */
@@ -58,6 +70,12 @@ export class ControlClient extends EventEmitter<ControlClientEvents> {
   readonly port: number;
   readonly #reconnect: ReconnectOptions;
   readonly #driveRepeatMs: number;
+  readonly #connectTimeoutMs: number;
+  readonly #silenceTimeoutMs: number;
+  readonly #stableAfterMs: number;
+  #connectTimer: NodeJS.Timeout | undefined;
+  #silenceTimer: NodeJS.Timeout | undefined;
+  #stableTimer: NodeJS.Timeout | undefined;
 
   #state: ConnectionState = 'idle';
   #socket: Socket | undefined;
@@ -75,6 +93,9 @@ export class ControlClient extends EventEmitter<ControlClientEvents> {
     this.port = options.port ?? DEFAULT_PORT;
     this.#reconnect = { ...DEFAULT_RECONNECT, ...options.reconnect };
     this.#driveRepeatMs = options.driveRepeatMs ?? 100;
+    this.#connectTimeoutMs = options.connectTimeoutMs ?? 3000;
+    this.#silenceTimeoutMs = options.silenceTimeoutMs ?? 1500;
+    this.#stableAfterMs = options.stableAfterMs ?? 1000;
   }
 
   get state(): ConnectionState {
@@ -96,8 +117,14 @@ export class ControlClient extends EventEmitter<ControlClientEvents> {
     this.#open();
   }
 
-  /** Sends a drive command now and keeps resending it until `releaseDrive()`. */
+  /**
+   * Sends a drive command now and keeps resending it until `releaseDrive()`.
+   * While disconnected it returns false and changes nothing. A command held
+   * when a connection drops resumes after reconnecting, since the person is
+   * still holding the stick; the car failsafes in between.
+   */
   drive(command: { throttle: number; steer: number }): boolean {
+    if (this.#state !== 'connected') return false;
     this.#held = { throttle: clampUnit(command.throttle), steer: clampUnit(command.steer) };
     if (!this.#repeatTimer) {
       this.#repeatTimer = setInterval(() => this.#sendHeld(), this.#driveRepeatMs);
@@ -125,6 +152,7 @@ export class ControlClient extends EventEmitter<ControlClientEvents> {
     this.releaseDrive();
     clearTimeout(this.#retryTimer);
     this.#retryTimer = undefined;
+    this.#clearConnectionTimers();
     this.#socket?.destroy();
     this.#socket = undefined;
     this.#setState('closed');
@@ -132,6 +160,8 @@ export class ControlClient extends EventEmitter<ControlClientEvents> {
 
   #sendHeld(): boolean {
     if (!this.#held) return false;
+    // Never queue a drive behind unsent data: on a stalled link it would arrive late.
+    if ((this.#socket?.writableLength ?? 0) > 0) return false;
     const message: ClientMessage = { t: 'drive', seq: this.#seq, ...this.#held };
     const sent = this.#send(message);
     if (sent) this.#seq = (this.#seq + 1) % 0x1_0000_0000;
@@ -150,8 +180,25 @@ export class ControlClient extends EventEmitter<ControlClientEvents> {
     this.emit('state', state);
   }
 
+  #clearConnectionTimers(): void {
+    clearTimeout(this.#connectTimer);
+    clearTimeout(this.#silenceTimer);
+    clearTimeout(this.#stableTimer);
+    this.#connectTimer = this.#silenceTimer = this.#stableTimer = undefined;
+  }
+
+  #resetSilence(socket: Socket): void {
+    clearTimeout(this.#silenceTimer);
+    this.#silenceTimer = setTimeout(() => {
+      this.emit('warning', `no data from the car for ${this.#silenceTimeoutMs} ms; reconnecting`);
+      socket.destroy();
+    }, this.#silenceTimeoutMs);
+  }
+
   #open(): void {
     this.#setState('connecting');
+    // A state listener may have called close().
+    if (this.#state !== 'connecting') return;
     const socket = new Socket();
     this.#socket = socket;
     const splitter = new LineSplitter((bytes) =>
@@ -159,15 +206,23 @@ export class ControlClient extends EventEmitter<ControlClientEvents> {
     );
     socket.setNoDelay(true);
 
+    this.#connectTimer = setTimeout(() => {
+      this.emit('warning', `connecting to ${this.host}:${this.port} timed out`);
+      socket.destroy();
+    }, this.#connectTimeoutMs);
+
     socket.on('connect', () => {
       if (this.#socket !== socket) return;
-      this.#failures = 0;
+      clearTimeout(this.#connectTimer);
       this.#hello = undefined;
+      this.#stableTimer = setTimeout(() => (this.#failures = 0), this.#stableAfterMs);
+      this.#resetSilence(socket);
       this.#setState('connected');
-      this.#sendHeld();
+      if (this.#state === 'connected') this.#sendHeld();
     });
     socket.on('data', (chunk: Buffer) => {
       if (this.#socket !== socket) return;
+      this.#resetSilence(socket);
       for (const line of splitter.push(chunk)) this.#handle(line);
     });
     socket.on('error', (error) => {
@@ -176,6 +231,7 @@ export class ControlClient extends EventEmitter<ControlClientEvents> {
     socket.on('close', () => {
       if (this.#socket !== socket) return;
       this.#socket = undefined;
+      this.#clearConnectionTimers();
       if (this.#state === 'closed') return;
       this.#scheduleRetry();
     });
@@ -203,6 +259,12 @@ export class ControlClient extends EventEmitter<ControlClientEvents> {
     switch (message.t) {
       case 'hello':
         this.#hello = message;
+        if (message.proto !== PROTOCOL_VERSION) {
+          this.emit(
+            'warning',
+            `the car speaks control protocol ${message.proto}; this client speaks ${PROTOCOL_VERSION}`,
+          );
+        }
         this.emit('hello', message);
         break;
       case 'telemetry':

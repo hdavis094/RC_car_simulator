@@ -163,7 +163,91 @@ describe('ControlClient against the fake car', () => {
   });
 });
 
+describe('ControlClient edge cases', () => {
+  it('refuses drive while disconnected and after close, without holding it', async () => {
+    const car = await startCar();
+    const client = new ControlClient({ host: '127.0.0.1', port: car.port });
+    cleanups.push(() => client.close());
+    expect(client.drive({ throttle: 0.9, steer: 0 })).toBe(false);
+    client.connect();
+    await once(client, 'hello');
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(car.received.filter((m) => m.t === 'drive')).toEqual([]);
+    client.close();
+    expect(client.drive({ throttle: 0.9, steer: 0 })).toBe(false);
+  });
+
+  it('honours close() called from a state listener', async () => {
+    const car = await startCar();
+    const client = new ControlClient({ host: '127.0.0.1', port: car.port });
+    client.on('state', (s) => {
+      if (s === 'connecting') client.close();
+    });
+    client.connect();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(client.state).toBe('closed');
+    expect(car.connected).toBe(false);
+  });
+
+  it('does not hang on a host that never answers', async () => {
+    // Non-routable: the attempt either times out (connectTimeoutMs) or fails
+    // fast, depending on the host's network; either way the client moves on.
+    const client = new ControlClient({
+      host: '10.255.255.1',
+      port: 3333,
+      connectTimeoutMs: 100,
+      reconnect: { initialMs: 1000, maxMs: 1000, factor: 1 },
+    });
+    cleanups.push(() => client.close());
+    client.on('error', () => {});
+    client.on('warning', () => {});
+    client.connect();
+    await until(() => client.state === 'waiting', 1500);
+  });
+
+  it('reconnects when the car goes silent', async () => {
+    const car = await startCar({ telemetryIntervalMs: 10_000 });
+    const client = new ControlClient({
+      host: '127.0.0.1',
+      port: car.port,
+      silenceTimeoutMs: 150,
+      reconnect: { initialMs: 20, maxMs: 20, factor: 1 },
+    });
+    cleanups.push(() => client.close());
+    const warnings: string[] = [];
+    client.on('warning', (w) => warnings.push(w));
+    client.connect();
+    await once(client, 'hello');
+    await once(client, 'hello');
+    expect(warnings.join()).toMatch(/no data/);
+  });
+
+  it('warns about a car speaking another protocol version', async () => {
+    const car = await startCar();
+    const client = startClient(car.port);
+    await once(client, 'hello');
+    const warning = once(client, 'warning');
+    car.sendRaw('{"t":"hello","name":"x","fw":"9","proto":2}');
+    const [message] = await warning;
+    expect(message).toMatch(/protocol 2/);
+  });
+});
+
 describe('failsafe timing', () => {
+  it('is not extended by mode messages', async () => {
+    const car = await startCar();
+    const client = startClient(car.port);
+    await once(client, 'hello');
+    client.drive({ throttle: 0.7, steer: 0 });
+    await until(() => car.state.throttle === 0.7);
+    client.releaseDrive();
+    const ticker = setInterval(() => client.setMode('manual'), 100);
+    cleanups.push(() => clearInterval(ticker));
+    const [sinceLastDriveMs] = (await once(car, 'failsafe')) as [number];
+    expect(sinceLastDriveMs).toBeLessThan(650);
+    expect(car.state.throttle).toBe(0);
+  });
+
   it('stays off while the client holds a drive command', async () => {
     const car = await startCar();
     const client = startClient(car.port);

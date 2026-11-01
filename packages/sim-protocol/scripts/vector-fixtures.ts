@@ -6,6 +6,16 @@ const MAX_SAFE = Number.MAX_SAFE_INTEGER;
 
 export const VALID_VECTORS: Record<string, Message> = {
   hello: { type: 'HELLO', protocolVersion: PROTOCOL_VERSION, halVersion: '0.1.0' },
+  'hello-bom': { type: 'HELLO', protocolVersion: PROTOCOL_VERSION, halVersion: '\uFEFFhal 0.1' },
+  'step-zero-power-on-readings': {
+    type: 'STEP',
+    tick: 0,
+    t0Us: 0,
+    t1Us: 1000,
+    readings: [{ device: 5, tUs: 0, type: 'analog', volts: 2.0625 }],
+    gpioEdges: [],
+    serialRx: new Uint8Array(0),
+  },
   'hello-empty-version': { type: 'HELLO', protocolVersion: PROTOCOL_VERSION, halVersion: '' },
   'hello-max-string': {
     type: 'HELLO',
@@ -100,17 +110,17 @@ export const VALID_VECTORS: Record<string, Message> = {
     t0Us: 1_234_000,
     t1Us: 1_235_000,
     readings: [
-      { device: 2, tUs: 1_234_100, type: 'distance', mm: 812, status: 'valid' },
-      { device: 2, tUs: 1_234_900, type: 'distance', mm: 8190, status: 'no-target' },
+      { device: 2, tUs: 1_233_100, type: 'distance', mm: 812, status: 'valid' },
+      { device: 2, tUs: 1_233_900, type: 'distance', mm: 8190, status: 'no-target' },
       {
         device: 3,
-        tUs: 1_234_000,
+        tUs: 1_233_000,
         type: 'imu',
         accel: [0.5, -0.25, 9.8125],
         gyro: [0, 0.125, -1.5],
         tempC: 24.5,
       },
-      { device: 5, tUs: 1_234_500, type: 'analog', volts: 2.0625 },
+      { device: 5, tUs: 1_233_500, type: 'analog', volts: 2.0625 },
     ],
     gpioEdges: [
       { gpio: 34, tUs: 1_234_200, level: true },
@@ -284,6 +294,39 @@ export const MALFORMED_VECTORS: Record<string, { bytes: Uint8Array; description:
       0,
     ]),
     description: 'tick 2^53 is above 2^53 - 1',
+  },
+  'f32-infinity': {
+    // STEP with one analog reading whose volts are +Infinity (0x7F800000).
+    bytes: frame([
+      ...stepHeader,
+      0x01,
+      0x00,
+      0x00,
+      0x00,
+      ...new Array<number>(8).fill(0),
+      0x03,
+      0x00,
+      0x00,
+      0x80,
+      0x7f,
+    ]),
+    description: 'an f32 is +Infinity',
+  },
+  'f32-nan': {
+    bytes: frame([
+      ...stepHeader,
+      0x01,
+      0x00,
+      0x00,
+      0x00,
+      ...new Array<number>(8).fill(0),
+      0x03,
+      0x00,
+      0x00,
+      0xc0,
+      0x7f,
+    ]),
+    description: 'an f32 is NaN',
   },
   'loss-over-million': {
     bytes: frame([

@@ -6,7 +6,7 @@ This is the binary protocol between `sim-core` (the **sim**) and one firmware pr
 
 - A Unix domain stream socket. **The sim is the server.** It creates the socket, listens, and starts the firmware with the socket path in the environment variable `RCSIM_SOCKET`. The firmware connects once at startup.
 - The path is under `/tmp` and shorter than 100 bytes (macOS caps `sun_path` at 104), for example `/tmp/rcsim-<pid>-<n>.sock`.
-- One connection is one **session**. A firmware restart (a crash, or a simulated reboot) is a new session.
+- One socket connection carries one firmware process. A firmware restart (a crash, or a simulated reboot) is a new connection within the same run.
 
 ## Framing
 
@@ -28,16 +28,16 @@ All multi-byte values are **little-endian**.
 
 | Type | Encoding |
 |---|---|
-| `u8`, `u16`, `u32`, `u64` | unsigned integers, 1/2/4/8 bytes |
-| `f32` | IEEE 754 binary32 |
+| `u8`, `u16`, `u32`, `u64` | unsigned integers, 1/2/4/8 bytes. A `u64` must not exceed 2⁵³ − 1; a larger value is malformed (this keeps every value exact in JavaScript, and 2⁵³ µs is 285 years). |
+| `f32` | IEEE 754 binary32, finite only: NaN and ±Infinity are malformed |
 | `bool` | `u8`, 0 or 1; any other value is malformed |
-| `string` | `u16` byte length, then UTF-8 bytes (no terminator); invalid UTF-8 is malformed |
+| `string` | `u16` byte length, then UTF-8 bytes (no terminator). Invalid UTF-8 is malformed. Bytes are kept exactly, a leading BOM included. |
 | `bytes` | `u32` length, then raw bytes |
 | `array<T>` | `u16` count, then `count` elements of `T` |
 | `optional<T>` | `u8` 0 (absent) or 1 (present, followed by `T`); other values are malformed |
 | `enum` | `u8`; values not listed here are malformed |
 
-Times are **µs of sim time as `u64`**. Sim time starts at 0 when the session starts. The TypeScript codec represents `u64` as `number`, so values above 2⁵³ − 1 are rejected as malformed. 2⁵³ µs is 285 years of sim time.
+Times are **µs of sim time as `u64`**. Sim time belongs to the run: it starts at 0 when the run starts and carries on across firmware restarts.
 
 ## Limits
 
@@ -51,7 +51,7 @@ A frame that exceeds any limit is malformed.
 | serial bytes per message (`serialRx`, `serialTx`) | 16 384 |
 | log lines per `STEP_DONE` | 256 |
 
-## Session
+## Connection
 
 ```
 firmware                         sim
@@ -74,10 +74,18 @@ The sim detects a stall (no `STEP_DONE` within its wall-clock timeout, 2 s by de
 
 ### Virtual time
 
-- Inside the firmware, `delay()` and `delayMicroseconds()` advance virtual time exactly.
-- Every other hal call costs `CONFIG.halCallCostNs`, and every return from `loop()` costs `CONFIG.loopCostNs`.
-- `t0Us` is the virtual time at the start of a step. The firmware's clock may overshoot `t1Us` by up to one call cost or one `delay()` remainder. The next step then starts from `t0Us` regardless, so the overshoot never accumulates.
-- `millis()` = ⌊virtual µs / 1000⌋ and `micros()` = virtual µs, truncated as on the ESP32.
+hal keeps a virtual clock `v`, in ns, that runs continuously across steps:
+
+- `delay()` and `delayMicroseconds()` advance `v` exactly by their duration.
+- Every other hal call advances `v` by `CONFIG.halCallCostNs`, and every return from `loop()` by `CONFIG.loopCostNs`.
+- **`v` never passes the step's end.** When an advance would take `v` past `t1Us`, `v` stops at `t1Us`. The remainder is carried, and hal sends `STEP_DONE` without returning to user code. The next `STEP` consumes the carried remainder first, so a `delay(100)` spans 100 one-ms steps and returns in the step where it ends. Fractional ns carry the same way.
+- So `v` equals `t0Us` at the start of every step and `t1Us` at every `STEP_DONE`. `setup()` and any `loop()` iteration may span many steps.
+- `micros()` and `millis()` count from the firmware's own start, as after a real power-on or reboot: `micros()` = ⌊(v − t0Us of its first STEP) / 1000⌋, and `millis()` = ⌊micros() / 1000⌋.
+
+### When things happen
+
+- The sim applies `STEP_DONE n` (PWM, GPIO writes) to tick n, then advances physics through tick n. It computes the readings parts produce during tick n, and sends them in `STEP n+1`. **A reading therefore reaches the firmware one tick after it is produced**, with `STEP n+1.t0Us − tickUs ≤ tUs < STEP n+1.t0Us`. `STEP 0` carries the parts' power-on readings, if any, at `tUs = 0`.
+- `STEP n.gpioEdges` are input edges inside tick n (`t0Us ≤ tUs < t1Us`), which hal applies at their timestamps while user code runs. Edges caused by firmware output, such as an HC-SR04 echo after its trigger, fall in later ticks.
 
 ## Messages
 
@@ -102,7 +110,7 @@ Any other type byte is malformed.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `protocolVersion` | `u16` | The version the session uses (equal to `HELLO`'s) |
+| `protocolVersion` | `u16` | The version the connection uses (equal to `HELLO`'s) |
 | `tickUs` | `u32` | Length of one tick, normally 1000 |
 | `seed` | `u32` | The run's seed, for any randomness hal needs (none in v1) |
 | `halCallCostNs` | `u32` | Virtual time each hal call costs, normally 1000 |
@@ -147,10 +155,10 @@ The sim decides the kind from the part definition. Parts hal doesn't model (the 
 
 | Field | Type | Meaning |
 |---|---|---|
-| `tick` | `u64` | Tick index, starting at 0 and rising by 1 |
-| `t0Us` | `u64` | Sim time at the start of the tick |
+| `tick` | `u64` | Tick index of the run, rising by 1. A restarted firmware's first `STEP` continues the run's numbering. |
+| `t0Us` | `u64` | Run sim time at the start of the tick |
 | `t1Us` | `u64` | Sim time at its end (`t0Us + tickUs`) |
-| `readings` | `array<Reading>` | New readings since the last `STEP`, in device order |
+| `readings` | `array<Reading>` | Readings produced during the previous tick, in device order, then by `tUs` |
 | `gpioEdges` | `array<GpioEdge>` | Input edges the sim drives during this tick, ascending `tUs` |
 | `serialRx` | `bytes` | Bytes arriving on `Serial` (UART0) during this tick |
 | `netFaults` | `optional<NetFaults>` | Present only when the settings changed |
@@ -160,7 +168,7 @@ The sim decides the kind from the part definition. Parts hal doesn't model (the 
 | Field | Type | Meaning |
 |---|---|---|
 | `device` | `u16` | Index into `CONFIG.devices` |
-| `tUs` | `u64` | When the part produced the reading (`t0Us ≤ tUs < t1Us`) |
+| `tUs` | `u64` | When the part produced the reading, in the previous tick (see *When things happen*) |
 | `type` | `enum` | `1` DISTANCE, `2` IMU, `3` ANALOG |
 | … | | payload by type, below |
 

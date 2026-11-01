@@ -181,6 +181,8 @@ export type Message = Hello | Config | Step | StepDone | Bye;
  */
 export class ProtocolError extends Error {
   readonly reason: 'malformed' | 'version-mismatch';
+  /** Messages a FrameDecoder completed from the same chunk before the bad frame. */
+  decoded: readonly Message[] = [];
 
   constructor(reason: 'malformed' | 'version-mismatch', message: string) {
     super(message);

@@ -92,6 +92,27 @@ The C++ side of either protocol (P1-C, P1-G); the sim-side bridge (P1-H).
     - One client at a time; the newest wins.
     - The `tof_mm`, `batt_mv` and `yaw_dps` telemetry fields are optional.
   - **Session-state checks** (e.g. `STEP` before `CONFIG`) are specified, but enforcing them is left to the bridge (P1-H) and hal (P1-C). The codec only validates frames.
+- **Review round 1.** Both reviews (Claude `code-review` and Codex adversarial) asked for changes. All blocking findings are fixed:
+  - **Virtual time no longer overshoots** (Codex). A delay or call cost that crosses `t1` stops there and carries over, so `v == t0` at every STEP and `setup()` may span ticks.
+  - **Reading timestamps are defined** (Codex). Readings produced in tick n arrive in STEP n+1, with `tUs` in the previous tick; STEP 0 carries the power-on readings. The vectors were updated.
+  - **BOM** (Codex): strings keep a leading BOM, with a new `hello-bom` vector.
+  - **f32 overflow** (both): finiteness is checked on the binary32 value. SPEC.md says f32 is finite-only, with new `f32-infinity` and `f32-nan` malformed vectors.
+  - **u64 cap** (Claude): 2⁵³−1 is now a protocol rule for every implementation.
+  - **Mode messages no longer extend the failsafe** (Codex). The SPEC says so too.
+  - **ControlClient on a stalled or absent link** (Claude):
+    - a connect timeout (3 s);
+    - a silence watchdog (1.5 s);
+    - no held drive queued behind unsent data;
+    - the backoff resets only after 1 s of stable connection, so displacing clients back off.
+
+  Non-blocking findings fixed:
+  - `FrameDecoder` copies linearly, keeps the messages decoded before a bad frame (`ProtocolError.decoded`), and stays failed afterwards;
+  - `drive()` while disconnected or closed is refused without holding;
+  - `close()` from a state listener is honoured;
+  - the line limit counts wire bytes, `\r` included, however TCP splits the line;
+  - a `hello.proto` mismatch gives a `warning` event;
+  - SPEC.md uses "connection" rather than "session" (GLOSSARY: avoid "session");
+  - run time carries on across firmware restarts, while `micros()`/`millis()` restart, as on a reboot.
 - **Contract change requests**: none (this is the contract).
 - **Open questions**:
   - Device kinds are strings (`vl53l0x`, `mpu6050`, `hc-sr04`, `servo`, `esc`, `analog`). The mapping from part definition to kind lives in the bridge (P1-H); P0-05 may want it in the sim-core API.

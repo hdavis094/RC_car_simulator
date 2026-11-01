@@ -172,7 +172,8 @@ export class FakeCar extends EventEmitter<FakeCarEvents> {
       case 'mode':
         this.state.mode = message.mode;
         this.state.estop = false;
-        if (message.mode === 'manual') this.#armFailsafe();
+        // A mode message is not a drive: the failsafe still counts from the last drive.
+        if (message.mode === 'manual') this.#armFailsafe(this.#sinceLastDrive());
         else clearTimeout(this.#failsafeTimer);
         return;
       case 'estop':
@@ -183,8 +184,14 @@ export class FakeCar extends EventEmitter<FakeCarEvents> {
     }
   }
 
-  #armFailsafe(): void {
+  #sinceLastDrive(): number {
+    return this.#lastDriveAt === undefined ? Infinity : performance.now() - this.#lastDriveAt;
+  }
+
+  #armFailsafe(elapsedMs = 0): void {
     clearTimeout(this.#failsafeTimer);
+    const remaining = Math.max(0, this.#options.failsafeMs - elapsedMs);
+    if (remaining === 0 && this.state.throttle === 0 && this.state.steer === 0) return;
     this.#failsafeTimer = setTimeout(() => {
       if (this.state.mode !== 'manual' || this.state.estop) return;
       this.state.throttle = 0;
@@ -192,7 +199,7 @@ export class FakeCar extends EventEmitter<FakeCarEvents> {
       this.state.failsafe = true;
       this.log(`failsafe: no drive for ${this.#options.failsafeMs} ms`);
       this.emit('failsafe', performance.now() - (this.#lastDriveAt ?? this.#startedAt));
-    }, this.#options.failsafeMs);
+    }, remaining);
   }
 
   #sendTelemetry(): void {

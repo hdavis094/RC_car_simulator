@@ -24,13 +24,16 @@ export class LineSplitter {
         this.#overflowing = false;
         continue;
       }
-      const line = part.endsWith('\r') ? part.slice(0, -1) : part;
-      if (Buffer.byteLength(line) + 1 > MAX_LINE_BYTES) {
-        this.#onOverflow(Buffer.byteLength(line) + 1);
+      // The limit counts wire bytes: the line, any \r, and the \n.
+      const wireBytes = Buffer.byteLength(part) + 1;
+      if (wireBytes > MAX_LINE_BYTES) {
+        this.#onOverflow(wireBytes);
         continue;
       }
+      const line = part.endsWith('\r') ? part.slice(0, -1) : part;
       if (line.length > 0) lines.push(line);
     }
+    // A pending tail that already fills the limit can't become a valid line.
     if (Buffer.byteLength(this.#pending) + 1 > MAX_LINE_BYTES) {
       if (!this.#overflowing) this.#onOverflow(Buffer.byteLength(this.#pending) + 1);
       this.#overflowing = true;

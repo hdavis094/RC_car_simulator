@@ -94,6 +94,28 @@ describe('FrameDecoder', () => {
     expect(() => new FrameDecoder().push(header)).toThrow(/outside/);
   });
 
+  it('keeps messages decoded before a bad frame, and stays failed', () => {
+    const good = bin(vectorsDir, 'hello');
+    const bad = bin(malformedDir, 'unknown-type');
+    const decoder = new FrameDecoder();
+    let error: ProtocolError | undefined;
+    try {
+      decoder.push(Buffer.concat([good, bad]));
+    } catch (caught) {
+      error = caught as ProtocolError;
+    }
+    expect(error?.decoded).toEqual([decodeFrame(good)]);
+    expect(() => decoder.push(good)).toThrow(ProtocolError);
+  });
+
+  it('assembles a 1 MiB-class frame from small chunks', () => {
+    const frame = bin(vectorsDir, 'step-max-serial');
+    const decoder = new FrameDecoder();
+    const out: Message[] = [];
+    for (let i = 0; i < frame.length; i += 97) out.push(...decoder.push(frame.subarray(i, i + 97)));
+    expect(out).toEqual([decodeFrame(frame)]);
+  });
+
   it('rejects an incomplete frame in decodeFrame', () => {
     const frame = bin(vectorsDir, 'hello');
     expect(() => decodeFrame(frame.subarray(0, frame.length - 1))).toThrow(/incomplete/);

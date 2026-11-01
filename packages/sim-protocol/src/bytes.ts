@@ -2,7 +2,8 @@ import { LIMITS, ProtocolError } from './protocol.ts';
 
 const malformed = (message: string): ProtocolError => new ProtocolError('malformed', message);
 const utf8Encoder = new TextEncoder();
-const utf8Decoder = new TextDecoder('utf-8', { fatal: true });
+// ignoreBOM keeps a leading U+FEFF, so strings round-trip byte for byte.
+const utf8Decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 
 /** Appends little-endian primitives to a growing buffer. Checks every limit in SPEC.md. */
 export class ByteWriter {
@@ -60,7 +61,9 @@ export class ByteWriter {
   }
 
   f32(value: number): void {
-    if (!Number.isFinite(value)) throw malformed(`f32 must be finite, got ${value}`);
+    if (!Number.isFinite(Math.fround(value))) {
+      throw malformed(`f32 must be finite in binary32, got ${value}`);
+    }
     const at = this.#reserve(4);
     this.#view.setFloat32(at, value, true);
   }

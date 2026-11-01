@@ -299,38 +299,67 @@ export function decodeFrame(frame: Uint8Array): Message {
 }
 
 /**
- * Splits a byte stream into messages. Feed it socket chunks in order;
- * it returns every message completed so far and throws `ProtocolError`
- * on the first malformed frame.
+ * Splits a byte stream into messages. Feed it socket chunks in order; it
+ * returns every message completed so far. On the first malformed frame it
+ * throws a `ProtocolError` whose `decoded` holds the messages completed from
+ * that chunk before the bad frame, and it stays failed: the connection must
+ * end with BYE(malformed). Bytes are copied once into a growing buffer, so a
+ * large frame arriving in many chunks costs linear time.
  */
 export class FrameDecoder {
-  #pending = new Uint8Array(0);
+  #buffer = new Uint8Array(4096);
+  #start = 0;
+  #end = 0;
+  #failure: ProtocolError | undefined;
 
   /** Bytes received but not yet part of a complete frame. */
   get buffered(): number {
-    return this.#pending.length;
+    return this.#end - this.#start;
   }
 
   push(chunk: Uint8Array): Message[] {
-    const joined = new Uint8Array(this.#pending.length + chunk.length);
-    joined.set(this.#pending);
-    joined.set(chunk, this.#pending.length);
-
+    if (this.#failure) throw this.#failure;
+    this.#append(chunk);
     const messages: Message[] = [];
-    let offset = 0;
-    while (joined.length - offset >= 4) {
-      const length = new DataView(joined.buffer, joined.byteOffset + offset, 4).getUint32(0, true);
-      if (length < 1 || length > LIMITS.frameBytes) {
-        throw new ProtocolError(
-          'malformed',
-          `frame length ${length} is outside 1..${LIMITS.frameBytes}`,
-        );
+    try {
+      while (this.#end - this.#start >= 4) {
+        const view = new DataView(this.#buffer.buffer, this.#buffer.byteOffset + this.#start, 4);
+        const length = view.getUint32(0, true);
+        if (length < 1 || length > LIMITS.frameBytes) {
+          throw new ProtocolError(
+            'malformed',
+            `frame length ${length} is outside 1..${LIMITS.frameBytes}`,
+          );
+        }
+        if (this.#end - this.#start - 4 < length) break;
+        const bodyStart = this.#start + 4;
+        messages.push(decodeBody(this.#buffer.subarray(bodyStart, bodyStart + length)));
+        this.#start = bodyStart + length;
       }
-      if (joined.length - offset - 4 < length) break;
-      messages.push(decodeBody(joined.subarray(offset + 4, offset + 4 + length)));
-      offset += 4 + length;
+    } catch (error) {
+      if (error instanceof ProtocolError) {
+        error.decoded = messages;
+        this.#failure = error;
+      }
+      throw error;
     }
-    this.#pending = joined.slice(offset);
+    if (this.#start === this.#end) this.#start = this.#end = 0;
     return messages;
+  }
+
+  #append(chunk: Uint8Array): void {
+    if (this.#end + chunk.length > this.#buffer.length) {
+      const used = this.#end - this.#start;
+      let size = this.#buffer.length;
+      while (size < used + chunk.length) size *= 2;
+      // Compact (and grow if needed); set() copies correctly even within one buffer.
+      const next = size > this.#buffer.length ? new Uint8Array(size) : this.#buffer;
+      next.set(this.#buffer.subarray(this.#start, this.#end), 0);
+      this.#buffer = next;
+      this.#start = 0;
+      this.#end = used;
+    }
+    this.#buffer.set(chunk, this.#end);
+    this.#end += chunk.length;
   }
 }

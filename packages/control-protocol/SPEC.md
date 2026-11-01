@@ -6,10 +6,12 @@ The protocol between a laptop (the **client**: the app's `ControlClient`, the Ne
 
 - TCP. **The car is the server**, on port **3333** by default.
 - Each direction is a stream of **lines**: one JSON object per line, UTF-8, ended by `\n`. A `\r` before the `\n` is ignored.
-- A line is at most **4096 bytes**, including the `\n`. A receiver discards a longer line and logs it.
+- A line is at most **4096 bytes** on the wire, counting any `\r` and the `\n`. A receiver discards a longer line and logs it.
 - Every object has a string field `t`, the message type.
 
-The car accepts one client at a time. When a second client connects, the car drops the first: the newest controller wins.
+The car accepts one client at a time. When a second client connects, the car drops the first: the newest controller wins. Clients should back off before reconnecting (`ControlClient` does), so two of them don't keep displacing each other.
+
+The car sends `telemetry` continuously, so a client may treat about 1.5 s of silence as a dead link.
 
 ## Messages
 
@@ -67,7 +69,7 @@ The optional fields depend on which parts the car has.
 
 - **Boot**: manual mode, not e-stopped, throttle 0, steering centred.
 - **Manual mode**: the car applies each new `drive`.
-- **Failsafe**: in manual mode, if no `drive` has arrived for **500 ms**, the car sets throttle 0 and centres the steering, and logs it once. The next `drive` resumes control. A client holding the stick must therefore repeat its command; `ControlClient` resends it every 100 ms.
+- **Failsafe**: in manual mode, if no `drive` has been applied for **500 ms**, the car sets throttle 0 and centres the steering, and logs it once. The next `drive` resumes control. Only an applied `drive` restarts the 500 ms; `mode` and `estop` don't. Switching to manual more than 500 ms after the last drive stops the car at once. A client holding the stick must therefore repeat its command; `ControlClient` resends it every 100 ms.
 - **Auto mode**: the car drives itself from its sensors and ignores `drive`.
 - **Disconnect**: the same as no `drive` arriving, so failsafe applies in manual mode. Auto mode carries on.
 

@@ -55,6 +55,17 @@ describe('LineSplitter', () => {
     expect(lines).toEqual(['{"t":"log","msg":"é"}', '{"t":"estop"}']);
   });
 
+  it('counts CR toward the limit the same way however TCP splits the line', () => {
+    const line = `{"t":"estop"}${' '.repeat(4096 - 14)}\r\n`; // 4097 bytes on the wire
+    const whole = new LineSplitter().push(new TextEncoder().encode(line));
+    const splitter = new LineSplitter();
+    const bytewise = [...new TextEncoder().encode(line)].flatMap((b) =>
+      splitter.push(Uint8Array.of(b)),
+    );
+    expect(whole).toEqual([]);
+    expect(bytewise).toEqual([]);
+  });
+
   it('drops an over-long line whole and keeps going', () => {
     const overflows: number[] = [];
     const splitter = new LineSplitter((bytes) => overflows.push(bytes));
