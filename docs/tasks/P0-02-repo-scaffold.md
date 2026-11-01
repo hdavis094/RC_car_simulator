@@ -1,6 +1,6 @@
 # P0-02 — Repo scaffold, verify pipeline, CI
 
-Status: in-review
+Status: done
 Agent: Claude (Opus)
 Branch: ws/p0-02
 Depends on: P0-01
