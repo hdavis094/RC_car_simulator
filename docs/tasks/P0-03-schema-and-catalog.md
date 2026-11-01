@@ -1,6 +1,6 @@
 # P0-03 — Contract: schemas, wiring rules, default catalog
 
-Status: todo
+Status: in-progress
 Agent: Claude (Opus)
 Branch: ws/p0-03
 Depends on: P0-02
