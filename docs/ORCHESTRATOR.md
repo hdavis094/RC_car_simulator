@@ -29,15 +29,12 @@ For the Claude session that runs the build from T3 Code. You dispatch task brief
 
 ## Dispatch
 
-> **Finalised by P0-01.** Until it is done, this section is the plan, not tested commands.
+Tested in P0-01 on 2026-10-31. The decision is recorded in [ADR 0006](adr/0006-dispatch-workers-through-t3-mcp.md): **every worker is a T3 thread** (Path A). Path B is the fallback for when T3 Code is unavailable.
 
-Every worker gets its own worktree and branch from `main`:
+Order matters, so the brief's Status line doesn't conflict at merge time:
 
-```sh
-git worktree add ../rc-sim-wt/<id> -b ws/<id> main     # id: p1-c, etc.
-```
-
-Set the brief's `Status: in-progress` on `main` when dispatching.
+1. On `main`, set the brief's `Status: in-progress` and commit (`docs(tasks): dispatch <ID>`).
+2. Launch the worker. The new branch `ws/<id>` starts from that commit (id is lowercase: `p1-c`).
 
 Every agent gets the **same worker prompt**:
 
@@ -49,17 +46,56 @@ brief's Acceptance list holds and you have committed on branch ws/<id> and
 filled in the brief's Handoff section, then set its Status to in-review.
 ```
 
-**Path A: T3 MCP**, if P0-01 shows it can choose the provider, the model and the worktree. Start one T3 thread per worker with that prompt. The user can watch and step into every thread.
+### Path A: T3 MCP (default)
 
-**Path B: headless CLI**, run in the background from the worktree, logging to `logs/<id>.jsonl`:
+One `t3_thread_launch` call per worker. It creates the worktree and branch, binds the thread to them, and starts the agent. Every field except `modelSelection` is the same for all agents:
 
-```sh
-codex exec -C ../rc-sim-wt/<id> --sandbox workspace-write -m gpt-6.1-sol --json "<prompt>"   > logs/<id>.jsonl
-opencode run -m <freebeam-model-id> --format json "<prompt>"                                 > logs/<id>.jsonl   # cwd = worktree
-agy -p "<prompt>" --output-format json --sandbox                                             > logs/<id>.jsonl   # cwd = worktree
+```json
+{
+  "title": "<ID> <brief title>",
+  "modelSelection": <see table>,
+  "runtimeMode": "full-access",
+  "workspaceStrategy": { "type": "worktree", "baseRef": "main", "branch": "ws/<id>", "startFromOrigin": false },
+  "message": "<worker prompt>"
+}
 ```
 
-Claude workers are sub-agents started in their worktree.
+| Agent | `modelSelection` |
+|---|---|
+| Codex | `{"instanceId":"codex","model":"gpt-6.1-sol","options":[{"id":"reasoningEffort","value":"high"}]}` |
+| OpenCode | `{"instanceId":"opencode","model":"opencode/beam-free"}` |
+| Antigravity | `{"instanceId":"antigravity","model":"gemini-4-argon-medium"}` (agy's default model) |
+| Claude sub-agent | `{"instanceId":"claudeAgent","model":"claude-sonnet-5-5"}` |
+
+Set `reasoningEffort` explicitly for Codex, because T3 defaults `gpt-6.1-sol` to `low`. `orchestrator_capabilities` lists the live model ids and options. Check it if a launch rejects a model.
+
+- **Where it runs**: T3 puts the worktree at `~/.t3/worktrees/RC_car_simulator/ws-<id>` (the branch name with `/` replaced by `-`). `git worktree list` shows it.
+- **Following a worker**: the user watches the thread in T3 Code. `t3_thread_wait` (with a timeout) or `t3_thread_read` shows progress. The worker is finished when `git show ws/<id>:docs/tasks/<FILE> | grep '^Status:'` reads `in-review` or `blocked`.
+- **Sending findings back**: find the thread with `t3_thread_list` (`titleContains: "<ID>"`), then `t3_thread_send` the findings to it. The worker keeps its context and its worktree.
+- **After merge**: `git worktree remove ~/.t3/worktrees/RC_car_simulator/ws-<id>` and `git branch -d ws/<id>`.
+- **If a launch errors or its response is lost**: check `t3_thread_list` before you retry, because the thread may already exist.
+
+### Path B: headless CLI (fallback)
+
+Create the worktree yourself, then run from the repo root in the background. Every command below committed a file in a linked worktree during the spike:
+
+```sh
+git worktree add ../rc-sim-wt/<id> -b ws/<id> main
+
+codex exec -C ../rc-sim-wt/<id> --sandbox danger-full-access -m gpt-6.1-sol --json \
+  -o logs/<id>.last.txt "<prompt>" > logs/<id>.jsonl 2> logs/<id>.err
+
+(cd ../rc-sim-wt/<id> && opencode run -m opencode/beam-free --format json --auto "<prompt>" < /dev/null) \
+  > logs/<id>.jsonl 2> logs/<id>.err
+
+(cd ../rc-sim-wt/<id> && agy -p "<prompt>" --output-format json --sandbox --dangerously-skip-permissions < /dev/null) \
+  > logs/<id>.json 2> logs/<id>.err
+```
+
+- **Codex**: `--sandbox workspace-write` can't commit in a linked worktree. It keeps the main repo's `.git` read-only, even when that is passed with `--add-dir`. It also has no network unless you add `-c sandbox_workspace_write.network_access=true`. Use `danger-full-access`. Reasoning effort comes from `~/.codex/config.toml` (`high`).
+- **OpenCode**: works without `--auto` with the current permission config. Keep `--auto` so a stricter config can't stall the run.
+- **agy** (v1.4.12): print mode does not hang when stdout is redirected. Without `--dangerously-skip-permissions` it denies every write and still exits 0 with `"status":"SUCCESS"`. Check `denied_actions` in the output. `--sandbox` still allows network (`pnpm view` worked).
+- **Claude**: no CLI command was tested. Normally a Claude worker is a Path A thread on `claude-sonnet-5-5`. If T3 Code is down, start a Sonnet sub-agent whose working directory is `../rc-sim-wt/<id>`.
 
 ## Merging
 
