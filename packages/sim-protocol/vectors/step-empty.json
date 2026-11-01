@@ -1,0 +1,4 @@
+{
+  "type": "STEP",
+  "message": { "tick": 0, "t0Us": 0, "t1Us": 1000, "readings": [], "gpioEdges": [], "serialRx": [] }
+}

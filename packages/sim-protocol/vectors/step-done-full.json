@@ -1,0 +1,32 @@
+{
+  "type": "STEP_DONE",
+  "message": {
+    "tick": 1234,
+    "pwm": [
+      { "gpio": 25, "periodUs": 20000, "pulseUs": 1500 },
+      { "gpio": 26, "periodUs": 0, "pulseUs": 0 }
+    ],
+    "gpioWrites": [
+      { "gpio": 16, "tUs": 1234010, "level": true },
+      { "gpio": 13, "tUs": 1234020, "level": true },
+      { "gpio": 13, "tUs": 1234030, "level": false }
+    ],
+    "serialTx": [116, 111, 102, 32, 56, 49, 50, 32, 49, 50, 48, 48, 32, 54, 52, 48, 10],
+    "netEvents": [
+      {
+        "type": "listen",
+        "proto": "tcp",
+        "firmwarePort": 3333,
+        "hostPort": 41333,
+        "bindAddress": "127.0.0.1"
+      },
+      { "type": "connect", "firmwarePort": 3333, "peer": "127.0.0.1:53122" },
+      { "type": "disconnect", "firmwarePort": 3333, "peer": "127.0.0.1:53122" },
+      { "type": "unlisten", "proto": "udp", "firmwarePort": 4210 }
+    ],
+    "logs": [
+      { "level": "info", "text": "Wire.begin(21, 22)" },
+      { "level": "warn", "text": "VL53L0X at 0x29 not answering: XSHUT low — retrying" }
+    ]
+  }
+}

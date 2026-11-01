@@ -1,0 +1,1 @@
+{ "type": "HELLO", "message": { "protocolVersion": 1, "halVersion": "0.1.0" } }
