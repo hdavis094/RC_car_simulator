@@ -1,7 +1,20 @@
 import { defaultCatalog, exampleCar, type Track, type World as WorldFile } from '@rcsim/schema';
 import { describe, expect, it } from 'vitest';
-import { ActuatorSourceEnded, type Run } from '../index.ts';
-import { FakeActuatorSource, createFakeRun, createRngStreams } from './index.ts';
+import type { GpioEdge } from '@rcsim/sim-protocol';
+import {
+  ActuatorSourceEnded,
+  parseAssertion,
+  type Run,
+  type SensorModel,
+  type TickInput,
+} from '../index.ts';
+import {
+  FakeActuatorSource,
+  FakeVehicle,
+  createFakeRun,
+  createFakeSensorModel,
+  createRngStreams,
+} from './index.ts';
 
 const track: Track = {
   schemaVersion: 1,
@@ -133,6 +146,84 @@ describe('a Run assembled from the stubs alone', () => {
 
   it('exposes ActuatorSourceEnded for sources to throw', () => {
     expect(new ActuatorSourceEnded({ kind: 'stalled', afterMs: 2000 }).end.kind).toBe('stalled');
+  });
+});
+
+describe('the reference loop', () => {
+  it('merges GPIO edges from all sensors in ascending time', async () => {
+    const source = new FakeActuatorSource();
+    const edgesFor = (instanceId: string): GpioEdge[] =>
+      instanceId === 'tof_left'
+        ? [{ gpio: 16, tUs: 900, level: true }]
+        : instanceId === 'tof_right'
+          ? [{ gpio: 18, tUs: 100, level: true }]
+          : [];
+    const run = await createFakeRun({
+      car: exampleCar,
+      catalog: defaultCatalog,
+      world: world(),
+      track,
+      seed: 1,
+      source,
+      createSensorModel: (part): SensorModel => {
+        const base = createFakeSensorModel(part);
+        let given = false;
+        return {
+          ...base,
+          update: base.update,
+          beams: base.beams,
+          takeGpioEdges: () => {
+            if (given) return [];
+            given = true;
+            return edgesFor(part.instance.instanceId);
+          },
+        };
+      },
+    });
+    await run.step(1);
+    expect(source.inputs[0]?.gpioEdges.map((e) => e.tUs)).toEqual([100, 900]);
+  });
+
+  it('keeps serial queued while the source is busy for the next tick', async () => {
+    let release: (() => void) | undefined;
+    const source = new FakeActuatorSource();
+    const step = source.step.bind(source);
+    let first = true;
+    source.step = async (input: TickInput) => {
+      if (first) {
+        first = false;
+        await new Promise<void>((resolve) => (release = resolve));
+      }
+      return step(input);
+    };
+    const run = await fakeRun(source);
+    const stepping = run.step(2);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    run.sendSerial(new TextEncoder().encode('hi'));
+    release?.();
+    await stepping;
+    expect(new TextDecoder().decode(source.inputs[1]?.serialRx)).toBe('hi');
+  });
+});
+
+describe('FakeVehicle.chassisToWorld', () => {
+  it('rotates the offset with the car and composes yaw and pitch', () => {
+    const car = new FakeVehicle({ x: 0, z: 0, yawDeg: 90 });
+    const pose = car.chassisToWorld({ x: 0, y: 0, z: -1000 }, 0, 0);
+    // Facing +90° (left of −Z is −X), a point 1 m ahead is at x = −1.
+    expect(pose.position[0]).toBeCloseTo(-1, 9);
+    expect(pose.position[2]).toBeCloseTo(0, 9);
+    const pitched = car.chassisToWorld({ x: 0, y: 0, z: 0 }, 0, 90).rotation;
+    expect(Math.hypot(...pitched)).toBeCloseTo(1, 9);
+    expect(pitched[0]).not.toBe(0);
+  });
+});
+
+describe('parseAssertion', () => {
+  it("accepts the brief's short names", () => {
+    expect(parseAssertion('maxSpeed < 3')).toEqual({ metric: 'maxSpeedMps', op: '<', value: 3 });
+    expect(parseAssertion('laps >= 1')).toEqual({ metric: 'laps', op: '>=', value: 1 });
+    expect(() => parseAssertion('speed > 1')).toThrow(/bad assertion/);
   });
 });
 

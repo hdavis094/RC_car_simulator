@@ -42,7 +42,10 @@ export interface ScenarioResult {
   readonly wallMs: number;
 }
 
-/** Parses an assertion like `laps >= 1` (CLI `--assert`). Throws on a bad expression. */
+/**
+ * Parses an assertion like `laps >= 1` or `maxSpeed < 3` (CLI `--assert`).
+ * Speeds are m/s, distances metres. Throws on a bad expression.
+ */
 export function parseAssertion(text: string): ScenarioAssertion {
   const match = /^\s*([a-zA-Z]+)\s*(==|!=|<=|>=|<|>)\s*(-?\d+(?:\.\d+)?)\s*$/.exec(text);
   const metrics: readonly string[] = [
@@ -52,11 +55,17 @@ export function parseAssertion(text: string): ScenarioAssertion {
     'distanceM',
     'simSeconds',
   ];
-  if (!match || !metrics.includes(match[1] ?? '')) {
+  // Short names the CLI accepts too (P1-A's brief writes `maxSpeed < x`).
+  const aliases: Readonly<Record<string, ScenarioMetric>> = {
+    maxSpeed: 'maxSpeedMps',
+    distance: 'distanceM',
+  };
+  const name = match ? (aliases[match[1] ?? ''] ?? match[1] ?? '') : '';
+  if (!match || !metrics.includes(name)) {
     throw new Error(`bad assertion "${text}": expected "<${metrics.join('|')}> <op> <number>"`);
   }
   return {
-    metric: match[1] as ScenarioMetric,
+    metric: name as ScenarioMetric,
     op: match[2] as ScenarioAssertion['op'],
     value: Number(match[3]),
   };

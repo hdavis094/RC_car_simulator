@@ -58,6 +58,15 @@ export interface SensorModel {
   /**
    * Input edges this part drives on its GPIOs within [t0Us, t1Us) (an
    * HC-SR04 ECHO), in time order. Each edge is returned once.
+   *
+   * Causality: a write made during tick n reaches `onGpioWrite` only after
+   * that tick's STEP_DONE, so its response can't start before tick n+1
+   * (`t ≥ t1Us` of tick n). A model whose real response would start earlier
+   * (the HC-SR04's start delay after TRIG) shifts the whole response later,
+   * keeping every pulse width: echo rise = max(trigger + start delay, t1 of
+   * the trigger's tick), echo fall = rise + round-trip time. The firmware
+   * measures widths (`pulseIn`), so the reading is unaffected; only the
+   * latency grows, by less than one tick.
    */
   takeGpioEdges?(t0Us: number, t1Us: number): readonly GpioEdge[];
   /** Current beams for the snapshot (distance sensors); empty for others. */

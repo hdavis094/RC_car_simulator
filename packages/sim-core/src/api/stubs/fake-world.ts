@@ -15,6 +15,19 @@ const yawQuat = (yawDeg: number): Quat => {
   return [0, Math.sin(half), 0, Math.cos(half)];
 };
 
+const pitchQuat = (pitchDeg: number): Quat => {
+  const half = (pitchDeg * Math.PI) / 360;
+  return [Math.sin(half), 0, 0, Math.cos(half)];
+};
+
+/** Hamilton product a × b (apply b, then a). */
+const multiply = (a: Quat, b: Quat): Quat => [
+  a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+  a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+  a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+  a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
+];
+
 /** Obstacles are treated as spheres of this radius by the fake raycast and collisions. */
 const OBSTACLE_RADIUS_M = 0.15;
 
@@ -75,14 +88,23 @@ export class FakeVehicle implements Vehicle {
     };
   }
 
-  chassisToWorld(offsetMm: { x: number; y: number; z: number }, yawDeg: number): Pose {
+  chassisToWorld(
+    offsetMm: { x: number; y: number; z: number },
+    yawDeg: number,
+    pitchDeg: number,
+  ): Pose {
+    // Rotate the chassis-frame offset by the car's yaw (the fake car never pitches or rolls).
+    const yaw = (this.#yawDeg * Math.PI) / 180;
+    const x = offsetMm.x / 1000;
+    const z = offsetMm.z / 1000;
     return {
       position: [
-        this.#position[0] + offsetMm.x / 1000,
-        offsetMm.y / 1000,
-        this.#position[2] + offsetMm.z / 1000,
+        this.#position[0] + x * Math.cos(yaw) + z * Math.sin(yaw),
+        this.#position[1] + offsetMm.y / 1000,
+        this.#position[2] - x * Math.sin(yaw) + z * Math.cos(yaw),
       ],
-      rotation: yawQuat(this.#yawDeg + yawDeg),
+      // Car yaw + placement yaw about Y, then placement pitch about the local X axis.
+      rotation: multiply(yawQuat(this.#yawDeg + yawDeg), pitchQuat(pitchDeg)),
     };
   }
 }

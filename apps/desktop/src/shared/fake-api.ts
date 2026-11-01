@@ -133,7 +133,14 @@ export function createFakeRcsimApi(options: FakeApiOptions = {}): FakeApi {
     const problems: CatalogProblem[] = [];
     for (const [path, content] of files) {
       if (!path.startsWith('parts/') || !path.endsWith('.json')) continue;
-      const parsed = PartDefinition.safeParse(JSON.parse(content));
+      let data: unknown;
+      try {
+        data = JSON.parse(content);
+      } catch (error) {
+        problems.push({ source: path, message: `not valid JSON: ${String(error)}` });
+        continue;
+      }
+      const parsed = PartDefinition.safeParse(data);
       if (parsed.success) custom.push({ path, definition: parsed.data });
       else problems.push({ source: path, message: parsed.error.issues[0]?.message ?? 'invalid' });
     }
@@ -150,8 +157,20 @@ export function createFakeRcsimApi(options: FakeApiOptions = {}): FakeApi {
     if (next) fire(ev.status, next);
   };
   const needRun = (): RunInfo => {
-    if (!run) throw new Error(ipcErrorMessage('no-run', 'no run is active'));
+    if (!run || run.state === 'ended')
+      throw new Error(ipcErrorMessage('no-run', 'no run is active'));
     return run;
+  };
+  /** Live edits and single steps are allowed only while paused (ipc.ts). */
+  const needPaused = (what: string): void => {
+    if (needRun().state !== 'paused')
+      throw new Error(ipcErrorMessage('busy', `${what} needs the run paused`));
+  };
+  /** The live layout: the run must exist and be paused. */
+  const editable = (what: string): WorldFile => {
+    needPaused(what);
+    if (!liveWorld) throw new Error(ipcErrorMessage('no-run', 'no run is active'));
+    return liveWorld;
   };
   let liveWorld: WorldFile | null = null;
   let controlState: ConnectionState = 'idle';
@@ -324,7 +343,7 @@ export function createFakeRcsimApi(options: FakeApiOptions = {}): FakeApi {
       },
       async step(ticks) {
         record('run', 'step', [ticks ?? 1]);
-        needRun();
+        needPaused('step');
       },
       async setSpeed(speed: RunSpeed) {
         record('run', 'setSpeed', [speed]);
@@ -358,28 +377,28 @@ export function createFakeRcsimApi(options: FakeApiOptions = {}): FakeApi {
       },
       async addObstacle(obstacle) {
         record('worldEdit', 'addObstacle', [obstacle]);
-        if (!liveWorld) throw new Error(ipcErrorMessage('no-run', 'no run is active'));
+        const layout = editable('adding an obstacle');
         const id = obstacle.id ?? `obstacle-${nextId++}`;
-        liveWorld = { ...liveWorld, obstacles: [...liveWorld.obstacles, { ...obstacle, id }] };
+        liveWorld = { ...layout, obstacles: [...layout.obstacles, { ...obstacle, id }] };
         return id;
       },
       async moveObstacle(id, position, yawDeg) {
         record('worldEdit', 'moveObstacle', [id, position, yawDeg]);
-        if (!liveWorld) throw new Error(ipcErrorMessage('no-run', 'no run is active'));
-        if (!liveWorld.obstacles.some((o) => o.id === id)) {
+        const layout = editable('moving an obstacle');
+        if (!layout.obstacles.some((o) => o.id === id)) {
           throw new Error(ipcErrorMessage('not-found', `no obstacle ${id}`));
         }
         liveWorld = {
-          ...liveWorld,
-          obstacles: liveWorld.obstacles.map((o) =>
+          ...layout,
+          obstacles: layout.obstacles.map((o) =>
             o.id === id ? { ...o, positionM: { ...position }, yawDeg } : o,
           ),
         };
       },
       async removeObstacle(id) {
         record('worldEdit', 'removeObstacle', [id]);
-        if (!liveWorld) throw new Error(ipcErrorMessage('no-run', 'no run is active'));
-        liveWorld = { ...liveWorld, obstacles: liveWorld.obstacles.filter((o) => o.id !== id) };
+        const layout = editable('removing an obstacle');
+        liveWorld = { ...layout, obstacles: layout.obstacles.filter((o) => o.id !== id) };
       },
       async currentLayout() {
         if (!liveWorld) throw new Error(ipcErrorMessage('no-run', 'no run is active'));

@@ -76,6 +76,15 @@ describe('the fake API', () => {
     );
   });
 
+  it('lists a broken custom part file as a problem, keeping the rest', async () => {
+    const fake = createFakeRcsimApi();
+    fake.files.set('parts/broken.json', '{');
+    const listing = await fake.api.catalog.list();
+    expect(listing.problems.map((p) => p.source)).toEqual(['parts/broken.json']);
+    expect(listing.builtIn.length).toBeGreaterThan(0);
+    await fake.api.project.writeCar(exampleCar);
+  });
+
   it('streams build output and structured diagnostics', async () => {
     const fake = createFakeRcsimApi({
       buildDiagnostics: [
@@ -106,7 +115,13 @@ describe('the fake API', () => {
     fake.api.run.onStatus((info) => statuses.push(info.state));
     const info = await fake.api.run.start({ world: 'worlds/cones.json', seed: 1 });
     expect(info.netMappings[0]?.firmwarePort).toBe(3333);
+    // Live edits and single steps need the run paused, as in main.
+    await expect(
+      fake.api.worldEdit.addObstacle({ type: 'cone', positionM: { x: 0, z: 0 }, yawDeg: 0 }),
+    ).rejects.toThrow('[rcsim:busy]');
+    await expect(fake.api.run.step()).rejects.toThrow('[rcsim:busy]');
     await fake.api.run.pause();
+    await fake.api.run.step(5);
     const id = await fake.api.worldEdit.addObstacle({
       type: 'cone',
       positionM: { x: 1, z: -2 },

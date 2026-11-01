@@ -138,18 +138,27 @@ export async function createFakeRun(
   const tick = async (): Promise<boolean> => {
     const t0Us = clock.nowUs;
     const t1Us = t0Us + clock.tickUs;
-    // 1. the source runs the tick
+    // 1. the source runs the tick. Take this tick's inputs first, so serial or
+    // faults queued while the source is busy wait for the next tick.
+    const input: TickInput = {
+      tick: clock.tick,
+      t0Us,
+      t1Us,
+      readings: pendingReadings,
+      // Ascending tUs across all sensors (sim-protocol); ties keep car.json order.
+      gpioEdges: sensors
+        .flatMap((s) => s.takeGpioEdges?.(t0Us, t1Us) ?? [])
+        .map((edge, order) => ({ edge, order }))
+        .sort((a, b) => a.edge.tUs - b.edge.tUs || a.order - b.order)
+        .map(({ edge }) => edge),
+      serialRx,
+      netFaults,
+    };
+    serialRx = new Uint8Array(0);
+    netFaults = undefined;
     let output;
     try {
-      output = await source.step({
-        tick: clock.tick,
-        t0Us,
-        t1Us,
-        readings: pendingReadings,
-        gpioEdges: sensors.flatMap((s) => s.takeGpioEdges?.(t0Us, t1Us) ?? []),
-        serialRx,
-        netFaults,
-      });
+      output = await source.step(input);
     } catch (error) {
       if (error instanceof ActuatorSourceEnded) {
         finish(error.end);
@@ -157,8 +166,6 @@ export async function createFakeRun(
       }
       throw error;
     }
-    serialRx = new Uint8Array(0);
-    netFaults = undefined;
     if (output.serialTx.length > 0) for (const l of listeners.serial) l(output.serialTx, t0Us);
     for (const line of output.logs) for (const l of listeners.log) l(line, t0Us);
     for (const event of output.netEvents) for (const l of listeners.net) l(event, t0Us);

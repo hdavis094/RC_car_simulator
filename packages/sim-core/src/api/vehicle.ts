@@ -25,12 +25,21 @@ export interface VehicleCommand {
 /** Wheels in a fixed order: front-left, front-right, rear-left, rear-right. */
 export const WHEEL_ORDER = ['front-left', 'front-right', 'rear-left', 'rear-right'] as const;
 
+/**
+ * One wheel. `position` and `rotation` are the wheel's complete pose in the
+ * **world frame**: `rotation` already includes the chassis orientation, this
+ * wheel's steering and its spin. A renderer poses a wheel from these two
+ * fields alone, not nested under the car. `steerRad` and `spinRad` repeat the
+ * angles for readouts; don't apply them again.
+ */
 export interface WheelState {
+  /** Wheel centre, world frame, metres. */
   readonly position: Vec3;
+  /** World-frame orientation: chassis × steer (about the chassis Y axis) × spin (about the axle). */
   readonly rotation: Quat;
-  /** Steering angle of this wheel, radians, positive left. */
+  /** Steering angle of this wheel relative to the chassis, radians, positive left. */
   readonly steerRad: number;
-  /** Accumulated spin, radians (for drawing). */
+  /** Accumulated spin about the axle, radians, positive rolling forward. */
   readonly spinRad: number;
   readonly inContact: boolean;
 }
