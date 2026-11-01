@@ -1,0 +1,14 @@
+{
+  "name": "@rcsim/control-protocol",
+  "version": "0.0.0",
+  "private": true,
+  "description": "JSON-lines car control protocol (laptop <-> car) and its TS client",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -p ."
+  }
+}

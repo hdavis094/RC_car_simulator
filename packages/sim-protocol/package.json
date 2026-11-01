@@ -1,0 +1,14 @@
+{
+  "name": "@rcsim/sim-protocol",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Binary frame format between sim-core and a firmware process, with golden vectors",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -p ."
+  }
+}

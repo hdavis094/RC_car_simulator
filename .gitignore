@@ -7,3 +7,6 @@ test-results/
 playwright-report/
 .pio/
 *.log
+.DS_Store
+*.tsbuildinfo
+packages/hal/build/

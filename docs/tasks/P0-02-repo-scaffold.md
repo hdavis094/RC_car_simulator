@@ -1,6 +1,6 @@
 # P0-02 — Repo scaffold, verify pipeline, CI
 
-Status: in-progress
+Status: in-review
 Agent: Claude (Opus)
 Branch: ws/p0-02
 Depends on: P0-01
@@ -37,11 +37,11 @@ Repo root (`package.json`, `pnpm-workspace.yaml`, `tsconfig.base.json`, ESLint/P
 
 ## Acceptance
 
-- [ ] `pnpm install && pnpm verify` passes from a fresh clone
-- [ ] the Playwright smoke test opens the app and navigates to all three environments
-- [ ] `pnpm verify:fast` runs in under 60 s on stubs
-- [ ] hal's stub test passes with both `g++` and `clang++` locally
-- [ ] if a GitHub remote exists, the macOS CI job is green; otherwise say so in the Handoff
+- [x] `pnpm install && pnpm verify` passes from a fresh clone
+- [x] the Playwright smoke test opens the app and navigates to all three environments
+- [x] `pnpm verify:fast` runs in under 60 s on stubs
+- [x] hal's stub test passes with both `g++` and `clang++` locally
+- [x] if a GitHub remote exists, the macOS CI job is green; otherwise say so in the Handoff
 
 ## Out of scope
 
@@ -50,6 +50,27 @@ Any schema, protocol or real feature code.
 ## Handoff
 
 - **Built**:
+  - **Workspace**: pnpm 12 workspace (`packages/*`, `apps/*`), with every package from the Modules table as a `@rcsim/*` stub. Each one has `test` and `typecheck` scripts.
+  - **TypeScript**: `tsconfig.base.json` is strict NodeNext ESM with `erasableSyntaxOnly` and `allowImportingTsExtensions`. Relative imports therefore carry `.ts` extensions, and plain Node 26 can run the sources directly; the scenario placeholder already runs as `node scripts/scenarios-placeholder.ts`. Packages export `./src/index.ts`; there is no build step.
+  - **Desktop app**: `apps/desktop` uses electron-vite 6, React 19 and Zustand 5. The shell (`src/renderer/shell/`) switches between `WorkbenchRoot`, `TerminalRoot` and `WorldRoot`, each in its own folder. Main and preload bundle the `@rcsim/*` workspace packages through `build.externalizeDeps.exclude`.
+  - **hal**: Makefile (C++17, `-Wall -Wextra -Wpedantic -Werror`, `$CXX` falling back to `c++`), vendored doctest 2.5.3, and one stub test. Each `build/<compiler>/` carries a stamp of the compiler's path, version and flags, so a different compiler forces a rebuild. `scripts/test-all-compilers.sh` runs the suite once per distinct compiler among `${CXX:-c++}`, `g++` and `clang++`, deduplicated by version string, and fails if any of them fails.
+  - **Verify pipeline**: `pnpm verify` = format check (Prettier, plus clang-format for hal) → ESLint → typecheck → Vitest (one run over every package's project) → hal tests → scenario placeholder → Playwright Electron smoke test. `pnpm verify:fast` stops after the hal tests.
+  - **C++ formatting**: hal's clang-format is the pinned WASM build `@wasm-fmt/clang-format` 23.1.1, a hal devDependency. Every OS gets the same formatter, and the check fails if it is missing.
+  - **Lint guards**: ESLint keeps `react`, `react-dom`, `electron`, `zustand`, `@rcsim/desktop` and their subpaths out of `packages/*`. It keeps `electron` and every Node built-in (`fs`, `node:fs`, `fs/promises`) out of the renderer.
+  - **CI**: `.github/workflows/ci.yml` runs on Ubuntu (`xvfb-run -a pnpm verify`) and macOS (`pnpm verify`). Both were green on run 41271299483. The macOS job ran hal with Apple clang, and the Playwright test.
+  - **Timings here**: `verify:fast` takes about 3 s, full `verify` about 9 s. A fresh clone passed `pnpm install --frozen-lockfile && pnpm verify`.
 - **Deviations from the brief**:
-- **Contract change requests**:
+  - TypeScript is pinned to `~6.0.3` rather than 7.x, because typescript-eslint 8 supports only `<6.1`.
+  - Prettier ignores `*.md`, so the hand-written docs and briefs aren't reflowed. It also ignores the C++ packages, which clang-format covers.
+  - `apps/desktop` is CommonJS (no `"type": "module"`), so the sandboxed preload can stay CJS. Its config files are `.mts` for that reason.
+  - The Playwright test and `pnpm dev` strip `ELECTRON_RUN_AS_NODE`. T3 Code and VS Code export it, and it makes Electron start as plain Node.
+- **Review** (Codex `gpt-6.1-sol`, round 1, changes requested). Fixed:
+  - **Blocking**: the C++ format check passed silently when clang-format was missing (the macOS CI job). It now uses the pinned WASM clang-format and fails if it is missing.
+  - The lint layering rules missed subpaths (`react-dom/client`) and bare Node built-ins (`fs`). Both are now caught.
+  - The Handoff was empty at the reviewed commit. It is now filled in.
+- **Review round 2** (Codex, changes requested). Confirmed the round 1 fixes, then found two more, both fixed and re-tested against the reviewer's own scenarios:
+  - **Blocking**: build directories were keyed only by the compiler's basename. A different `g++` could reuse stale objects and pass falsely. The compiler stamp now forces a rebuild, and a fake `g++` that exits 42 now fails `make test`.
+  - With `$CXX` unset and only `c++` on PATH, no compiler was found. Discovery now starts at `${CXX:-c++}`.
+- **Contract change requests**: none.
 - **Open questions**:
+  - The GitHub repo is **public**, but ORCHESTRATOR.md says private. That is for the user to decide.

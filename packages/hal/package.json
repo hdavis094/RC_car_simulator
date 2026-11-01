@@ -1,0 +1,16 @@
+{
+  "name": "@rcsim/hal",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Arduino/ESP32 API for desktop builds, library shims, sim-protocol client, Wi-Fi over host sockets, sim build driver",
+  "scripts": {
+    "build": "make",
+    "test": "sh scripts/test-all-compilers.sh",
+    "typecheck": "echo 'hal: C++, compiled by the test script'",
+    "format": "sh scripts/format.sh",
+    "format:check": "sh scripts/format.sh --check"
+  },
+  "devDependencies": {
+    "@wasm-fmt/clang-format": "23.1.1"
+  }
+}

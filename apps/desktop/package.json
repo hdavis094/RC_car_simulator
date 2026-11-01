@@ -1,0 +1,30 @@
+{
+  "name": "@rcsim/desktop",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The Donkey Car Simulator desktop app: Workbench, Terminal and 3D World",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "env -u ELECTRON_RUN_AS_NODE electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "env -u ELECTRON_RUN_AS_NODE electron-vite preview",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.node.json && tsc -p tsconfig.web.json"
+  },
+  "dependencies": {
+    "@rcsim/control-protocol": "workspace:*",
+    "@rcsim/schema": "workspace:*",
+    "@rcsim/sim-core": "workspace:*",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "zustand": "^5.0.16"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "electron": "^45.2.1",
+    "electron-vite": "^6.0.0",
+    "vite": "^8.3.5"
+  }
+}
