@@ -1,0 +1,11 @@
+{
+  "type": "STEP",
+  "message": {
+    "tick": 0,
+    "t0Us": 0,
+    "t1Us": 1000,
+    "readings": [{ "device": 5, "tUs": 0, "type": "analog", "volts": 2.0625 }],
+    "gpioEdges": [],
+    "serialRx": []
+  }
+}

@@ -1,0 +1,4 @@
+{
+  "type": "BYE",
+  "message": { "reason": "version-mismatch", "message": "sim speaks protocol 1, firmware sent 2" }
+}

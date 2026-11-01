@@ -1,0 +1,65 @@
+{
+  "type": "CONFIG",
+  "message": {
+    "protocolVersion": 1,
+    "tickUs": 1000,
+    "seed": 1,
+    "halCallCostNs": 1000,
+    "loopCostNs": 5000,
+    "net": { "bindAddress": "127.0.0.1" },
+    "devices": [
+      {
+        "instanceId": "esc",
+        "kind": "esc",
+        "pins": [{ "name": "SIGNAL", "gpio": 26 }],
+        "defaultI2cAddress": 0,
+        "targetI2cAddress": 0
+      },
+      {
+        "instanceId": "steering",
+        "kind": "servo",
+        "pins": [{ "name": "SIGNAL", "gpio": 25 }],
+        "defaultI2cAddress": 0,
+        "targetI2cAddress": 0
+      },
+      {
+        "instanceId": "tof_left",
+        "kind": "vl53l0x",
+        "pins": [
+          { "name": "SDA", "gpio": 21 },
+          { "name": "SCL", "gpio": 22 },
+          { "name": "XSHUT", "gpio": 16 }
+        ],
+        "defaultI2cAddress": 41,
+        "targetI2cAddress": 48
+      },
+      {
+        "instanceId": "imu",
+        "kind": "mpu6050",
+        "pins": [
+          { "name": "SDA", "gpio": 21 },
+          { "name": "SCL", "gpio": 22 }
+        ],
+        "defaultI2cAddress": 104,
+        "targetI2cAddress": 104
+      },
+      {
+        "instanceId": "sonar",
+        "kind": "hc-sr04",
+        "pins": [
+          { "name": "TRIG", "gpio": 13 },
+          { "name": "ECHO", "gpio": 34 }
+        ],
+        "defaultI2cAddress": 0,
+        "targetI2cAddress": 0
+      },
+      {
+        "instanceId": "battery_sense",
+        "kind": "analog",
+        "pins": [{ "name": "OUT", "gpio": 35 }],
+        "defaultI2cAddress": 0,
+        "targetI2cAddress": 0
+      }
+    ]
+  }
+}

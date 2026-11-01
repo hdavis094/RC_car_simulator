@@ -5,10 +5,16 @@
   "description": "Binary frame format between sim-core and a firmware process, with golden vectors",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./vectors/*": "./vectors/*"
   },
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc -p ."
+    "typecheck": "tsc -p .",
+    "generate": "node scripts/generate-vectors.ts"
+  },
+  "devDependencies": {
+    "prettier": "^3.9.10",
+    "vitest": "^5.0.5"
   }
 }

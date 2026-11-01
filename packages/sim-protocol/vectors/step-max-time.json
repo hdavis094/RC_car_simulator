@@ -1,0 +1,12 @@
+{
+  "type": "STEP",
+  "message": {
+    "tick": 9007199254740991,
+    "t0Us": 9007199254739991,
+    "t1Us": 9007199254740991,
+    "readings": [],
+    "gpioEdges": [],
+    "serialRx": [],
+    "netFaults": { "latencyUs": 4294967295, "lossPpm": 1000000, "dropout": true }
+  }
+}

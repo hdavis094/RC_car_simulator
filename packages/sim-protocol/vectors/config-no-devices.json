@@ -1,0 +1,12 @@
+{
+  "type": "CONFIG",
+  "message": {
+    "protocolVersion": 1,
+    "tickUs": 1000,
+    "seed": 4294967295,
+    "halCallCostNs": 0,
+    "loopCostNs": 0,
+    "net": { "bindAddress": "0.0.0.0" },
+    "devices": []
+  }
+}

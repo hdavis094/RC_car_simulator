@@ -1,2 +1,6 @@
-// Stub from P0-02. The contract is written by P0-04.
-export const PACKAGE_NAME = '@rcsim/sim-protocol';
+// @rcsim/sim-protocol: the binary lockstep protocol between sim-core and a
+// firmware process. SPEC.md is normative; vectors/ holds the golden frames.
+
+export * from './protocol.ts';
+export { FrameDecoder, decodeBody, decodeFrame, encodeFrame } from './codec.ts';
+export { messageFromJson, messageToJson, type VectorJson } from './json.ts';
