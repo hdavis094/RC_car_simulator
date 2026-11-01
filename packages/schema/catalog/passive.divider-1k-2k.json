@@ -1,0 +1,40 @@
+{
+  "$schema": "../json-schema/part-definition.schema.json",
+  "schemaVersion": 1,
+  "id": "passive.divider-1k-2k",
+  "name": "Voltage divider 1 kΩ / 2 kΩ (5 V to 3.3 V signal)",
+  "category": "passive",
+  "description": "Level-shifts a 5 V output (HC-SR04 ECHO) for a 3.3 V GPIO: 5 V in gives 3.33 V out.",
+  "massG": 0.5,
+  "dimensionsMm": {
+    "width": 5,
+    "height": 5,
+    "length": 10
+  },
+  "pins": [
+    {
+      "name": "IN",
+      "kind": "analog-in"
+    },
+    {
+      "name": "OUT",
+      "kind": "analog-out"
+    },
+    {
+      "name": "GND",
+      "kind": "gnd"
+    }
+  ],
+  "behavior": {
+    "template": "voltage-divider",
+    "params": {
+      "r1Ohm": 1000,
+      "r2Ohm": 2000
+    }
+  },
+  "sources": [
+    "https://embedded.fel.cvut.cz/sites/default/files/kurzy/lpe/ultrasonic_hc-sr04/HCSR04_DS_Cytron.pdf",
+    "https://www.espressif.com/sites/default/files/documentation/esp32_datasheet_en.pdf"
+  ],
+  "notes": "5 V x 2k/(1k+2k) = 3.33 V: above the ESP32 VIH minimum (0.75 x 3.3 = 2.475 V) and below its 3.6 V maximum (ESP32 datasheet). Echo is 5 V (Cytron HC-SR04 manual). Mass and size are for two through-hole resistors (estimate)."
+}

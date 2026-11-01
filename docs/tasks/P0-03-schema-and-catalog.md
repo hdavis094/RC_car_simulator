@@ -1,6 +1,6 @@
 # P0-03 — Contract: schemas, wiring rules, default catalog
 
-Status: in-progress
+Status: in-review
 Agent: Claude (Opus)
 Branch: ws/p0-03
 Depends on: P0-02
@@ -41,10 +41,10 @@ Depends on: P0-02
 
 ## Acceptance
 
-- [ ] `pnpm verify` passes
-- [ ] every PRD wiring rule has passing and failing fixtures
-- [ ] every catalog part validates and cites at least one datasheet
-- [ ] the example car passes with zero errors; a snapshot test pins its generated header
+- [x] `pnpm verify` passes
+- [x] every PRD wiring rule has passing and failing fixtures
+- [x] every catalog part validates and cites at least one datasheet
+- [x] the example car passes with zero errors; a snapshot test pins its generated header
 
 ## Out of scope
 
@@ -52,6 +52,37 @@ UI, sim behaviour implementations (only their parameters live here).
 
 ## Handoff
 
-- **Built**:
+- **Built**: `packages/schema`, documented in its README.
+  - **Zod schemas** with inferred types, each sharing its schema's name. Every one has `schemaVersion: 1`, and objects are strict.
+    - `PartDefinition`: a union on `category`. The controller variant adds a GPIO table; the chassis variant adds geometry and mount points.
+    - `Behavior`: one union entry per template (7 templates).
+    - `Car` (car.json), `World` and `Track`.
+    - JSON Schemas are generated into `json-schema/`, and a test fails if they are stale.
+  - **Wiring rules**: `checkWiring(car, catalog) → Issue[]` and `canRun()`. They resolve car.json into nets, so a wire may be declared from either end. 19 rule ids cover every PRD rule plus the structural rules needed to apply them. Each rule has passing and failing fixtures in `src/wiring/rules.test.ts`; a test checks that every rule id has a case.
+  - **Header generator**: `generateCarConfigHeader()` gives byte-identical output whatever the JSON key order. It follows signal pins through a voltage divider (`SONAR_ECHO_PIN`). The example car's header is pinned in `examples/default-car.car_config.h`.
+  - **Default catalog**: 11 parts in `catalog/`, every value cited in `sources`. Unpublished values are estimates, explained in each part's `notes`.
+  - **Example car**: `examples/default-car.json` (`exampleCar`) has zero errors and zero warnings.
+  - **Plain Node 26** imports the package directly (JSON import attributes), as the sim-core scenario CLI will.
 - **Deviations from the brief**:
+  - **Pin kind `analog-in` added** (a divider input), and **category `passive` added** for the voltage dividers, which are neither power nor sensor.
+  - **Pin `voltage` can be `"supply"`**, for breakouts that shift I²C to VIN (the Pololu VL53L0X), or `{min,max}`, for a battery. Power-out pins carry a `maxCurrentMa` budget, and pins can be marked `optional`.
+  - **Car pin targets can be another part's pin of any compatible kind**, not just a power pin. The HC-SR04 echo has to go through a divider.
+  - **car.json gains `wifi`**, which the ADC2 rule needs.
+  - **I²C addressing** is `fixed`, `strap` (AD0) or `software` with an `enablePin` (XSHUT).
+  - **Chassis gains** `steeringLinkageRatio` (servo degrees to wheel degrees), `finalDriveRatio`, `driveWheels` and `trackWidthMm`.
+  - **`electrical` is optional for power and passive parts**, because a battery has no supply input.
+  - **Extra rules** beyond the PRD list: `reference`, `pin-kind-mismatch`, `rail-conflict`, `supply-voltage`, `no-adc`, `i2c-incomplete`, `i2c-address-invalid`, `i2c-address-unreachable`, `unconnected-pin`, `placement`.
+  - **The Drive row** (ESC + 540 motor) is one part, `actuator.quicrun-1060-540`, with the `esc-motor` template.
+  - **MPU6050 library**: `electroniccats/MPU6050@^1.4.5` (README has the reasons). hal shims its register API, not the DMP.
+- **Contract change requests**: none (this is the contract).
 - **Open questions**:
+  - Several values are unpublished estimates, each flagged in its part's `notes`:
+    - MG996R: the 500–2500 µs pulse range.
+    - QuicRun: pulse range, deadband, and the motor's Kv and torque at 7.4 V.
+    - Slash: steering angle, linkage ratio, centre of gravity, wheel radius and chassis-only mass.
+    - LiPo: internal resistance.
+    - DevKitC: 5 V pin range and mass.
+
+    Measure the real car and update them.
+  - The Traxxas product page says final drive 12.58; the manual's stock gearing gives 15.3. I used 15.3.
+  - Track data (oval, technical) is P1-A's, in `sim-core/assets/`. Only the `Track` schema is here.

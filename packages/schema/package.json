@@ -5,10 +5,17 @@
   "description": "Zod schemas for part definitions, car.json and worlds; wiring rules; car_config.h generator; default catalog",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./catalog/*": "./catalog/*",
+    "./examples/*": "./examples/*",
+    "./json-schema/*": "./json-schema/*"
   },
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc -p ."
+    "typecheck": "tsc -p .",
+    "generate": "node scripts/generate-json-schemas.ts"
+  },
+  "dependencies": {
+    "zod": "^4.6.7"
   }
 }

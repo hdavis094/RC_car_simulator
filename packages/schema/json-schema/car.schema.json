@@ -1,0 +1,239 @@
+{
+  "title": "car.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "description": "Path or URL of the JSON Schema.",
+      "type": "string"
+    },
+    "schemaVersion": {
+      "type": "number",
+      "const": 1,
+      "description": "Data file format version. Readers reject versions they do not know."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "wifi": {
+      "type": "boolean",
+      "description": "The firmware uses Wi-Fi, which makes ADC2 unavailable."
+    },
+    "controller": {
+      "type": "object",
+      "properties": {
+        "instanceId": {
+          "type": "string",
+          "maxLength": 32,
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "partId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:\\.[a-z0-9]+(?:-[a-z0-9]+)*)+$"
+        },
+        "placement": {
+          "type": "object",
+          "properties": {
+            "mount": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+            },
+            "offsetMm": {
+              "description": "Added to the mount point position. Default 0.",
+              "type": "object",
+              "properties": {
+                "x": {
+                  "type": "number"
+                },
+                "y": {
+                  "type": "number"
+                },
+                "z": {
+                  "type": "number"
+                }
+              },
+              "required": ["x", "y", "z"],
+              "additionalProperties": false
+            },
+            "yawDeg": {
+              "description": "Added to the mount yaw; positive turns left.",
+              "type": "number"
+            },
+            "pitchDeg": {
+              "description": "Added to the mount pitch; positive tilts up.",
+              "type": "number"
+            }
+          },
+          "required": ["mount"],
+          "additionalProperties": false
+        },
+        "pins": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_+-]*$"
+          },
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "gpio": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 39
+                  }
+                },
+                "required": ["gpio"],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "part": {
+                    "type": "string",
+                    "maxLength": 32,
+                    "pattern": "^[a-z][a-z0-9_]*$"
+                  },
+                  "pin": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_+-]*$"
+                  }
+                },
+                "required": ["part", "pin"],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "i2cAddress": {
+          "description": "Address the firmware gives the part. Defaults to the definition default.",
+          "type": "integer",
+          "minimum": 8,
+          "maximum": 119
+        }
+      },
+      "required": ["instanceId", "partId"],
+      "additionalProperties": false
+    },
+    "chassis": {
+      "type": "object",
+      "properties": {
+        "instanceId": {
+          "type": "string",
+          "maxLength": 32,
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "partId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:\\.[a-z0-9]+(?:-[a-z0-9]+)*)+$"
+        }
+      },
+      "required": ["instanceId", "partId"],
+      "additionalProperties": false
+    },
+    "parts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "instanceId": {
+            "type": "string",
+            "maxLength": 32,
+            "pattern": "^[a-z][a-z0-9_]*$"
+          },
+          "partId": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:\\.[a-z0-9]+(?:-[a-z0-9]+)*)+$"
+          },
+          "placement": {
+            "type": "object",
+            "properties": {
+              "mount": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+              },
+              "offsetMm": {
+                "description": "Added to the mount point position. Default 0.",
+                "type": "object",
+                "properties": {
+                  "x": {
+                    "type": "number"
+                  },
+                  "y": {
+                    "type": "number"
+                  },
+                  "z": {
+                    "type": "number"
+                  }
+                },
+                "required": ["x", "y", "z"],
+                "additionalProperties": false
+              },
+              "yawDeg": {
+                "description": "Added to the mount yaw; positive turns left.",
+                "type": "number"
+              },
+              "pitchDeg": {
+                "description": "Added to the mount pitch; positive tilts up.",
+                "type": "number"
+              }
+            },
+            "required": ["mount"],
+            "additionalProperties": false
+          },
+          "pins": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_+-]*$"
+            },
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "gpio": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 39
+                    }
+                  },
+                  "required": ["gpio"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "part": {
+                      "type": "string",
+                      "maxLength": 32,
+                      "pattern": "^[a-z][a-z0-9_]*$"
+                    },
+                    "pin": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9_+-]*$"
+                    }
+                  },
+                  "required": ["part", "pin"],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "i2cAddress": {
+            "description": "Address the firmware gives the part. Defaults to the definition default.",
+            "type": "integer",
+            "minimum": 8,
+            "maximum": 119
+          }
+        },
+        "required": ["instanceId", "partId"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["schemaVersion", "name", "wifi", "controller", "chassis", "parts"],
+  "additionalProperties": false
+}
