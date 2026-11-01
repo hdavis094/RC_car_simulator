@@ -39,6 +39,25 @@ const clashCatalog = createCatalog(
   defaultCatalog,
 );
 
+/** The default catalog plus a fixed-address I²C part at 0x29, the VL53L0X boot address. */
+const fixedAt29Catalog = createCatalog(
+  [
+    {
+      source: 'parts/fixed-29.json',
+      data: (() => {
+        const imu = structuredClone(
+          DEFAULT_CATALOG_ENTRIES.find((e) => e.source.includes('gy-521'))?.data,
+        ) as { id: string; i2c: unknown; pins: { name: string }[] };
+        imu.id = 'custom.fixed-29';
+        imu.i2c = { defaultAddress: 0x29, addressing: { kind: 'fixed' } };
+        imu.pins = imu.pins.filter((p) => p.name !== 'AD0');
+        return imu;
+      })(),
+    },
+  ],
+  defaultCatalog,
+);
+
 const remove = (part: Part, pin: string): void => {
   const { [pin]: _removed, ...rest } = part.pins ?? {};
   part.pins = rest;
@@ -135,6 +154,20 @@ const cases: RuleCase[] = [
     fails: {
       'two power outputs on one rail': carWith((_, part) => {
         part('esc').pins = { ...part('esc').pins, BEC: { part: 'esp32', pin: '5V' } };
+      }),
+      'a GPIO wired straight to ground': carWith((car) => {
+        car.parts.push({
+          instanceId: 'ground_trig',
+          partId: 'sensor.hc-sr04',
+          placement: { mount: 'rear' },
+          pins: { VCC: { part: 'regulator', pin: 'VOUT' }, TRIG: { gpio: 14 } },
+        });
+        car.controller.pins = { ...car.controller.pins, GND: { part: 'ground_trig', pin: 'TRIG' } };
+      }),
+      'an output fighting a rail through a tied-high input': carWith((_, part) => {
+        part('imu').i2cAddress = 0x69;
+        part('imu').pins = { ...part('imu').pins, AD0: { part: 'esp32', pin: '3V3' } };
+        part('tof_left').pins = { ...part('tof_left').pins, GPIO1: { part: 'imu', pin: 'AD0' } };
       }),
     },
   },
@@ -315,6 +348,27 @@ const cases: RuleCase[] = [
         const { SCL: _scl, ...rest } = part('tof_left').pins ?? {};
         part('tof_left').pins = rest;
       }),
+      'two IMUs chained to each other but not to the controller': carWith((car) => {
+        car.parts.push(
+          {
+            instanceId: 'imu_b',
+            partId: 'sensor.gy-521-mpu6050',
+            placement: { mount: 'rear' },
+            pins: { VCC: { part: 'esp32', pin: '3V3' } },
+            i2cAddress: 0x68,
+          },
+          {
+            instanceId: 'imu_c',
+            partId: 'sensor.gy-521-mpu6050',
+            placement: { mount: 'rear' },
+            pins: {
+              VCC: { part: 'esp32', pin: '3V3' },
+              SDA: { part: 'imu_b', pin: 'SDA' },
+              SCL: { part: 'imu_b', pin: 'SCL' },
+            },
+          },
+        );
+      }),
     },
   },
   {
@@ -350,6 +404,10 @@ const cases: RuleCase[] = [
       'MPU6050 at 0x69 with AD0 high': carWith((_, part) => {
         part('imu').i2cAddress = 0x69;
         part('imu').pins = { ...part('imu').pins, AD0: { part: 'esp32', pin: '3V3' } };
+      }),
+      "MPU6050 at 0x69 with AD0 driven by another part's output": carWith((_, part) => {
+        part('imu').i2cAddress = 0x69;
+        part('tof_left').pins = { ...part('tof_left').pins, GPIO1: { part: 'imu', pin: 'AD0' } };
       }),
     },
     fails: {
@@ -481,6 +539,25 @@ describe('wiring rule rail-over-budget, peak current', () => {
     expect(found).toHaveLength(1);
     expect(found[0]?.severity).toBe('warning');
     expect(found[0]?.refs).toEqual([{ part: 'esc', pin: 'BEC' }]);
+  });
+});
+
+describe('wiring rule i2c-address-unreachable, fixed device at the boot address', () => {
+  it('rejects every VL53L0X sharing a bus with a fixed device at 0x29, isolated or not', () => {
+    const car = carWith((c) => {
+      c.parts.push({
+        instanceId: 'colour',
+        partId: 'custom.fixed-29',
+        placement: { mount: 'rear' },
+        pins: { VCC: { part: 'esp32', pin: '3V3' }, SDA: { gpio: 21 }, SCL: { gpio: 22 } },
+      });
+    });
+    const found = issuesOf(car, 'i2c-address-unreachable', fixedAt29Catalog);
+    expect(found.map((i) => i.refs[0])).toEqual([
+      { part: 'tof_left' },
+      { part: 'tof_centre' },
+      { part: 'tof_right' },
+    ]);
   });
 });
 

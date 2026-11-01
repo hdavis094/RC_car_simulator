@@ -93,6 +93,20 @@ UI, sim behaviour implementations (only their parameters live here).
   - `prettier` and `vitest` declared as devDependencies;
   - the unreachable two-GPIO branch removed, with the reason in a comment;
   - Slash track width set to an estimated 240 mm between tyre centres.
+- **Review round 2.** Both reviews confirmed the round 1 fixes and found more, all fixed with fixtures:
+  - **Codex, blocking**: I²C is open-drain, so the controller's 3.3 V no longer counts on I²C lines (a 2.8 V-pulled bus passes). The Pololu SDA/SCL tolerate 5.5 V on the host side.
+  - **Codex, blocking**: an enable pin (XSHUT) tied to ground is an error.
+  - **Claude, blocking**: I²C lines wired only to other parts, never reaching a GPIO, are `i2c-incomplete`.
+  - **Claude, blocking**: the battery current check tolerates floating-point products (3300 mAh × 1.1 C).
+  - **Codex**: the car name is quoted in the header, so a trailing backslash can't continue the comment.
+  - **Claude, rail conflicts**: a GPIO straight to ground, an output shorted to ground, and an output fighting a rail are now caught.
+  - **Claude, strap and boot address**: a strap pin driven by another part's output counts as controlled. A fixed device at the boot address makes every software-addressed part there unreachable.
+  - **Claude, determinism**: when a signal reaches two GPIOs through dividers, the lowest wins, whatever the wire order.
+  - **Claude, cleanups**:
+    - ADC2 advice lists the controller's real ADC1 pins;
+    - one `isDivider` helper;
+    - `lineVoltage` requires its `exclude` argument, as documented;
+    - the same-part wire message explains why it is rejected.
 - **Contract change requests**: none (this is the contract).
 - **Open questions**:
   - Several values are unpublished estimates, each flagged in its part's `notes`:

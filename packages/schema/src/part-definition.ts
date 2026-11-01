@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { Behavior } from './behavior.ts';
+import { Behavior, isDivider } from './behavior.ts';
 import {
   DimensionsMm,
   GpioNumber,
@@ -328,17 +328,18 @@ export const PartDefinition = partDefinitionUnion.superRefine((part, ctx) => {
       outputs.length !== 1 ||
       typeof out?.voltage !== 'object' ||
       !sameRange(out.voltage, expected) ||
-      out.maxCurrentMa !== capacityMah * maxContinuousC
+      Math.abs((out.maxCurrentMa ?? 0) - capacityMah * maxContinuousC) > 1e-6
     ) {
+      const round = (v: number): number => Number(v.toFixed(6));
       ctx.addIssue({
         code: 'custom',
         path: ['pins'],
-        message: `a battery needs one power-out pin with voltage {min: ${expected.min}, max: ${expected.max}} and maxCurrentMa ${capacityMah * maxContinuousC}, matching its params`,
+        message: `a battery needs one power-out pin with voltage {min: ${round(expected.min)}, max: ${round(expected.max)}} and maxCurrentMa ${round(capacityMah * maxContinuousC)}, matching its params`,
       });
     }
   }
 
-  if ('behavior' in part && part.behavior.template === 'voltage-divider') {
+  if ('behavior' in part && isDivider(part.behavior)) {
     for (const [name, kind] of [
       ['IN', 'analog-in'],
       ['OUT', 'analog-out'],

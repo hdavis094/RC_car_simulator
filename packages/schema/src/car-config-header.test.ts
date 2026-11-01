@@ -59,6 +59,34 @@ describe('generateCarConfigHeader', () => {
     expect(text).toContain('#define ECHO_DIVIDER_OUT_PIN 34\n');
   });
 
+  it('picks the lowest GPIO when one signal reaches two, whatever the wire order', () => {
+    const build = (reverse: boolean) => {
+      const car = structuredClone(exampleCar);
+      const dividers = [
+        { instanceId: 'div_a', partId: 'passive.divider-1k-2k', pins: { OUT: { gpio: 39 } } },
+        { instanceId: 'div_b', partId: 'passive.divider-1k-2k', pins: { OUT: { gpio: 34 } } },
+      ];
+      car.parts.push(
+        {
+          instanceId: 'sonar',
+          partId: 'sensor.hc-sr04',
+          placement: { mount: 'front-centre' },
+          pins: {
+            VCC: { part: 'regulator', pin: 'VOUT' },
+            TRIG: { gpio: 13 },
+            ECHO: { part: 'div_a', pin: 'IN' },
+          },
+        },
+        ...(reverse ? dividers.reverse() : dividers),
+      );
+      const b = car.parts.find((p) => p.instanceId === 'div_b');
+      if (b) b.pins = { ...b.pins, IN: { part: 'sonar', pin: 'ECHO' } };
+      return generateCarConfigHeader(car, defaultCatalog);
+    };
+    expect(build(false)).toContain('#define SONAR_ECHO_PIN 34\n');
+    expect(build(true)).toContain('#define SONAR_ECHO_PIN 34\n');
+  });
+
   it('quotes the car name, so a trailing backslash cannot continue the comment', () => {
     const text = generateCarConfigHeader({ ...exampleCar, name: 'Car \\' }, defaultCatalog);
     expect(text).toContain('// Car: "Car \\"\n');

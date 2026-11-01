@@ -1,4 +1,4 @@
-import { dividerRatio } from '../behavior.ts';
+import { dividerRatio, isDivider } from '../behavior.ts';
 import type { Car, Part } from '../car.ts';
 import type { Catalog } from '../catalog.ts';
 import { electricalOf, findPin } from '../part-definition.ts';
@@ -163,7 +163,11 @@ export class Netlist {
     return this.#netMap().get(this.#find(endpointKey({ type: 'pin', part, pin })));
   }
 
-  /** The GPIO a part pin reaches, directly or through one voltage divider. */
+  /**
+   * The GPIO a part pin reaches, directly or through voltage dividers. When
+   * several are reachable (one signal into two dividers), the lowest wins, so
+   * the answer never depends on the order wires were declared in.
+   */
   gpioOfPin(part: ResolvedPart, pinName: string, seen = new Set<string>()): number | undefined {
     const net = this.netOfPin(part, pinName);
     if (!net) return undefined;
@@ -172,18 +176,15 @@ export class Netlist {
     const key = `${part.instance.instanceId}/${pinName}`;
     if (seen.has(key)) return undefined;
     seen.add(key);
+    const reachable: number[] = [];
     for (const member of net.pins) {
-      if (
-        member.part !== part &&
-        member.pin.name === 'IN' &&
-        'behavior' in member.part.definition &&
-        member.part.definition.behavior.template === 'voltage-divider'
-      ) {
-        const through = this.gpioOfPin(member.part, 'OUT', seen);
-        if (through !== undefined) return through;
-      }
+      if (member.part === part || member.pin.name !== 'IN') continue;
+      if (!('behavior' in member.part.definition) || !isDivider(member.part.definition.behavior))
+        continue;
+      const through = this.gpioOfPin(member.part, 'OUT', seen);
+      if (through !== undefined) reachable.push(through);
     }
-    return undefined;
+    return reachable.length > 0 ? Math.min(...reachable) : undefined;
   }
 
   /**
@@ -200,11 +201,7 @@ export class Netlist {
     seen.add(key);
 
     const definition = part.definition;
-    if (
-      'behavior' in definition &&
-      definition.behavior.template === 'voltage-divider' &&
-      pin.name === 'OUT'
-    ) {
+    if ('behavior' in definition && isDivider(definition.behavior) && pin.name === 'OUT') {
       const input = this.netOfPin(part, 'IN');
       const inV = input && this.netVoltage(input, seen, { part, pinName: 'IN' });
       if (!inV) return undefined;
@@ -240,13 +237,14 @@ export class Netlist {
   }
 
   /**
-   * The highest voltage on a net including the controller's own outputs. A
-   * GPIO the controller drives push-pull (for a digital-in or pwm-in pin) is
-   * at its logic level. I²C is open-drain: the controller only pulls low, so
-   * the line's high level comes from the parts' pull-ups alone. `exclude`
-   * leaves one pin out as a driver.
+   * The highest voltage on a net including the controller's own outputs:
+   * when the net has a GPIO and a digital-in or pwm-in pin, the controller
+   * drives it push-pull at its logic level. I²C is open-drain (the controller
+   * only pulls low), so an I²C line's high level comes from the parts'
+   * pull-ups alone. `exclude` is the receiving pin being checked; it is left
+   * out as a driver.
    */
-  lineVoltage(net: Net, exclude?: { part: ResolvedPart; pinName: string }): number | undefined {
+  lineVoltage(net: Net, exclude: { part: ResolvedPart; pinName: string }): number | undefined {
     let max = this.netVoltage(net, new Set(), exclude)?.max;
     const pushPull = net.pins.some((m) => m.pin.kind === 'digital-in' || m.pin.kind === 'pwm-in');
     const level = this.controller && electricalOf(this.controller.definition)?.logicLevelV;
@@ -330,7 +328,11 @@ export class Netlist {
         continue;
       }
       if (other === part) {
-        this.#reference(id, `wired to its own pin "${target.pin}"`, pinName);
+        this.#reference(
+          id,
+          `wired to its own pin "${target.pin}"; a part's pins are connected on its board, not in car.json`,
+          pinName,
+        );
         continue;
       }
       const otherPin = findPin(other.definition, target.pin);

@@ -139,6 +139,13 @@ export const BEHAVIOR_TEMPLATES: readonly BehaviorTemplate[] = Behavior.options.
   (option) => option.shape.template.value,
 );
 
+/** Whether a behavior is a voltage divider: pins IN and OUT, OUT = IN × ratio. */
+export function isDivider(
+  behavior: Behavior | undefined,
+): behavior is Extract<Behavior, { template: 'voltage-divider' }> {
+  return behavior?.template === 'voltage-divider';
+}
+
 /** Ratio OUT/IN of a voltage divider. */
 export function dividerRatio(params: z.infer<typeof VoltageDividerParams>): number {
   return params.r2Ohm / (params.r1Ohm + params.r2Ohm);

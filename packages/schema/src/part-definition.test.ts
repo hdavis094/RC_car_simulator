@@ -91,6 +91,14 @@ describe('PartDefinition', () => {
     expect(messages(part).join()).toMatch(/matching its params/);
   });
 
+  it('accepts battery currents whose product is not exact in floating point', () => {
+    const part = base('power.lipo-2s-5000');
+    part.behavior.params.capacityMah = 3300;
+    part.behavior.params.maxContinuousC = 1.1;
+    part.pins.find((p: { name: string }) => p.name === 'BAT+').maxCurrentMa = 3630;
+    expect(messages(part)).toEqual([]);
+  });
+
   it('allows maxInputV only on inputs', () => {
     const part = base('sensor.hc-sr04');
     part.pins.find((p: { name: string }) => p.name === 'ECHO').maxInputV = 5.5;

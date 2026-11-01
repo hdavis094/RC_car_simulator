@@ -1,3 +1,4 @@
+import { isDivider } from './behavior.ts';
 import type { Car } from './car.ts';
 import type { Catalog } from './catalog.ts';
 import { hex, macroName } from './common.ts';
@@ -44,7 +45,7 @@ export function headerMacros(netlist: Netlist): HeaderMacro[] {
         ref: { part: id },
       });
     }
-    if ('behavior' in definition && definition.behavior.template === 'voltage-divider') {
+    if ('behavior' in definition && isDivider(definition.behavior)) {
       const { r1Ohm, r2Ohm } = definition.behavior.params;
       macros.push(
         { name: `${prefix}_R1_OHM`, value: String(r1Ohm), part, ref: { part: id } },

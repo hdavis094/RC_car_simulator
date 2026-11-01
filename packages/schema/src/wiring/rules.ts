@@ -36,6 +36,14 @@ function issue(
   return { severity, rule, message, refs };
 }
 
+/** The controller's ADC1 GPIOs, for advice in messages. */
+const adc1Gpios = (netlist: Netlist): string =>
+  (netlist.controller?.definition.gpios ?? [])
+    .filter((g) => g.adc1Channel !== undefined)
+    .map((g) => g.gpio)
+    .sort((a, b) => a - b)
+    .join(', ');
+
 /** Pins on a net other than ground. */
 const signalPins = (net: Net) => net.pins.filter((member) => member.pin.kind !== 'gnd');
 
@@ -120,7 +128,7 @@ function gpioRules(netlist: Netlist): Issue[] {
               issue(
                 'error',
                 'adc2-wifi',
-                `GPIO ${gpio.gpio} is on ADC2, which is unavailable while Wi-Fi is on; move ${label(m.part, m.pin.name)} to an ADC1 pin (GPIO 32–39)`,
+                `GPIO ${gpio.gpio} is on ADC2, which is unavailable while Wi-Fi is on; move ${label(m.part, m.pin.name)} to an ADC1 pin (GPIO ${adc1Gpios(netlist)})`,
                 [at, pinRef(m.part, m.pin.name)],
               ),
             );
@@ -189,8 +197,42 @@ function inputLevels(netlist: Netlist): Issue[] {
 function railConflicts(netlist: Netlist): Issue[] {
   const issues: Issue[] = [];
   for (const net of netlist.nets()) {
+    const grounds = net.pins.filter((m) => m.pin.kind === 'gnd');
+    const outputs = net.pins.filter(
+      (m) => m.pin.kind === 'digital-out' || m.pin.kind === 'analog-out',
+    );
     const sources = net.pins.filter((m) => m.pin.kind === 'power-out');
+    if (grounds.length > 0 && sources.length === 0) {
+      for (const gpio of net.gpios) {
+        issues.push(
+          issue('error', 'rail-conflict', `GPIO ${gpio.gpio} is wired straight to ground`, [
+            { gpio: gpio.gpio },
+            ...grounds.map((m) => pinRef(m.part, m.pin.name)),
+          ]),
+        );
+      }
+      for (const m of outputs) {
+        issues.push(
+          issue(
+            'error',
+            'rail-conflict',
+            `the output ${label(m.part, m.pin.name)} is shorted to ground`,
+            [pinRef(m.part, m.pin.name)],
+          ),
+        );
+      }
+    }
     if (sources.length === 0) continue;
+    for (const m of outputs) {
+      issues.push(
+        issue(
+          'error',
+          'rail-conflict',
+          `the output ${label(m.part, m.pin.name)} is wired to the rail ${sources.map((src) => label(src.part, src.pin.name)).join(', ')} and would fight it`,
+          [pinRef(m.part, m.pin.name), ...sources.map((src) => pinRef(src.part, src.pin.name))],
+        ),
+      );
+    }
     const refs = sources.map((m) => pinRef(m.part, m.pin.name));
     const names = sources.map((m) => label(m.part, m.pin.name)).join(' and ');
     if (sources.length > 1) {
@@ -198,7 +240,6 @@ function railConflicts(netlist: Netlist): Issue[] {
         issue('error', 'rail-conflict', `${names} are power outputs wired together`, refs),
       );
     }
-    const grounds = net.pins.filter((m) => m.pin.kind === 'gnd');
     if (grounds.length > 0) {
       issues.push(
         issue('error', 'rail-conflict', `${names} is shorted to ground`, [
@@ -344,6 +385,9 @@ function strapLevel(netlist: Netlist, part: ResolvedPart, pin: string): 'high' |
   if (!net) return 'low';
   if (net.gpios.length > 0) return 'gpio';
   if (net.pins.some((m) => m.pin.kind === 'power-out')) return 'high';
+  // Driven by another part's output: its level can change, as with a GPIO.
+  if (net.pins.some((m) => m.pin.kind === 'digital-out' || m.pin.kind === 'analog-out'))
+    return 'gpio';
   return 'low';
 }
 
@@ -416,6 +460,17 @@ function i2cRules(netlist: Netlist): Issue[] {
           'i2c-incomplete',
           `${id} has only one I²C line on a GPIO; wire ${missing?.name ?? 'both lines'} too`,
           [missing ? pinRef(part, missing.name) : { part: id }],
+        ),
+      );
+    }
+    const wired = [sdaPin, sclPin].some((p) => p && netlist.netOfPin(part, p.name));
+    if (sda === undefined && scl === undefined && wired) {
+      issues.push(
+        issue(
+          'error',
+          'i2c-incomplete',
+          `${id}'s I²C lines are wired, but neither reaches a controller GPIO, so the firmware can never talk to it`,
+          [sdaPin ? pinRef(part, sdaPin.name) : { part: id }],
         ),
       );
     }
@@ -513,9 +568,22 @@ function bootAddressRule(netlist: Netlist, devices: readonly I2cDevice[]): Issue
       d.addressing.kind === 'software' &&
       netlist.gpioOfPin(d.part, d.addressing.enablePin) !== undefined;
     const stuck = software.filter((d) => !isolated(d));
+    if (others.length > 0) {
+      for (const d of software) {
+        issues.push(
+          issue(
+            'error',
+            'i2c-address-unreachable',
+            `${d.part.instance.instanceId} boots at ${hex(boot)}, where ${others.map((o) => o.part.instance.instanceId).join(', ')} also sits, so it can never be re-addressed; move it to another bus`,
+            [{ part: d.part.instance.instanceId }],
+          ),
+        );
+      }
+      continue;
+    }
     // The one unisolated device is re-addressed first, while the others are
     // held off; it must leave the boot address so they can come up after it.
-    const allowed = others.length === 0 ? 1 : 0;
+    const allowed = 1;
     const lastStuckMoves = stuck.length === 0 || stuck[0]?.address !== boot;
     if (stuck.length <= allowed && lastStuckMoves) continue;
     for (const d of stuck) {
