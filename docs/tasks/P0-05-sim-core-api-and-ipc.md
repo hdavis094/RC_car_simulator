@@ -1,6 +1,6 @@
 # P0-05 — Contract: sim-core public API and app IPC
 
-Status: todo
+Status: in-progress
 Agent: Claude (Opus)
 Branch: ws/p0-05
 Depends on: P0-03, P0-04
