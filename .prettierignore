@@ -1,0 +1,13 @@
+# Markdown is prose, edited by hand; Prettier would reflow tables and lists.
+*.md
+pnpm-lock.yaml
+node_modules/
+dist/
+out/
+.rcsim/
+logs/
+test-results/
+playwright-report/
+.pio/
+packages/hal/
+packages/firmware-template/

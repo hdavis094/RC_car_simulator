@@ -1,0 +1,19 @@
+{
+  "name": "@rcsim/sim-core",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Headless simulation: clock, world, physics, actuators, sensors, firmware bridge, scenario runner",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -p .",
+    "test:scenarios": "node scripts/scenarios-placeholder.ts"
+  },
+  "dependencies": {
+    "@rcsim/schema": "workspace:*",
+    "@rcsim/sim-protocol": "workspace:*"
+  }
+}

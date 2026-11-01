@@ -1,0 +1,10 @@
+{
+  "name": "@rcsim/firmware-template",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Starter firmware and platformio.ini, copied into every new car project",
+  "scripts": {
+    "test": "echo 'firmware-template: no tests yet (P1-G)'",
+    "typecheck": "echo 'firmware-template: C++, built by hal'"
+  }
+}
