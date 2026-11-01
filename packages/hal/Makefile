@@ -25,6 +25,7 @@ TEST_OBJS := $(TEST_SRCS:%.cpp=$(BUILD_DIR)/%.o)
 LIB := $(BUILD_DIR)/libhal.a
 TEST_BIN := $(BUILD_DIR)/hal_tests
 
+CLANG_FORMAT ?= clang-format
 FORMAT_SRCS := $(wildcard include/*.h include/**/*.h src/*.cpp src/*.h test/*.cpp test/*.h)
 
 .PHONY: all lib test clean format format-check
@@ -51,9 +52,9 @@ clean:
 	rm -rf build
 
 format:
-	clang-format -i $(FORMAT_SRCS)
+	$(CLANG_FORMAT) -i $(FORMAT_SRCS)
 
 format-check:
-	clang-format --dry-run --Werror $(FORMAT_SRCS)
+	$(CLANG_FORMAT) --dry-run --Werror $(FORMAT_SRCS)
 
 -include $(LIB_OBJS:.o=.d) $(TEST_OBJS:.o=.d)

@@ -9,5 +9,8 @@
     "typecheck": "echo 'hal: C++, compiled by the test script'",
     "format": "sh scripts/format.sh",
     "format:check": "sh scripts/format.sh --check"
+  },
+  "devDependencies": {
+    "@wasm-fmt/clang-format": "23.1.1"
   }
 }

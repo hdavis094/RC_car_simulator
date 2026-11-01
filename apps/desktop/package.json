@@ -5,9 +5,9 @@
   "description": "The Donkey Car Simulator desktop app: Workbench, Terminal and 3D World",
   "main": "./out/main/index.js",
   "scripts": {
-    "dev": "electron-vite dev",
+    "dev": "env -u ELECTRON_RUN_AS_NODE electron-vite dev",
     "build": "electron-vite build",
-    "preview": "electron-vite preview",
+    "preview": "env -u ELECTRON_RUN_AS_NODE electron-vite preview",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.node.json && tsc -p tsconfig.web.json"
   },

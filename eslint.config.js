@@ -1,19 +1,27 @@
 // @ts-check
 import js from '@eslint/js';
+import { builtinModules } from 'node:module';
 import reactHooks from 'eslint-plugin-react-hooks';
 import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
+/** UI and Electron packages, matched with their subpaths (`react-dom/client`). */
+const uiPackages = ['react', 'react-dom', 'electron', 'zustand', '@rcsim/desktop'];
+
 /** Packages that must stay headless: no UI or Electron imports. */
 const headlessImports = {
-  paths: ['react', 'react-dom', 'electron', 'zustand'].map((name) => ({
-    name,
-    message: 'packages/* run headless (AGENTS.md → Layering). UI code lives in apps/desktop.',
-  })),
   patterns: [
-    { group: ['@rcsim/desktop', '@rcsim/desktop/*'], message: 'packages/* never import the app.' },
+    {
+      group: uiPackages.flatMap((name) => [name, `${name}/*`]),
+      message: 'packages/* run headless (AGENTS.md → Layering). UI code lives in apps/desktop.',
+    },
   ],
 };
+
+/** Node built-ins in both forms (`fs`, `node:fs`, `fs/promises`). */
+const nodeBuiltins = builtinModules
+  .filter((name) => !name.startsWith('_'))
+  .flatMap((name) => [name, `${name}/*`]);
 
 export default tseslint.config(
   {
@@ -63,7 +71,13 @@ export default tseslint.config(
               message: 'The renderer talks to main only through the preload API.',
             },
           ],
-          patterns: [{ group: ['node:*'], message: 'The renderer has no Node access.' }],
+          patterns: [
+            {
+              group: ['electron/*'],
+              message: 'The renderer talks to main only through the preload API.',
+            },
+            { group: ['node:*', ...nodeBuiltins], message: 'The renderer has no Node access.' },
+          ],
         },
       ],
     },

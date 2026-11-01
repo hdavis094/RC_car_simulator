@@ -30,7 +30,7 @@ jobs:
 
       - name: Install Linux tools
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y xvfb clang clang-format
+        run: sudo apt-get update && sudo apt-get install -y xvfb clang
 
       - run: pnpm install --frozen-lockfile
 
@@ -39,7 +39,6 @@ jobs:
           node --version
           pnpm --version
           for cxx in g++ clang++ c++; do command -v "$cxx" >/dev/null && "$cxx" --version | head -n 1; done
-          command -v clang-format >/dev/null && clang-format --version || echo "clang-format: not installed"
 
       - name: pnpm verify (Linux, under Xvfb)
         if: runner.os == 'Linux'
