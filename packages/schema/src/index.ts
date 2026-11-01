@@ -63,4 +63,5 @@ export { exampleCar } from './example-car.ts';
 export { Issue, IssueRef, WiringRuleId } from './wiring/issue.ts';
 export { canRun, checkWiring } from './wiring/rules.ts';
 export { generateCarConfigHeader } from './car-config-header.ts';
+export { gpioAssignments } from './gpio-assignments.ts';
 export { JSON_SCHEMA_FILES, jsonSchemaText } from './json-schemas.ts';
