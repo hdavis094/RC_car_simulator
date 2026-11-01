@@ -1,0 +1,82 @@
+{
+  "$schema": "../json-schema/car.schema.json",
+  "schemaVersion": 1,
+  "name": "Default car",
+  "wifi": true,
+  "controller": {
+    "instanceId": "esp32",
+    "partId": "controller.esp32-devkitc-v4",
+    "placement": { "mount": "roof", "offsetMm": { "x": 0, "y": -60, "z": 40 } },
+    "pins": { "5V": { "part": "regulator", "pin": "VOUT" } }
+  },
+  "chassis": { "instanceId": "chassis", "partId": "chassis.traxxas-slash-2wd" },
+  "parts": [
+    { "instanceId": "battery", "partId": "power.lipo-2s-5000" },
+    {
+      "instanceId": "regulator",
+      "partId": "power.pololu-d24v22f5",
+      "pins": { "VIN": { "part": "battery", "pin": "BAT+" } }
+    },
+    {
+      "instanceId": "esc",
+      "partId": "actuator.quicrun-1060-540",
+      "pins": { "BATT+": { "part": "battery", "pin": "BAT+" }, "SIGNAL": { "gpio": 26 } }
+    },
+    {
+      "instanceId": "steering",
+      "partId": "actuator.mg996r",
+      "pins": { "V+": { "part": "esc", "pin": "BEC" }, "SIGNAL": { "gpio": 25 } }
+    },
+    {
+      "instanceId": "tof_left",
+      "partId": "sensor.vl53l0x-pololu",
+      "placement": { "mount": "front-left" },
+      "pins": {
+        "VIN": { "part": "esp32", "pin": "3V3" },
+        "SDA": { "gpio": 21 },
+        "SCL": { "gpio": 22 },
+        "XSHUT": { "gpio": 16 }
+      },
+      "i2cAddress": 48
+    },
+    {
+      "instanceId": "tof_centre",
+      "partId": "sensor.vl53l0x-pololu",
+      "placement": { "mount": "front-centre" },
+      "pins": {
+        "VIN": { "part": "esp32", "pin": "3V3" },
+        "SDA": { "gpio": 21 },
+        "SCL": { "gpio": 22 },
+        "XSHUT": { "gpio": 17 }
+      },
+      "i2cAddress": 49
+    },
+    {
+      "instanceId": "tof_right",
+      "partId": "sensor.vl53l0x-pololu",
+      "placement": { "mount": "front-right" },
+      "pins": {
+        "VIN": { "part": "esp32", "pin": "3V3" },
+        "SDA": { "gpio": 21 },
+        "SCL": { "gpio": 22 },
+        "XSHUT": { "gpio": 18 }
+      },
+      "i2cAddress": 50
+    },
+    {
+      "instanceId": "imu",
+      "partId": "sensor.gy-521-mpu6050",
+      "placement": { "mount": "roof", "offsetMm": { "x": 0, "y": -80, "z": 0 } },
+      "pins": {
+        "VCC": { "part": "esp32", "pin": "3V3" },
+        "SDA": { "gpio": 21 },
+        "SCL": { "gpio": 22 }
+      }
+    },
+    {
+      "instanceId": "battery_sense",
+      "partId": "passive.divider-100k-33k",
+      "pins": { "IN": { "part": "battery", "pin": "BAT+" }, "OUT": { "gpio": 35 } }
+    }
+  ]
+}

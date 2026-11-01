@@ -1,0 +1,87 @@
+{
+  "$schema": "../json-schema/part-definition.schema.json",
+  "schemaVersion": 1,
+  "id": "sensor.gy-521-mpu6050",
+  "name": "MPU-6050 accelerometer/gyro (GY-521 breakout)",
+  "manufacturer": "TDK InvenSense (sensor); generic breakout",
+  "category": "sensor",
+  "description": "6-axis IMU on a breakout with a 3.3 V regulator; I²C pull-ups go to the regulated 3.3 V.",
+  "massG": 2,
+  "dimensionsMm": {
+    "width": 16,
+    "height": 3,
+    "length": 21
+  },
+  "pins": [
+    {
+      "name": "VCC",
+      "kind": "power-in"
+    },
+    {
+      "name": "GND",
+      "kind": "gnd"
+    },
+    {
+      "name": "SCL",
+      "kind": "i2c-scl",
+      "voltage": 3.3
+    },
+    {
+      "name": "SDA",
+      "kind": "i2c-sda",
+      "voltage": 3.3
+    },
+    {
+      "name": "AD0",
+      "kind": "digital-in",
+      "voltage": 3.3,
+      "optional": true,
+      "description": "Address select, pulled down on the board: open or low = 0x68, high = 0x69."
+    },
+    {
+      "name": "INT",
+      "kind": "digital-out",
+      "voltage": 3.3,
+      "optional": true,
+      "description": "Data-ready interrupt, push-pull, active high."
+    }
+  ],
+  "electrical": {
+    "supplyV": {
+      "min": 3.3,
+      "max": 5.0
+    },
+    "logicLevelV": 3.3,
+    "currentMa": {
+      "typical": 5,
+      "peak": 10
+    }
+  },
+  "i2c": {
+    "defaultAddress": 104,
+    "addressing": {
+      "kind": "strap",
+      "addresses": [104, 105],
+      "pin": "AD0"
+    }
+  },
+  "behavior": {
+    "template": "imu",
+    "params": {
+      "accelRangesG": [2, 4, 8, 16],
+      "defaultAccelRangeG": 2,
+      "gyroRangesDps": [250, 500, 1000, 2000],
+      "defaultGyroRangeDps": 250,
+      "accelNoiseDensityUgPerSqrtHz": 400,
+      "gyroNoiseDensityDpsPerSqrtHz": 0.005,
+      "updateHz": 1000
+    }
+  },
+  "sources": [
+    "https://alliance.seas.upenn.edu/~medesign/wiki/uploads/Guides/MPU6050_datasheet.pdf",
+    "https://cdn.sparkfun.com/datasheets/Sensors/Accelerometers/RM-MPU-6000A.pdf",
+    "https://protosupplies.com/product/mpu-6050-gy-521-3-axis-accel-gryo-sensor-module/",
+    "https://playground.arduino.cc/Main/MPU-6050/"
+  ],
+  "notes": "MPU-6050 product spec (Rev 3.2) and register map (Rev 4.0): ranges +-2/4/8/16 g and +-250/500/1000/2000 deg/s; noise 400 ug/sqrt(Hz) and 0.005 deg/s/sqrt(Hz); accel output 1 kHz; 3.8-3.9 mA; addresses 0x68/0x69 by AD0. GY-521 has no manufacturer documentation: the VCC range (3.3-5 V, 5 V preferred), pull-ups to the 3.3 V rail and the AD0 pull-down are from ProtoSupplies and the Arduino Playground; typical 5 mA / peak 10 mA adds the regulator and LED (estimate); mass 2 g is an estimate. Wiring XDA/XCL (the aux I²C bus) is not modelled."
+}

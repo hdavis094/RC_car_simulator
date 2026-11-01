@@ -1,0 +1,111 @@
+{
+  "title": "Track",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "description": "Path or URL of the JSON Schema.",
+      "type": "string"
+    },
+    "schemaVersion": {
+      "type": "number",
+      "const": 1,
+      "description": "Data file format version. Readers reject versions they do not know."
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "centreline": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["polyline", "catmull-rom"],
+          "description": "Straight segments, or a closed centripetal Catmull-Rom spline through the points."
+        },
+        "pointsM": {
+          "minItems": 3,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "x": {
+                "type": "number"
+              },
+              "z": {
+                "type": "number"
+              }
+            },
+            "required": ["x", "z"],
+            "additionalProperties": false
+          },
+          "description": "Closed: the last point joins the first."
+        }
+      },
+      "required": ["kind", "pointsM"],
+      "additionalProperties": false
+    },
+    "widthM": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "wallHeightM": {
+      "type": "number",
+      "minimum": 0,
+      "description": "0 means no walls."
+    },
+    "startFinish": {
+      "type": "object",
+      "properties": {
+        "point": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Index into pointsM. The line crosses the track there, square to it."
+        }
+      },
+      "required": ["point"],
+      "additionalProperties": false
+    },
+    "start": {
+      "type": "object",
+      "properties": {
+        "positionM": {
+          "type": "object",
+          "properties": {
+            "x": {
+              "type": "number"
+            },
+            "z": {
+              "type": "number"
+            }
+          },
+          "required": ["x", "z"],
+          "additionalProperties": false
+        },
+        "yawDeg": {
+          "type": "number"
+        }
+      },
+      "required": ["positionM", "yawDeg"],
+      "additionalProperties": false,
+      "description": "Default start pose for worlds on this track."
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "id",
+    "name",
+    "centreline",
+    "widthM",
+    "wallHeightM",
+    "startFinish",
+    "start"
+  ],
+  "additionalProperties": false
+}

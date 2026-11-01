@@ -1,0 +1,91 @@
+{
+  "title": "World",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "description": "Path or URL of the JSON Schema.",
+      "type": "string"
+    },
+    "schemaVersion": {
+      "type": "number",
+      "const": 1,
+      "description": "Data file format version. Readers reject versions they do not know."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "trackId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "start": {
+      "description": "Defaults to the track's start pose.",
+      "type": "object",
+      "properties": {
+        "positionM": {
+          "type": "object",
+          "properties": {
+            "x": {
+              "type": "number"
+            },
+            "z": {
+              "type": "number"
+            }
+          },
+          "required": ["x", "z"],
+          "additionalProperties": false
+        },
+        "yawDeg": {
+          "type": "number"
+        }
+      },
+      "required": ["positionM", "yawDeg"],
+      "additionalProperties": false
+    },
+    "seed": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295,
+      "description": "Fixes all randomness in a run."
+    },
+    "obstacles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "description": "Stable id for editing; unique within the world.",
+            "type": "string",
+            "minLength": 1
+          },
+          "type": {
+            "type": "string",
+            "enum": ["cone", "box", "wall", "ramp"]
+          },
+          "positionM": {
+            "type": "object",
+            "properties": {
+              "x": {
+                "type": "number"
+              },
+              "z": {
+                "type": "number"
+              }
+            },
+            "required": ["x", "z"],
+            "additionalProperties": false
+          },
+          "yawDeg": {
+            "type": "number"
+          }
+        },
+        "required": ["type", "positionM", "yawDeg"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["schemaVersion", "name", "trackId", "seed", "obstacles"],
+  "additionalProperties": false
+}

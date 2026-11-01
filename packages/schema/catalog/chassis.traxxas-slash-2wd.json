@@ -1,0 +1,85 @@
+{
+  "$schema": "../json-schema/part-definition.schema.json",
+  "schemaVersion": 1,
+  "id": "chassis.traxxas-slash-2wd",
+  "name": "Traxxas Slash 2WD (1/10 short course truck)",
+  "manufacturer": "Traxxas",
+  "category": "chassis",
+  "description": "1/10 rear-drive Ackermann chassis. The motor, ESC and steering servo are separate parts.",
+  "massG": 1790,
+  "dimensionsMm": {
+    "width": 296,
+    "height": 214,
+    "length": 568
+  },
+  "pins": [],
+  "wheelbaseMm": 335,
+  "trackWidthMm": 240,
+  "wheelRadiusMm": 55,
+  "maxSteeringAngleDeg": 28,
+  "steeringLinkageRatio": 0.7,
+  "driveWheels": "rear",
+  "finalDriveRatio": 15.3,
+  "centreOfGravityMm": {
+    "x": 0,
+    "y": 100,
+    "z": 33.5
+  },
+  "mountPoints": [
+    {
+      "id": "front-left",
+      "positionMm": {
+        "x": -80,
+        "y": 60,
+        "z": -255
+      },
+      "yawDeg": 30,
+      "pitchDeg": 0
+    },
+    {
+      "id": "front-centre",
+      "positionMm": {
+        "x": 0,
+        "y": 60,
+        "z": -270
+      },
+      "yawDeg": 0,
+      "pitchDeg": 0
+    },
+    {
+      "id": "front-right",
+      "positionMm": {
+        "x": 80,
+        "y": 60,
+        "z": -255
+      },
+      "yawDeg": -30,
+      "pitchDeg": 0
+    },
+    {
+      "id": "roof",
+      "positionMm": {
+        "x": 0,
+        "y": 200,
+        "z": 0
+      },
+      "yawDeg": 0,
+      "pitchDeg": 0
+    },
+    {
+      "id": "rear",
+      "positionMm": {
+        "x": 0,
+        "y": 80,
+        "z": 270
+      },
+      "yawDeg": 180,
+      "pitchDeg": 0
+    }
+  ],
+  "sources": [
+    "https://traxxas.com/58024-110-slash-xl-5-2wd-short-course-truck-w-tq-radio",
+    "https://traxxas.com/media/productattach/C-58234-8/2/58234-8-om-en-r00.pdf"
+  ],
+  "notes": "Published: wheelbase 335 mm, length 568 mm, width 296 mm, height 214 mm, RTR mass 2.16 kg without battery. finalDriveRatio 15.3 = stock 16T/90T gearing x 2.72 transmission from the manual gear chart (the product page says 12.58, which matches neither listed pinion). Estimates (not published): track width 240 mm between tyre centres (Traxxas lists \"track\" 296 mm, equal to the overall width, so that is the outside of the tyres; about 56 mm SCT tyre width subtracted); mass 1790 g = 2.16 kg minus the stock motor (240 g), ESC, servo and receiver, which are separate parts here; wheel radius 55 mm from about 110 mm SCT tyres; max steering angle 28 deg (typical 1/10 SCT, 25-32); steering linkage ratio 0.7, positive so pulses above neutral steer right (1000-2000 us on the servo gives roughly full lock); centre of gravity 100 mm high with a 40/60 front/rear split; mount point positions from the body-shell geometry."
+}

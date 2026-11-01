@@ -1,0 +1,82 @@
+{
+  "$schema": "../json-schema/part-definition.schema.json",
+  "schemaVersion": 1,
+  "id": "actuator.quicrun-1060-540",
+  "name": "Hobbywing QuicRun 1060 ESC + 540 brushed motor",
+  "manufacturer": "Hobbywing",
+  "category": "actuator",
+  "description": "Brushed ESC with a stock-class 540/550 motor, modelled as one drive unit. The BEC powers the steering servo.",
+  "massG": 279,
+  "dimensionsMm": {
+    "width": 32,
+    "height": 18,
+    "length": 36.5
+  },
+  "pins": [
+    {
+      "name": "BATT+",
+      "kind": "power-in"
+    },
+    {
+      "name": "BATT-",
+      "kind": "gnd"
+    },
+    {
+      "name": "SIGNAL",
+      "kind": "pwm-in",
+      "description": "Throttle pulses on the receiver lead; 3.3 V logic is enough."
+    },
+    {
+      "name": "BEC",
+      "kind": "power-out",
+      "voltage": 6,
+      "maxCurrentMa": 3000,
+      "description": "Switch-mode BEC on the receiver lead. 6 V: do not power the controller or 3.3 V sensors from it."
+    },
+    {
+      "name": "GND",
+      "kind": "gnd",
+      "description": "Receiver-lead ground."
+    }
+  ],
+  "electrical": {
+    "supplyV": {
+      "min": 6.0,
+      "max": 12.6
+    },
+    "logicLevelV": 5,
+    "currentMa": {
+      "typical": 5000,
+      "peak": 60000
+    }
+  },
+  "behavior": {
+    "template": "esc-motor",
+    "params": {
+      "pulseMinUs": 1000,
+      "pulseNeutralUs": 1500,
+      "pulseMaxUs": 2000,
+      "deadbandUs": 40,
+      "armingMs": 3000,
+      "reverse": true,
+      "kvRpmPerV": 2700,
+      "maxTorqueNm": 0.2,
+      "throttleCurve": [
+        {
+          "input": 0,
+          "output": 0
+        },
+        {
+          "input": 1,
+          "output": 1
+        }
+      ]
+    }
+  },
+  "sources": [
+    "https://www.hobbywing.com/en/products/quicrun-wp-1060-brushed55",
+    "https://www.hobbywing.com/en/uploads/file/20240315/4806bbdbab8eb9fea0bb26da87d81b00.pdf",
+    "https://traxxas.com/58024-110-slash-xl-5-2wd-short-course-truck-w-tq-radio"
+  ],
+  "notes": "Published (Hobbywing): 2-3S LiPo (6.0-12.6 V); 60 A continuous / 360 A peak forward; BEC 6 V / 3 A switch mode; 540/550 motors >= 12T or < 30000 rpm at 7.2 V on 2S; arming: hold neutral at power-on and wait 3 s; default mode forward/brake/reverse (reverse needs a double-tap, modelled in physics stage 2); ESC 39 g, 36.5 x 32 x 18 mm. The ESC ships set to NiMH; set the LiPo jumper on the real car. Estimates: pulse range 1000/1500/2000 us (the ESC auto-calibrates to what it sees); deadband +-40 us (not published, not adjustable); typical current 5 A cruising, peak 60 A (the continuous rating). Motor: mass 240 g (Traxxas Titan 12T 550, the Slash stock motor); Kv 2700 rpm/V and 0.2 N.m stall torque at 7.4 V are typical stock-motor figures, not published (no 7.2 V 540 datasheet is available)."
+}

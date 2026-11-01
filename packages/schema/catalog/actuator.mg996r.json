@@ -1,0 +1,55 @@
+{
+  "$schema": "../json-schema/part-definition.schema.json",
+  "schemaVersion": 1,
+  "id": "actuator.mg996r",
+  "name": "TowerPro MG996R servo",
+  "manufacturer": "TowerPro",
+  "category": "actuator",
+  "description": "Metal-gear standard servo, used for steering. Powered from the ESC's 6 V BEC.",
+  "massG": 55,
+  "dimensionsMm": {
+    "width": 19.7,
+    "height": 42.9,
+    "length": 40.7
+  },
+  "pins": [
+    {
+      "name": "SIGNAL",
+      "kind": "pwm-in",
+      "description": "50 Hz pulses; 3.3 V logic is enough."
+    },
+    {
+      "name": "V+",
+      "kind": "power-in"
+    },
+    {
+      "name": "GND",
+      "kind": "gnd"
+    }
+  ],
+  "electrical": {
+    "supplyV": {
+      "min": 4.8,
+      "max": 6.6
+    },
+    "logicLevelV": 5,
+    "currentMa": {
+      "typical": 170,
+      "peak": 1400
+    }
+  },
+  "behavior": {
+    "template": "servo",
+    "params": {
+      "travelDeg": 159,
+      "slewDegPerS": 400,
+      "pulseMinUs": 500,
+      "pulseNeutralUs": 1500,
+      "pulseMaxUs": 2500,
+      "deadbandUs": 1,
+      "stallTorqueNm": 1.08
+    }
+  },
+  "sources": ["https://www.towerpro.com.tw/product/mg996r/"],
+  "notes": "Published: 4.8-6.6 V; 0.15 s/60 deg at 6.0 V (= 400 deg/s); stall torque 11 kg.cm at 6.0 V (1.08 N.m); dead band 1 us; idle 10 mA, no-load running 170 mA (typical), stall 1400 mA (peak); 55 g; 40.7 x 19.7 x 42.9 mm; travel 0-159 deg (TowerPro answer on the product page). Not published: the pulse range. 500-2500 us for the full 159 deg is an estimate; firmware sending 1000-2000 us gets about +-40 deg."
+}

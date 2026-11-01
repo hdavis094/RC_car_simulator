@@ -1,0 +1,3064 @@
+{
+  "title": "Part definition",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "$schema": {
+          "description": "Path or URL of the JSON Schema.",
+          "type": "string"
+        },
+        "schemaVersion": {
+          "type": "number",
+          "const": 1,
+          "description": "Data file format version. Readers reject versions they do not know."
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:\\.[a-z0-9]+(?:-[a-z0-9]+)*)+$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "manufacturer": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "massG": {
+          "type": "number",
+          "minimum": 0
+        },
+        "dimensionsMm": {
+          "type": "object",
+          "properties": {
+            "width": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "Along X (left to right)."
+            },
+            "height": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "Along Y (bottom to top)."
+            },
+            "length": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "Along Z (front to back)."
+            }
+          },
+          "required": ["width", "height", "length"],
+          "additionalProperties": false
+        },
+        "modelPath": {
+          "description": "glTF model, relative to this file.",
+          "type": "string"
+        },
+        "pins": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_+-]*$"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "power-in",
+                  "power-out",
+                  "gnd",
+                  "i2c-sda",
+                  "i2c-scl",
+                  "pwm-in",
+                  "digital-in",
+                  "digital-out",
+                  "analog-in",
+                  "analog-out"
+                ]
+              },
+              "voltage": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "min": {
+                        "type": "number"
+                      },
+                      "max": {
+                        "type": "number"
+                      }
+                    },
+                    "required": ["min", "max"],
+                    "additionalProperties": false,
+                    "description": "Voltage range of a varying source."
+                  },
+                  {
+                    "type": "string",
+                    "const": "supply"
+                  }
+                ]
+              },
+              "maxCurrentMa": {
+                "description": "power-out only: the most current the rail may supply.",
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "maxInputV": {
+                "description": "Inputs only: the highest voltage the pin tolerates, when above its nominal level (e.g. 3.6 V absolute maximum on a 2.8 V pin).",
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "optional": {
+                "description": "The part works with this pin unconnected (no warning when left open).",
+                "type": "boolean"
+              },
+              "description": {
+                "type": "string"
+              }
+            },
+            "required": ["name", "kind"],
+            "additionalProperties": false
+          }
+        },
+        "sources": {
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uri"
+          },
+          "description": "Datasheets and product pages the values come from."
+        },
+        "notes": {
+          "description": "Assumptions and estimated values, with reasons.",
+          "type": "string"
+        },
+        "category": {
+          "type": "string",
+          "const": "controller"
+        },
+        "electrical": {
+          "type": "object",
+          "properties": {
+            "supplyV": {
+              "type": "object",
+              "properties": {
+                "min": {
+                  "type": "number"
+                },
+                "max": {
+                  "type": "number"
+                }
+              },
+              "required": ["min", "max"],
+              "additionalProperties": false,
+              "description": "Allowed voltage on the power-in pin."
+            },
+            "logicLevelV": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                {
+                  "type": "string",
+                  "const": "supply"
+                }
+              ],
+              "description": "Signal level of the part. \"supply\" means it follows the power-in voltage."
+            },
+            "currentMa": {
+              "type": "object",
+              "properties": {
+                "typical": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "peak": {
+                  "type": "number",
+                  "minimum": 0
+                }
+              },
+              "required": ["typical", "peak"],
+              "additionalProperties": false,
+              "description": "Current drawn from the power-in pin, excluding what its power-out pins supply."
+            }
+          },
+          "required": ["supplyV", "logicLevelV", "currentMa"],
+          "additionalProperties": false
+        },
+        "gpios": {
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "gpio": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 39
+              },
+              "label": {
+                "description": "Header label when it differs from the number.",
+                "type": "string"
+              },
+              "inputOnly": {
+                "type": "boolean"
+              },
+              "adc1Channel": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "adc2Channel": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "touchChannel": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "strapping": {
+                "type": "boolean"
+              },
+              "flash": {
+                "description": "Wired to the module flash.",
+                "type": "boolean"
+              },
+              "uart0": {
+                "description": "Used by the USB serial bridge.",
+                "type": "string",
+                "enum": ["tx", "rx"]
+              }
+            },
+            "required": ["gpio"],
+            "additionalProperties": false
+          }
+        },
+        "gpioMaxInputV": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Highest voltage a GPIO accepts."
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "id",
+        "name",
+        "massG",
+        "dimensionsMm",
+        "pins",
+        "sources",
+        "category",
+        "electrical",
+        "gpios",
+        "gpioMaxInputV"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "$schema": {
+          "description": "Path or URL of the JSON Schema.",
+          "type": "string"
+        },
+        "schemaVersion": {
+          "type": "number",
+          "const": 1,
+          "description": "Data file format version. Readers reject versions they do not know."
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:\\.[a-z0-9]+(?:-[a-z0-9]+)*)+$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "manufacturer": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "massG": {
+          "type": "number",
+          "minimum": 0
+        },
+        "dimensionsMm": {
+          "type": "object",
+          "properties": {
+            "width": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "Along X (left to right)."
+            },
+            "height": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "Along Y (bottom to top)."
+            },
+            "length": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "Along Z (front to back)."
+            }
+          },
+          "required": ["width", "height", "length"],
+          "additionalProperties": false
+        },
+        "modelPath": {
+          "description": "glTF model, relative to this file.",
+          "type": "string"
+        },
+        "pins": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_+-]*$"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "power-in",
+                  "power-out",
+                  "gnd",
+                  "i2c-sda",
+                  "i2c-scl",
+                  "pwm-in",
+                  "digital-in",
+                  "digital-out",
+                  "analog-in",
+                  "analog-out"
+                ]
+              },
+              "voltage": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "min": {
+                        "type": "number"
+                      },
+                      "max": {
+                        "type": "number"
+                      }
+                    },
+                    "required": ["min", "max"],
+                    "additionalProperties": false,
+                    "description": "Voltage range of a varying source."
+                  },
+                  {
+                    "type": "string",
+                    "const": "supply"
+                  }
+                ]
+              },
+              "maxCurrentMa": {
+                "description": "power-out only: the most current the rail may supply.",
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "maxInputV": {
+                "description": "Inputs only: the highest voltage the pin tolerates, when above its nominal level (e.g. 3.6 V absolute maximum on a 2.8 V pin).",
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "optional": {
+                "description": "The part works with this pin unconnected (no warning when left open).",
+                "type": "boolean"
+              },
+              "description": {
+                "type": "string"
+              }
+            },
+            "required": ["name", "kind"],
+            "additionalProperties": false
+          }
+        },
+        "sources": {
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uri"
+          },
+          "description": "Datasheets and product pages the values come from."
+        },
+        "notes": {
+          "description": "Assumptions and estimated values, with reasons.",
+          "type": "string"
+        },
+        "category": {
+          "type": "string",
+          "const": "chassis"
+        },
+        "wheelbaseMm": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "trackWidthMm": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Between the tyre centres."
+        },
+        "wheelRadiusMm": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "maxSteeringAngleDeg": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "exclusiveMaximum": 90,
+          "description": "Inner front wheel at full lock."
+        },
+        "steeringLinkageRatio": {
+          "type": "number",
+          "description": "Front-wheel degrees per degree of steering-servo travel, up to full lock. Positive: servo pulses above neutral steer right; negative: they steer left (a reversed servo)."
+        },
+        "driveWheels": {
+          "type": "string",
+          "enum": ["rear", "front", "all"]
+        },
+        "finalDriveRatio": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Motor turns per wheel turn."
+        },
+        "centreOfGravityMm": {
+          "type": "object",
+          "properties": {
+            "x": {
+              "type": "number"
+            },
+            "y": {
+              "type": "number"
+            },
+            "z": {
+              "type": "number"
+            }
+          },
+          "required": ["x", "y", "z"],
+          "additionalProperties": false,
+          "description": "Of the chassis alone, in the chassis frame."
+        },
+        "mountPoints": {
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+              },
+              "positionMm": {
+                "type": "object",
+                "properties": {
+                  "x": {
+                    "type": "number"
+                  },
+                  "y": {
+                    "type": "number"
+                  },
+                  "z": {
+                    "type": "number"
+                  }
+                },
+                "required": ["x", "y", "z"],
+                "additionalProperties": false,
+                "description": "In the chassis frame."
+              },
+              "yawDeg": {
+                "type": "number",
+                "description": "Default heading; positive turns left, seen from above."
+              },
+              "pitchDeg": {
+                "type": "number",
+                "description": "Default pitch; positive tilts up."
+              }
+            },
+            "required": ["id", "positionMm", "yawDeg", "pitchDeg"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "id",
+        "name",
+        "massG",
+        "dimensionsMm",
+        "pins",
+        "sources",
+        "category",
+        "wheelbaseMm",
+        "trackWidthMm",
+        "wheelRadiusMm",
+        "maxSteeringAngleDeg",
+        "steeringLinkageRatio",
+        "driveWheels",
+        "finalDriveRatio",
+        "centreOfGravityMm",
+        "mountPoints"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "$schema": {
+          "description": "Path or URL of the JSON Schema.",
+          "type": "string"
+        },
+        "schemaVersion": {
+          "type": "number",
+          "const": 1,
+          "description": "Data file format version. Readers reject versions they do not know."
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:\\.[a-z0-9]+(?:-[a-z0-9]+)*)+$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "manufacturer": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "massG": {
+          "type": "number",
+          "minimum": 0
+        },
+        "dimensionsMm": {
+          "type": "object",
+          "properties": {
+            "width": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "Along X (left to right)."
+            },
+            "height": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "Along Y (bottom to top)."
+            },
+            "length": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "Along Z (front to back)."
+            }
+          },
+          "required": ["width", "height", "length"],
+          "additionalProperties": false
+        },
+        "modelPath": {
+          "description": "glTF model, relative to this file.",
+          "type": "string"
+        },
+        "pins": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_+-]*$"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "power-in",
+                  "power-out",
+                  "gnd",
+                  "i2c-sda",
+                  "i2c-scl",
+                  "pwm-in",
+                  "digital-in",
+                  "digital-out",
+                  "analog-in",
+                  "analog-out"
+                ]
+              },
+              "voltage": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "min": {
+                        "type": "number"
+                      },
+                      "max": {
+                        "type": "number"
+                      }
+                    },
+                    "required": ["min", "max"],
+                    "additionalProperties": false,
+                    "description": "Voltage range of a varying source."
+                  },
+                  {
+                    "type": "string",
+                    "const": "supply"
+                  }
+                ]
+              },
+              "maxCurrentMa": {
+                "description": "power-out only: the most current the rail may supply.",
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "maxInputV": {
+                "description": "Inputs only: the highest voltage the pin tolerates, when above its nominal level (e.g. 3.6 V absolute maximum on a 2.8 V pin).",
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "optional": {
+                "description": "The part works with this pin unconnected (no warning when left open).",
+                "type": "boolean"
+              },
+              "description": {
+                "type": "string"
+              }
+            },
+            "required": ["name", "kind"],
+            "additionalProperties": false
+          }
+        },
+        "sources": {
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uri"
+          },
+          "description": "Datasheets and product pages the values come from."
+        },
+        "notes": {
+          "description": "Assumptions and estimated values, with reasons.",
+          "type": "string"
+        },
+        "category": {
+          "type": "string",
+          "const": "actuator"
+        },
+        "electrical": {
+          "type": "object",
+          "properties": {
+            "supplyV": {
+              "type": "object",
+              "properties": {
+                "min": {
+                  "type": "number"
+                },
+                "max": {
+                  "type": "number"
+                }
+              },
+              "required": ["min", "max"],
+              "additionalProperties": false,
+              "description": "Allowed voltage on the power-in pin."
+            },
+            "logicLevelV": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                {
+                  "type": "string",
+                  "const": "supply"
+                }
+              ],
+              "description": "Signal level of the part. \"supply\" means it follows the power-in voltage."
+            },
+            "currentMa": {
+              "type": "object",
+              "properties": {
+                "typical": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "peak": {
+                  "type": "number",
+                  "minimum": 0
+                }
+              },
+              "required": ["typical", "peak"],
+              "additionalProperties": false,
+              "description": "Current drawn from the power-in pin, excluding what its power-out pins supply."
+            }
+          },
+          "required": ["supplyV", "logicLevelV", "currentMa"],
+          "additionalProperties": false
+        },
+        "i2c": {
+          "type": "object",
+          "properties": {
+            "defaultAddress": {
+              "type": "integer",
+              "minimum": 8,
+              "maximum": 119,
+              "description": "Address after power-on."
+            },
+            "addressing": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "fixed"
+                    }
+                  },
+                  "required": ["kind"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "strap"
+                    },
+                    "addresses": {
+                      "minItems": 2,
+                      "maxItems": 2,
+                      "type": "array",
+                      "items": {
+                        "type": "integer",
+                        "minimum": 8,
+                        "maximum": 119
+                      },
+                      "description": "[address with the pin low, address with it high]."
+                    },
+                    "pin": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9_+-]*$",
+                      "description": "Pin that selects the address."
+                    }
+                  },
+                  "required": ["kind", "addresses", "pin"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "software"
+                    },
+                    "enablePin": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9_+-]*$",
+                      "description": "Pin that holds the part off the bus while others are re-addressed (e.g. XSHUT)."
+                    }
+                  },
+                  "required": ["kind", "enablePin"],
+                  "additionalProperties": false
+                }
+              ],
+              "description": "How the address can change from its default."
+            }
+          },
+          "required": ["defaultAddress", "addressing"],
+          "additionalProperties": false
+        },
+        "behavior": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "template": {
+                  "type": "string",
+                  "const": "distance-raycast"
+                },
+                "params": {
+                  "type": "object",
+                  "properties": {
+                    "minRangeMm": {
+                      "type": "number",
+                      "minimum": 0,
+                      "description": "Closest distance the part reports."
+                    },
+                    "maxRangeMm": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Farthest distance the part reports."
+                    },
+                    "beamAngleDeg": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "maximum": 180,
+                      "description": "Full cone angle of the beam."
+                    },
+                    "rays": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 64,
+                      "description": "Rays cast across the cone; the nearest hit wins."
+                    },
+                    "noiseSigmaPct": {
+                      "type": "number",
+                      "minimum": 0,
+                      "description": "Standard deviation of Gaussian noise, % of distance."
+                    },
+                    "updateHz": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Readings per second."
+                    }
+                  },
+                  "required": [
+                    "minRangeMm",
+                    "maxRangeMm",
+                    "beamAngleDeg",
+                    "rays",
+                    "noiseSigmaPct",
+                    "updateHz"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["template", "params"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "template": {
+                  "type": "string",
+                  "const": "imu"
+                },
+                "params": {
+                  "type": "object",
+                  "properties": {
+                    "accelRangesG": {
+                      "minItems": 1,
+                      "type": "array",
+                      "items": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      },
+                      "description": "Selectable ± full-scale ranges, in g."
+                    },
+                    "defaultAccelRangeG": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Full-scale range after power-on."
+                    },
+                    "gyroRangesDps": {
+                      "minItems": 1,
+                      "type": "array",
+                      "items": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      },
+                      "description": "Selectable ± full-scale ranges, in °/s."
+                    },
+                    "defaultGyroRangeDps": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Full-scale range after power-on."
+                    },
+                    "accelNoiseDensityUgPerSqrtHz": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "gyroNoiseDensityDpsPerSqrtHz": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "updateHz": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Readings per second."
+                    }
+                  },
+                  "required": [
+                    "accelRangesG",
+                    "defaultAccelRangeG",
+                    "gyroRangesDps",
+                    "defaultGyroRangeDps",
+                    "accelNoiseDensityUgPerSqrtHz",
+                    "gyroNoiseDensityDpsPerSqrtHz",
+                    "updateHz"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["template", "params"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "template": {
+                  "type": "string",
+                  "const": "servo"
+                },
+                "params": {
+                  "type": "object",
+                  "properties": {
+                    "travelDeg": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Total output travel from pulseMinUs to pulseMaxUs."
+                    },
+                    "slewDegPerS": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Maximum output speed."
+                    },
+                    "pulseMinUs": {
+                      "type": "number",
+                      "minimum": 500,
+                      "maximum": 2500
+                    },
+                    "pulseNeutralUs": {
+                      "type": "number",
+                      "minimum": 500,
+                      "maximum": 2500
+                    },
+                    "pulseMaxUs": {
+                      "type": "number",
+                      "minimum": 500,
+                      "maximum": 2500
+                    },
+                    "deadbandUs": {
+                      "type": "number",
+                      "minimum": 0,
+                      "description": "Pulse change the servo ignores."
+                    },
+                    "stallTorqueNm": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    }
+                  },
+                  "required": [
+                    "travelDeg",
+                    "slewDegPerS",
+                    "pulseMinUs",
+                    "pulseNeutralUs",
+                    "pulseMaxUs",
+                    "deadbandUs"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["template", "params"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "template": {
+                  "type": "string",
+                  "const": "esc-motor"
+                },
+                "params": {
+                  "type": "object",
+                  "properties": {
+                    "pulseMinUs": {
+                      "type": "number",
+                      "minimum": 500,
+                      "maximum": 2500,
+                      "description": "Full reverse (or full brake)."
+                    },
+                    "pulseNeutralUs": {
+                      "type": "number",
+                      "minimum": 500,
+                      "maximum": 2500
+                    },
+                    "pulseMaxUs": {
+                      "type": "number",
+                      "minimum": 500,
+                      "maximum": 2500,
+                      "description": "Full forward."
+                    },
+                    "deadbandUs": {
+                      "type": "number",
+                      "minimum": 0,
+                      "description": "± band around neutral that gives zero output."
+                    },
+                    "armingMs": {
+                      "type": "number",
+                      "minimum": 0,
+                      "description": "Neutral must be held this long after power-on to arm."
+                    },
+                    "reverse": {
+                      "type": "boolean",
+                      "description": "Whether pulses below neutral drive in reverse."
+                    },
+                    "kvRpmPerV": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Motor speed constant, rpm per volt, unloaded."
+                    },
+                    "maxTorqueNm": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Motor stall torque at the nominal battery voltage."
+                    },
+                    "throttleCurve": {
+                      "minItems": 2,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "input": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1,
+                            "description": "Throttle command magnitude, 0..1."
+                          },
+                          "output": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1,
+                            "description": "Fraction of full motor voltage, 0..1."
+                          }
+                        },
+                        "required": ["input", "output"],
+                        "additionalProperties": false
+                      },
+                      "description": "Piecewise-linear map from command to output, inputs from 0 to 1."
+                    }
+                  },
+                  "required": [
+                    "pulseMinUs",
+                    "pulseNeutralUs",
+                    "pulseMaxUs",
+                    "deadbandUs",
+                    "armingMs",
+                    "reverse",
+                    "kvRpmPerV",
+                    "maxTorqueNm",
+                    "throttleCurve"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["template", "params"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "template": {
+                  "type": "string",
+                  "const": "battery"
+                },
+                "params": {
+                  "type": "object",
+                  "properties": {
+                    "cells": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 12
+                    },
+                    "cellNominalV": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "cellFullV": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "cellEmptyV": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Cell voltage at which the pack counts as empty."
+                    },
+                    "capacityMah": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "internalResistanceMohm": {
+                      "type": "number",
+                      "minimum": 0,
+                      "description": "Whole pack."
+                    },
+                    "maxContinuousC": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    }
+                  },
+                  "required": [
+                    "cells",
+                    "cellNominalV",
+                    "cellFullV",
+                    "cellEmptyV",
+                    "capacityMah",
+                    "internalResistanceMohm",
+                    "maxContinuousC"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["template", "params"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "template": {
+                  "type": "string",
+                  "const": "voltage-divider"
+                },
+                "params": {
+                  "type": "object",
+                  "properties": {
+                    "r1Ohm": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Top resistor, from IN to OUT."
+                    },
+                    "r2Ohm": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Bottom resistor, from OUT to GND."
+                    }
+                  },
+                  "required": ["r1Ohm", "r2Ohm"],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["template", "params"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "template": {
+                  "type": "string",
+                  "const": "regulator"
+                },
+                "params": {
+                  "type": "object",
+                  "properties": {
+                    "topology": {
+                      "type": "string",
+                      "enum": ["buck", "linear"]
+                    },
+                    "outputV": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "maxCurrentMa": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "efficiencyPct": {
+                      "description": "Buck efficiency. Linear regulators pass their output current through.",
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "maximum": 100
+                    }
+                  },
+                  "required": ["topology", "outputV", "maxCurrentMa"],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["template", "params"],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "id",
+        "name",
+        "massG",
+        "dimensionsMm",
+        "pins",
+        "sources",
+        "category",
+        "electrical",
+        "behavior"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "$schema": {
+          "description": "Path or URL of the JSON Schema.",
+          "type": "string"
+        },
+        "schemaVersion": {
+          "type": "number",
+          "const": 1,
+          "description": "Data file format version. Readers reject versions they do not know."
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:\\.[a-z0-9]+(?:-[a-z0-9]+)*)+$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "manufacturer": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "massG": {
+          "type": "number",
+          "minimum": 0
+        },
+        "dimensionsMm": {
+          "type": "object",
+          "properties": {
+            "width": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "Along X (left to right)."
+            },
+            "height": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "Along Y (bottom to top)."
+            },
+            "length": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "Along Z (front to back)."
+            }
+          },
+          "required": ["width", "height", "length"],
+          "additionalProperties": false
+        },
+        "modelPath": {
+          "description": "glTF model, relative to this file.",
+          "type": "string"
+        },
+        "pins": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_+-]*$"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "power-in",
+                  "power-out",
+                  "gnd",
+                  "i2c-sda",
+                  "i2c-scl",
+                  "pwm-in",
+                  "digital-in",
+                  "digital-out",
+                  "analog-in",
+                  "analog-out"
+                ]
+              },
+              "voltage": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "min": {
+                        "type": "number"
+                      },
+                      "max": {
+                        "type": "number"
+                      }
+                    },
+                    "required": ["min", "max"],
+                    "additionalProperties": false,
+                    "description": "Voltage range of a varying source."
+                  },
+                  {
+                    "type": "string",
+                    "const": "supply"
+                  }
+                ]
+              },
+              "maxCurrentMa": {
+                "description": "power-out only: the most current the rail may supply.",
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "maxInputV": {
+                "description": "Inputs only: the highest voltage the pin tolerates, when above its nominal level (e.g. 3.6 V absolute maximum on a 2.8 V pin).",
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "optional": {
+                "description": "The part works with this pin unconnected (no warning when left open).",
+                "type": "boolean"
+              },
+              "description": {
+                "type": "string"
+              }
+            },
+            "required": ["name", "kind"],
+            "additionalProperties": false
+          }
+        },
+        "sources": {
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uri"
+          },
+          "description": "Datasheets and product pages the values come from."
+        },
+        "notes": {
+          "description": "Assumptions and estimated values, with reasons.",
+          "type": "string"
+        },
+        "category": {
+          "type": "string",
+          "const": "sensor"
+        },
+        "electrical": {
+          "type": "object",
+          "properties": {
+            "supplyV": {
+              "type": "object",
+              "properties": {
+                "min": {
+                  "type": "number"
+                },
+                "max": {
+                  "type": "number"
+                }
+              },
+              "required": ["min", "max"],
+              "additionalProperties": false,
+              "description": "Allowed voltage on the power-in pin."
+            },
+            "logicLevelV": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                {
+                  "type": "string",
+                  "const": "supply"
+                }
+              ],
+              "description": "Signal level of the part. \"supply\" means it follows the power-in voltage."
+            },
+            "currentMa": {
+              "type": "object",
+              "properties": {
+                "typical": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "peak": {
+                  "type": "number",
+                  "minimum": 0
+                }
+              },
+              "required": ["typical", "peak"],
+              "additionalProperties": false,
+              "description": "Current drawn from the power-in pin, excluding what its power-out pins supply."
+            }
+          },
+          "required": ["supplyV", "logicLevelV", "currentMa"],
+          "additionalProperties": false
+        },
+        "i2c": {
+          "type": "object",
+          "properties": {
+            "defaultAddress": {
+              "type": "integer",
+              "minimum": 8,
+              "maximum": 119,
+              "description": "Address after power-on."
+            },
+            "addressing": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "fixed"
+                    }
+                  },
+                  "required": ["kind"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "strap"
+                    },
+                    "addresses": {
+                      "minItems": 2,
+                      "maxItems": 2,
+                      "type": "array",
+                      "items": {
+                        "type": "integer",
+                        "minimum": 8,
+                        "maximum": 119
+                      },
+                      "description": "[address with the pin low, address with it high]."
+                    },
+                    "pin": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9_+-]*$",
+                      "description": "Pin that selects the address."
+                    }
+                  },
+                  "required": ["kind", "addresses", "pin"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "software"
+                    },
+                    "enablePin": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9_+-]*$",
+                      "description": "Pin that holds the part off the bus while others are re-addressed (e.g. XSHUT)."
+                    }
+                  },
+                  "required": ["kind", "enablePin"],
+                  "additionalProperties": false
+                }
+              ],
+              "description": "How the address can change from its default."
+            }
+          },
+          "required": ["defaultAddress", "addressing"],
+          "additionalProperties": false
+        },
+        "behavior": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "template": {
+                  "type": "string",
+                  "const": "distance-raycast"
+                },
+                "params": {
+                  "type": "object",
+                  "properties": {
+                    "minRangeMm": {
+                      "type": "number",
+                      "minimum": 0,
+                      "description": "Closest distance the part reports."
+                    },
+                    "maxRangeMm": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Farthest distance the part reports."
+                    },
+                    "beamAngleDeg": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "maximum": 180,
+                      "description": "Full cone angle of the beam."
+                    },
+                    "rays": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 64,
+                      "description": "Rays cast across the cone; the nearest hit wins."
+                    },
+                    "noiseSigmaPct": {
+                      "type": "number",
+                      "minimum": 0,
+                      "description": "Standard deviation of Gaussian noise, % of distance."
+                    },
+                    "updateHz": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Readings per second."
+                    }
+                  },
+                  "required": [
+                    "minRangeMm",
+                    "maxRangeMm",
+                    "beamAngleDeg",
+                    "rays",
+                    "noiseSigmaPct",
+                    "updateHz"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["template", "params"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "template": {
+                  "type": "string",
+                  "const": "imu"
+                },
+                "params": {
+                  "type": "object",
+                  "properties": {
+                    "accelRangesG": {
+                      "minItems": 1,
+                      "type": "array",
+                      "items": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      },
+                      "description": "Selectable ± full-scale ranges, in g."
+                    },
+                    "defaultAccelRangeG": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Full-scale range after power-on."
+                    },
+                    "gyroRangesDps": {
+                      "minItems": 1,
+                      "type": "array",
+                      "items": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      },
+                      "description": "Selectable ± full-scale ranges, in °/s."
+                    },
+                    "defaultGyroRangeDps": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Full-scale range after power-on."
+                    },
+                    "accelNoiseDensityUgPerSqrtHz": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "gyroNoiseDensityDpsPerSqrtHz": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "updateHz": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Readings per second."
+                    }
+                  },
+                  "required": [
+                    "accelRangesG",
+                    "defaultAccelRangeG",
+                    "gyroRangesDps",
+                    "defaultGyroRangeDps",
+                    "accelNoiseDensityUgPerSqrtHz",
+                    "gyroNoiseDensityDpsPerSqrtHz",
+                    "updateHz"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["template", "params"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "template": {
+                  "type": "string",
+                  "const": "servo"
+                },
+                "params": {
+                  "type": "object",
+                  "properties": {
+                    "travelDeg": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Total output travel from pulseMinUs to pulseMaxUs."
+                    },
+                    "slewDegPerS": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Maximum output speed."
+                    },
+                    "pulseMinUs": {
+                      "type": "number",
+                      "minimum": 500,
+                      "maximum": 2500
+                    },
+                    "pulseNeutralUs": {
+                      "type": "number",
+                      "minimum": 500,
+                      "maximum": 2500
+                    },
+                    "pulseMaxUs": {
+                      "type": "number",
+                      "minimum": 500,
+                      "maximum": 2500
+                    },
+                    "deadbandUs": {
+                      "type": "number",
+                      "minimum": 0,
+                      "description": "Pulse change the servo ignores."
+                    },
+                    "stallTorqueNm": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    }
+                  },
+                  "required": [
+                    "travelDeg",
+                    "slewDegPerS",
+                    "pulseMinUs",
+                    "pulseNeutralUs",
+                    "pulseMaxUs",
+                    "deadbandUs"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["template", "params"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "template": {
+                  "type": "string",
+                  "const": "esc-motor"
+                },
+                "params": {
+                  "type": "object",
+                  "properties": {
+                    "pulseMinUs": {
+                      "type": "number",
+                      "minimum": 500,
+                      "maximum": 2500,
+                      "description": "Full reverse (or full brake)."
+                    },
+                    "pulseNeutralUs": {
+                      "type": "number",
+                      "minimum": 500,
+                      "maximum": 2500
+                    },
+                    "pulseMaxUs": {
+                      "type": "number",
+                      "minimum": 500,
+                      "maximum": 2500,
+                      "description": "Full forward."
+                    },
+                    "deadbandUs": {
+                      "type": "number",
+                      "minimum": 0,
+                      "description": "± band around neutral that gives zero output."
+                    },
+                    "armingMs": {
+                      "type": "number",
+                      "minimum": 0,
+                      "description": "Neutral must be held this long after power-on to arm."
+                    },
+                    "reverse": {
+                      "type": "boolean",
+                      "description": "Whether pulses below neutral drive in reverse."
+                    },
+                    "kvRpmPerV": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Motor speed constant, rpm per volt, unloaded."
+                    },
+                    "maxTorqueNm": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Motor stall torque at the nominal battery voltage."
+                    },
+                    "throttleCurve": {
+                      "minItems": 2,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "input": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1,
+                            "description": "Throttle command magnitude, 0..1."
+                          },
+                          "output": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1,
+                            "description": "Fraction of full motor voltage, 0..1."
+                          }
+                        },
+                        "required": ["input", "output"],
+                        "additionalProperties": false
+                      },
+                      "description": "Piecewise-linear map from command to output, inputs from 0 to 1."
+                    }
+                  },
+                  "required": [
+                    "pulseMinUs",
+                    "pulseNeutralUs",
+                    "pulseMaxUs",
+                    "deadbandUs",
+                    "armingMs",
+                    "reverse",
+                    "kvRpmPerV",
+                    "maxTorqueNm",
+                    "throttleCurve"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["template", "params"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "template": {
+                  "type": "string",
+                  "const": "battery"
+                },
+                "params": {
+                  "type": "object",
+                  "properties": {
+                    "cells": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 12
+                    },
+                    "cellNominalV": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "cellFullV": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "cellEmptyV": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Cell voltage at which the pack counts as empty."
+                    },
+                    "capacityMah": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "internalResistanceMohm": {
+                      "type": "number",
+                      "minimum": 0,
+                      "description": "Whole pack."
+                    },
+                    "maxContinuousC": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    }
+                  },
+                  "required": [
+                    "cells",
+                    "cellNominalV",
+                    "cellFullV",
+                    "cellEmptyV",
+                    "capacityMah",
+                    "internalResistanceMohm",
+                    "maxContinuousC"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["template", "params"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "template": {
+                  "type": "string",
+                  "const": "voltage-divider"
+                },
+                "params": {
+                  "type": "object",
+                  "properties": {
+                    "r1Ohm": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Top resistor, from IN to OUT."
+                    },
+                    "r2Ohm": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Bottom resistor, from OUT to GND."
+                    }
+                  },
+                  "required": ["r1Ohm", "r2Ohm"],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["template", "params"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "template": {
+                  "type": "string",
+                  "const": "regulator"
+                },
+                "params": {
+                  "type": "object",
+                  "properties": {
+                    "topology": {
+                      "type": "string",
+                      "enum": ["buck", "linear"]
+                    },
+                    "outputV": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "maxCurrentMa": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "efficiencyPct": {
+                      "description": "Buck efficiency. Linear regulators pass their output current through.",
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "maximum": 100
+                    }
+                  },
+                  "required": ["topology", "outputV", "maxCurrentMa"],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["template", "params"],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "id",
+        "name",
+        "massG",
+        "dimensionsMm",
+        "pins",
+        "sources",
+        "category",
+        "electrical",
+        "behavior"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "$schema": {
+          "description": "Path or URL of the JSON Schema.",
+          "type": "string"
+        },
+        "schemaVersion": {
+          "type": "number",
+          "const": 1,
+          "description": "Data file format version. Readers reject versions they do not know."
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:\\.[a-z0-9]+(?:-[a-z0-9]+)*)+$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "manufacturer": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "massG": {
+          "type": "number",
+          "minimum": 0
+        },
+        "dimensionsMm": {
+          "type": "object",
+          "properties": {
+            "width": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "Along X (left to right)."
+            },
+            "height": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "Along Y (bottom to top)."
+            },
+            "length": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "Along Z (front to back)."
+            }
+          },
+          "required": ["width", "height", "length"],
+          "additionalProperties": false
+        },
+        "modelPath": {
+          "description": "glTF model, relative to this file.",
+          "type": "string"
+        },
+        "pins": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_+-]*$"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "power-in",
+                  "power-out",
+                  "gnd",
+                  "i2c-sda",
+                  "i2c-scl",
+                  "pwm-in",
+                  "digital-in",
+                  "digital-out",
+                  "analog-in",
+                  "analog-out"
+                ]
+              },
+              "voltage": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "min": {
+                        "type": "number"
+                      },
+                      "max": {
+                        "type": "number"
+                      }
+                    },
+                    "required": ["min", "max"],
+                    "additionalProperties": false,
+                    "description": "Voltage range of a varying source."
+                  },
+                  {
+                    "type": "string",
+                    "const": "supply"
+                  }
+                ]
+              },
+              "maxCurrentMa": {
+                "description": "power-out only: the most current the rail may supply.",
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "maxInputV": {
+                "description": "Inputs only: the highest voltage the pin tolerates, when above its nominal level (e.g. 3.6 V absolute maximum on a 2.8 V pin).",
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "optional": {
+                "description": "The part works with this pin unconnected (no warning when left open).",
+                "type": "boolean"
+              },
+              "description": {
+                "type": "string"
+              }
+            },
+            "required": ["name", "kind"],
+            "additionalProperties": false
+          }
+        },
+        "sources": {
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uri"
+          },
+          "description": "Datasheets and product pages the values come from."
+        },
+        "notes": {
+          "description": "Assumptions and estimated values, with reasons.",
+          "type": "string"
+        },
+        "category": {
+          "type": "string",
+          "const": "power"
+        },
+        "electrical": {
+          "type": "object",
+          "properties": {
+            "supplyV": {
+              "type": "object",
+              "properties": {
+                "min": {
+                  "type": "number"
+                },
+                "max": {
+                  "type": "number"
+                }
+              },
+              "required": ["min", "max"],
+              "additionalProperties": false,
+              "description": "Allowed voltage on the power-in pin."
+            },
+            "logicLevelV": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                {
+                  "type": "string",
+                  "const": "supply"
+                }
+              ],
+              "description": "Signal level of the part. \"supply\" means it follows the power-in voltage."
+            },
+            "currentMa": {
+              "type": "object",
+              "properties": {
+                "typical": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "peak": {
+                  "type": "number",
+                  "minimum": 0
+                }
+              },
+              "required": ["typical", "peak"],
+              "additionalProperties": false,
+              "description": "Current drawn from the power-in pin, excluding what its power-out pins supply."
+            }
+          },
+          "required": ["supplyV", "logicLevelV", "currentMa"],
+          "additionalProperties": false
+        },
+        "behavior": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "template": {
+                  "type": "string",
+                  "const": "distance-raycast"
+                },
+                "params": {
+                  "type": "object",
+                  "properties": {
+                    "minRangeMm": {
+                      "type": "number",
+                      "minimum": 0,
+                      "description": "Closest distance the part reports."
+                    },
+                    "maxRangeMm": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Farthest distance the part reports."
+                    },
+                    "beamAngleDeg": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "maximum": 180,
+                      "description": "Full cone angle of the beam."
+                    },
+                    "rays": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 64,
+                      "description": "Rays cast across the cone; the nearest hit wins."
+                    },
+                    "noiseSigmaPct": {
+                      "type": "number",
+                      "minimum": 0,
+                      "description": "Standard deviation of Gaussian noise, % of distance."
+                    },
+                    "updateHz": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Readings per second."
+                    }
+                  },
+                  "required": [
+                    "minRangeMm",
+                    "maxRangeMm",
+                    "beamAngleDeg",
+                    "rays",
+                    "noiseSigmaPct",
+                    "updateHz"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["template", "params"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "template": {
+                  "type": "string",
+                  "const": "imu"
+                },
+                "params": {
+                  "type": "object",
+                  "properties": {
+                    "accelRangesG": {
+                      "minItems": 1,
+                      "type": "array",
+                      "items": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      },
+                      "description": "Selectable ± full-scale ranges, in g."
+                    },
+                    "defaultAccelRangeG": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Full-scale range after power-on."
+                    },
+                    "gyroRangesDps": {
+                      "minItems": 1,
+                      "type": "array",
+                      "items": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      },
+                      "description": "Selectable ± full-scale ranges, in °/s."
+                    },
+                    "defaultGyroRangeDps": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Full-scale range after power-on."
+                    },
+                    "accelNoiseDensityUgPerSqrtHz": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "gyroNoiseDensityDpsPerSqrtHz": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "updateHz": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Readings per second."
+                    }
+                  },
+                  "required": [
+                    "accelRangesG",
+                    "defaultAccelRangeG",
+                    "gyroRangesDps",
+                    "defaultGyroRangeDps",
+                    "accelNoiseDensityUgPerSqrtHz",
+                    "gyroNoiseDensityDpsPerSqrtHz",
+                    "updateHz"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["template", "params"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "template": {
+                  "type": "string",
+                  "const": "servo"
+                },
+                "params": {
+                  "type": "object",
+                  "properties": {
+                    "travelDeg": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Total output travel from pulseMinUs to pulseMaxUs."
+                    },
+                    "slewDegPerS": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Maximum output speed."
+                    },
+                    "pulseMinUs": {
+                      "type": "number",
+                      "minimum": 500,
+                      "maximum": 2500
+                    },
+                    "pulseNeutralUs": {
+                      "type": "number",
+                      "minimum": 500,
+                      "maximum": 2500
+                    },
+                    "pulseMaxUs": {
+                      "type": "number",
+                      "minimum": 500,
+                      "maximum": 2500
+                    },
+                    "deadbandUs": {
+                      "type": "number",
+                      "minimum": 0,
+                      "description": "Pulse change the servo ignores."
+                    },
+                    "stallTorqueNm": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    }
+                  },
+                  "required": [
+                    "travelDeg",
+                    "slewDegPerS",
+                    "pulseMinUs",
+                    "pulseNeutralUs",
+                    "pulseMaxUs",
+                    "deadbandUs"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["template", "params"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "template": {
+                  "type": "string",
+                  "const": "esc-motor"
+                },
+                "params": {
+                  "type": "object",
+                  "properties": {
+                    "pulseMinUs": {
+                      "type": "number",
+                      "minimum": 500,
+                      "maximum": 2500,
+                      "description": "Full reverse (or full brake)."
+                    },
+                    "pulseNeutralUs": {
+                      "type": "number",
+                      "minimum": 500,
+                      "maximum": 2500
+                    },
+                    "pulseMaxUs": {
+                      "type": "number",
+                      "minimum": 500,
+                      "maximum": 2500,
+                      "description": "Full forward."
+                    },
+                    "deadbandUs": {
+                      "type": "number",
+                      "minimum": 0,
+                      "description": "± band around neutral that gives zero output."
+                    },
+                    "armingMs": {
+                      "type": "number",
+                      "minimum": 0,
+                      "description": "Neutral must be held this long after power-on to arm."
+                    },
+                    "reverse": {
+                      "type": "boolean",
+                      "description": "Whether pulses below neutral drive in reverse."
+                    },
+                    "kvRpmPerV": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Motor speed constant, rpm per volt, unloaded."
+                    },
+                    "maxTorqueNm": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Motor stall torque at the nominal battery voltage."
+                    },
+                    "throttleCurve": {
+                      "minItems": 2,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "input": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1,
+                            "description": "Throttle command magnitude, 0..1."
+                          },
+                          "output": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1,
+                            "description": "Fraction of full motor voltage, 0..1."
+                          }
+                        },
+                        "required": ["input", "output"],
+                        "additionalProperties": false
+                      },
+                      "description": "Piecewise-linear map from command to output, inputs from 0 to 1."
+                    }
+                  },
+                  "required": [
+                    "pulseMinUs",
+                    "pulseNeutralUs",
+                    "pulseMaxUs",
+                    "deadbandUs",
+                    "armingMs",
+                    "reverse",
+                    "kvRpmPerV",
+                    "maxTorqueNm",
+                    "throttleCurve"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["template", "params"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "template": {
+                  "type": "string",
+                  "const": "battery"
+                },
+                "params": {
+                  "type": "object",
+                  "properties": {
+                    "cells": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 12
+                    },
+                    "cellNominalV": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "cellFullV": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "cellEmptyV": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Cell voltage at which the pack counts as empty."
+                    },
+                    "capacityMah": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "internalResistanceMohm": {
+                      "type": "number",
+                      "minimum": 0,
+                      "description": "Whole pack."
+                    },
+                    "maxContinuousC": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    }
+                  },
+                  "required": [
+                    "cells",
+                    "cellNominalV",
+                    "cellFullV",
+                    "cellEmptyV",
+                    "capacityMah",
+                    "internalResistanceMohm",
+                    "maxContinuousC"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["template", "params"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "template": {
+                  "type": "string",
+                  "const": "voltage-divider"
+                },
+                "params": {
+                  "type": "object",
+                  "properties": {
+                    "r1Ohm": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Top resistor, from IN to OUT."
+                    },
+                    "r2Ohm": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Bottom resistor, from OUT to GND."
+                    }
+                  },
+                  "required": ["r1Ohm", "r2Ohm"],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["template", "params"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "template": {
+                  "type": "string",
+                  "const": "regulator"
+                },
+                "params": {
+                  "type": "object",
+                  "properties": {
+                    "topology": {
+                      "type": "string",
+                      "enum": ["buck", "linear"]
+                    },
+                    "outputV": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "maxCurrentMa": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "efficiencyPct": {
+                      "description": "Buck efficiency. Linear regulators pass their output current through.",
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "maximum": 100
+                    }
+                  },
+                  "required": ["topology", "outputV", "maxCurrentMa"],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["template", "params"],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "id",
+        "name",
+        "massG",
+        "dimensionsMm",
+        "pins",
+        "sources",
+        "category",
+        "behavior"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "$schema": {
+          "description": "Path or URL of the JSON Schema.",
+          "type": "string"
+        },
+        "schemaVersion": {
+          "type": "number",
+          "const": 1,
+          "description": "Data file format version. Readers reject versions they do not know."
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:\\.[a-z0-9]+(?:-[a-z0-9]+)*)+$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "manufacturer": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "massG": {
+          "type": "number",
+          "minimum": 0
+        },
+        "dimensionsMm": {
+          "type": "object",
+          "properties": {
+            "width": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "Along X (left to right)."
+            },
+            "height": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "Along Y (bottom to top)."
+            },
+            "length": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "Along Z (front to back)."
+            }
+          },
+          "required": ["width", "height", "length"],
+          "additionalProperties": false
+        },
+        "modelPath": {
+          "description": "glTF model, relative to this file.",
+          "type": "string"
+        },
+        "pins": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_+-]*$"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "power-in",
+                  "power-out",
+                  "gnd",
+                  "i2c-sda",
+                  "i2c-scl",
+                  "pwm-in",
+                  "digital-in",
+                  "digital-out",
+                  "analog-in",
+                  "analog-out"
+                ]
+              },
+              "voltage": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "min": {
+                        "type": "number"
+                      },
+                      "max": {
+                        "type": "number"
+                      }
+                    },
+                    "required": ["min", "max"],
+                    "additionalProperties": false,
+                    "description": "Voltage range of a varying source."
+                  },
+                  {
+                    "type": "string",
+                    "const": "supply"
+                  }
+                ]
+              },
+              "maxCurrentMa": {
+                "description": "power-out only: the most current the rail may supply.",
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "maxInputV": {
+                "description": "Inputs only: the highest voltage the pin tolerates, when above its nominal level (e.g. 3.6 V absolute maximum on a 2.8 V pin).",
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "optional": {
+                "description": "The part works with this pin unconnected (no warning when left open).",
+                "type": "boolean"
+              },
+              "description": {
+                "type": "string"
+              }
+            },
+            "required": ["name", "kind"],
+            "additionalProperties": false
+          }
+        },
+        "sources": {
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uri"
+          },
+          "description": "Datasheets and product pages the values come from."
+        },
+        "notes": {
+          "description": "Assumptions and estimated values, with reasons.",
+          "type": "string"
+        },
+        "category": {
+          "type": "string",
+          "const": "passive"
+        },
+        "behavior": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "template": {
+                  "type": "string",
+                  "const": "distance-raycast"
+                },
+                "params": {
+                  "type": "object",
+                  "properties": {
+                    "minRangeMm": {
+                      "type": "number",
+                      "minimum": 0,
+                      "description": "Closest distance the part reports."
+                    },
+                    "maxRangeMm": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Farthest distance the part reports."
+                    },
+                    "beamAngleDeg": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "maximum": 180,
+                      "description": "Full cone angle of the beam."
+                    },
+                    "rays": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 64,
+                      "description": "Rays cast across the cone; the nearest hit wins."
+                    },
+                    "noiseSigmaPct": {
+                      "type": "number",
+                      "minimum": 0,
+                      "description": "Standard deviation of Gaussian noise, % of distance."
+                    },
+                    "updateHz": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Readings per second."
+                    }
+                  },
+                  "required": [
+                    "minRangeMm",
+                    "maxRangeMm",
+                    "beamAngleDeg",
+                    "rays",
+                    "noiseSigmaPct",
+                    "updateHz"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["template", "params"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "template": {
+                  "type": "string",
+                  "const": "imu"
+                },
+                "params": {
+                  "type": "object",
+                  "properties": {
+                    "accelRangesG": {
+                      "minItems": 1,
+                      "type": "array",
+                      "items": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      },
+                      "description": "Selectable ± full-scale ranges, in g."
+                    },
+                    "defaultAccelRangeG": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Full-scale range after power-on."
+                    },
+                    "gyroRangesDps": {
+                      "minItems": 1,
+                      "type": "array",
+                      "items": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      },
+                      "description": "Selectable ± full-scale ranges, in °/s."
+                    },
+                    "defaultGyroRangeDps": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Full-scale range after power-on."
+                    },
+                    "accelNoiseDensityUgPerSqrtHz": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "gyroNoiseDensityDpsPerSqrtHz": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "updateHz": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Readings per second."
+                    }
+                  },
+                  "required": [
+                    "accelRangesG",
+                    "defaultAccelRangeG",
+                    "gyroRangesDps",
+                    "defaultGyroRangeDps",
+                    "accelNoiseDensityUgPerSqrtHz",
+                    "gyroNoiseDensityDpsPerSqrtHz",
+                    "updateHz"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["template", "params"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "template": {
+                  "type": "string",
+                  "const": "servo"
+                },
+                "params": {
+                  "type": "object",
+                  "properties": {
+                    "travelDeg": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Total output travel from pulseMinUs to pulseMaxUs."
+                    },
+                    "slewDegPerS": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Maximum output speed."
+                    },
+                    "pulseMinUs": {
+                      "type": "number",
+                      "minimum": 500,
+                      "maximum": 2500
+                    },
+                    "pulseNeutralUs": {
+                      "type": "number",
+                      "minimum": 500,
+                      "maximum": 2500
+                    },
+                    "pulseMaxUs": {
+                      "type": "number",
+                      "minimum": 500,
+                      "maximum": 2500
+                    },
+                    "deadbandUs": {
+                      "type": "number",
+                      "minimum": 0,
+                      "description": "Pulse change the servo ignores."
+                    },
+                    "stallTorqueNm": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    }
+                  },
+                  "required": [
+                    "travelDeg",
+                    "slewDegPerS",
+                    "pulseMinUs",
+                    "pulseNeutralUs",
+                    "pulseMaxUs",
+                    "deadbandUs"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["template", "params"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "template": {
+                  "type": "string",
+                  "const": "esc-motor"
+                },
+                "params": {
+                  "type": "object",
+                  "properties": {
+                    "pulseMinUs": {
+                      "type": "number",
+                      "minimum": 500,
+                      "maximum": 2500,
+                      "description": "Full reverse (or full brake)."
+                    },
+                    "pulseNeutralUs": {
+                      "type": "number",
+                      "minimum": 500,
+                      "maximum": 2500
+                    },
+                    "pulseMaxUs": {
+                      "type": "number",
+                      "minimum": 500,
+                      "maximum": 2500,
+                      "description": "Full forward."
+                    },
+                    "deadbandUs": {
+                      "type": "number",
+                      "minimum": 0,
+                      "description": "± band around neutral that gives zero output."
+                    },
+                    "armingMs": {
+                      "type": "number",
+                      "minimum": 0,
+                      "description": "Neutral must be held this long after power-on to arm."
+                    },
+                    "reverse": {
+                      "type": "boolean",
+                      "description": "Whether pulses below neutral drive in reverse."
+                    },
+                    "kvRpmPerV": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Motor speed constant, rpm per volt, unloaded."
+                    },
+                    "maxTorqueNm": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Motor stall torque at the nominal battery voltage."
+                    },
+                    "throttleCurve": {
+                      "minItems": 2,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "input": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1,
+                            "description": "Throttle command magnitude, 0..1."
+                          },
+                          "output": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1,
+                            "description": "Fraction of full motor voltage, 0..1."
+                          }
+                        },
+                        "required": ["input", "output"],
+                        "additionalProperties": false
+                      },
+                      "description": "Piecewise-linear map from command to output, inputs from 0 to 1."
+                    }
+                  },
+                  "required": [
+                    "pulseMinUs",
+                    "pulseNeutralUs",
+                    "pulseMaxUs",
+                    "deadbandUs",
+                    "armingMs",
+                    "reverse",
+                    "kvRpmPerV",
+                    "maxTorqueNm",
+                    "throttleCurve"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["template", "params"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "template": {
+                  "type": "string",
+                  "const": "battery"
+                },
+                "params": {
+                  "type": "object",
+                  "properties": {
+                    "cells": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 12
+                    },
+                    "cellNominalV": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "cellFullV": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "cellEmptyV": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Cell voltage at which the pack counts as empty."
+                    },
+                    "capacityMah": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "internalResistanceMohm": {
+                      "type": "number",
+                      "minimum": 0,
+                      "description": "Whole pack."
+                    },
+                    "maxContinuousC": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    }
+                  },
+                  "required": [
+                    "cells",
+                    "cellNominalV",
+                    "cellFullV",
+                    "cellEmptyV",
+                    "capacityMah",
+                    "internalResistanceMohm",
+                    "maxContinuousC"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["template", "params"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "template": {
+                  "type": "string",
+                  "const": "voltage-divider"
+                },
+                "params": {
+                  "type": "object",
+                  "properties": {
+                    "r1Ohm": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Top resistor, from IN to OUT."
+                    },
+                    "r2Ohm": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Bottom resistor, from OUT to GND."
+                    }
+                  },
+                  "required": ["r1Ohm", "r2Ohm"],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["template", "params"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "template": {
+                  "type": "string",
+                  "const": "regulator"
+                },
+                "params": {
+                  "type": "object",
+                  "properties": {
+                    "topology": {
+                      "type": "string",
+                      "enum": ["buck", "linear"]
+                    },
+                    "outputV": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "maxCurrentMa": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "efficiencyPct": {
+                      "description": "Buck efficiency. Linear regulators pass their output current through.",
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "maximum": 100
+                    }
+                  },
+                  "required": ["topology", "outputV", "maxCurrentMa"],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["template", "params"],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "id",
+        "name",
+        "massG",
+        "dimensionsMm",
+        "pins",
+        "sources",
+        "category",
+        "behavior"
+      ],
+      "additionalProperties": false
+    }
+  ]
+}

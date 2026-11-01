@@ -1,0 +1,48 @@
+{
+  "$schema": "../json-schema/part-definition.schema.json",
+  "schemaVersion": 1,
+  "id": "power.lipo-2s-5000",
+  "name": "2S LiPo 7.4 V 5000 mAh 60C (Gens ace hardcase)",
+  "manufacturer": "Gens ace",
+  "category": "power",
+  "description": "Main battery. Feeds the ESC directly and the 5 V regulator for the electronics.",
+  "massG": 251,
+  "dimensionsMm": {
+    "width": 46,
+    "height": 24,
+    "length": 138
+  },
+  "pins": [
+    {
+      "name": "BAT+",
+      "kind": "power-out",
+      "voltage": {
+        "min": 6.0,
+        "max": 8.4
+      },
+      "maxCurrentMa": 300000
+    },
+    {
+      "name": "BAT-",
+      "kind": "gnd"
+    }
+  ],
+  "behavior": {
+    "template": "battery",
+    "params": {
+      "cells": 2,
+      "cellNominalV": 3.7,
+      "cellFullV": 4.2,
+      "cellEmptyV": 3.0,
+      "capacityMah": 5000,
+      "internalResistanceMohm": 12,
+      "maxContinuousC": 60
+    }
+  },
+  "sources": [
+    "https://www.gensace.de/products/b-60c-5000-2s1p-bashing-hc112-deans-gt",
+    "https://www.genstattu.com/content/instock/Lipo-Manual.pdf",
+    "https://gensace.de/pages/lipo-battery-guide"
+  ],
+  "notes": "Published: 5000 mAh, 7.4 V, 60C continuous (300 A, the BAT+ budget), about 251 g, 138 x 46 x 24 mm; cells 3.7 V nominal, 4.2 V full, never below 3.0 V under load. Internal resistance 12 mOhm for the pack plus wiring is an estimate (not published)."
+}

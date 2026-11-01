@@ -1,0 +1,53 @@
+{
+  "$schema": "../json-schema/part-definition.schema.json",
+  "schemaVersion": 1,
+  "id": "power.pololu-d24v22f5",
+  "name": "Pololu 5V 2.5A step-down regulator D24V22F5",
+  "manufacturer": "Pololu",
+  "category": "power",
+  "description": "Buck regulator from the battery to 5 V for the controller and 5 V sensors.",
+  "massG": 2.3,
+  "dimensionsMm": {
+    "width": 17.8,
+    "height": 8,
+    "length": 17.8
+  },
+  "pins": [
+    {
+      "name": "VIN",
+      "kind": "power-in"
+    },
+    {
+      "name": "GND",
+      "kind": "gnd"
+    },
+    {
+      "name": "VOUT",
+      "kind": "power-out",
+      "voltage": 5,
+      "maxCurrentMa": 2500
+    }
+  ],
+  "electrical": {
+    "supplyV": {
+      "min": 5.3,
+      "max": 36
+    },
+    "logicLevelV": 5,
+    "currentMa": {
+      "typical": 1,
+      "peak": 3
+    }
+  },
+  "behavior": {
+    "template": "regulator",
+    "params": {
+      "topology": "buck",
+      "outputV": 5,
+      "maxCurrentMa": 2500,
+      "efficiencyPct": 94
+    }
+  },
+  "sources": ["https://www.pololu.com/product/2858", "https://www.pololu.com/product/2858/specs"],
+  "notes": "Published: input 5.3-36 V (about 5.8 V needed at 2.5 A); 5 V out; 2.5 A typical max; 1 mA typical / 3 mA max quiescent; 17.8 x 17.8 x 8 mm; 2.3 g. Efficiency 94% at about 8 V in is read off Pololu's efficiency graph (between its 6 V and 12 V curves). The EN and PG pins are not modelled."
+}

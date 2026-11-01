@@ -1,0 +1,40 @@
+{
+  "$schema": "../json-schema/part-definition.schema.json",
+  "schemaVersion": 1,
+  "id": "passive.divider-100k-33k",
+  "name": "Voltage divider 100 kΩ / 33 kΩ (battery sense)",
+  "category": "passive",
+  "description": "Scales the 2S battery (up to 8.4 V) to 2.08 V for an ADC1 pin.",
+  "massG": 0.5,
+  "dimensionsMm": {
+    "width": 5,
+    "height": 5,
+    "length": 10
+  },
+  "pins": [
+    {
+      "name": "IN",
+      "kind": "analog-in"
+    },
+    {
+      "name": "OUT",
+      "kind": "analog-out"
+    },
+    {
+      "name": "GND",
+      "kind": "gnd"
+    }
+  ],
+  "behavior": {
+    "template": "voltage-divider",
+    "params": {
+      "r1Ohm": 100000,
+      "r2Ohm": 33000
+    }
+  },
+  "sources": [
+    "https://www.espressif.com/sites/default/files/documentation/esp32_datasheet_en.pdf",
+    "https://docs.espressif.com/projects/esp-idf/en/v4.4.8/esp32/api-reference/peripherals/adc.html"
+  ],
+  "notes": "8.4 V x 33k/133k = 2.08 V, inside the ESP32 ADC's calibrated 150-2450 mV range at 11/12 dB attenuation (ESP32 datasheet, ESP-IDF ADC docs). It draws 63 uA from the battery. Mass and size are for two resistors (estimate)."
+}

@@ -1,0 +1,96 @@
+{
+  "$schema": "../json-schema/part-definition.schema.json",
+  "schemaVersion": 1,
+  "id": "sensor.vl53l0x-pololu",
+  "name": "VL53L0X Time-of-Flight Distance Sensor Carrier (Pololu 2490)",
+  "manufacturer": "Pololu / STMicroelectronics",
+  "category": "sensor",
+  "description": "Laser distance sensor on a carrier with a 2.8 V regulator and I²C level shifters. Power VIN from 3.3 V so SDA/SCL idle at 3.3 V.",
+  "massG": 0.5,
+  "dimensionsMm": {
+    "width": 13,
+    "height": 2,
+    "length": 18
+  },
+  "pins": [
+    {
+      "name": "VIN",
+      "kind": "power-in"
+    },
+    {
+      "name": "GND",
+      "kind": "gnd"
+    },
+    {
+      "name": "VDD",
+      "kind": "power-out",
+      "voltage": 2.8,
+      "maxCurrentMa": 100,
+      "description": "Regulated 2.8 V output."
+    },
+    {
+      "name": "SDA",
+      "kind": "i2c-sda",
+      "voltage": "supply",
+      "description": "Level-shifted: HIGH is VIN. The host side tolerates up to 5.5 V.",
+      "maxInputV": 5.5
+    },
+    {
+      "name": "SCL",
+      "kind": "i2c-scl",
+      "voltage": "supply",
+      "description": "Level-shifted: HIGH is VIN. The host side tolerates up to 5.5 V.",
+      "maxInputV": 5.5
+    },
+    {
+      "name": "XSHUT",
+      "kind": "digital-in",
+      "voltage": 2.8,
+      "optional": true,
+      "description": "Active-low shutdown, pulled up to 2.8 V on the board, not level-shifted (absolute maximum 3.6 V). Drive it open-drain: OUTPUT LOW, or INPUT for high.",
+      "maxInputV": 3.6
+    },
+    {
+      "name": "GPIO1",
+      "kind": "digital-out",
+      "voltage": 2.8,
+      "optional": true,
+      "description": "Open-drain interrupt output, pulled up to 2.8 V."
+    }
+  ],
+  "electrical": {
+    "supplyV": {
+      "min": 2.8,
+      "max": 5.5
+    },
+    "logicLevelV": "supply",
+    "currentMa": {
+      "typical": 20,
+      "peak": 40
+    }
+  },
+  "i2c": {
+    "defaultAddress": 41,
+    "addressing": {
+      "kind": "software",
+      "enablePin": "XSHUT"
+    }
+  },
+  "behavior": {
+    "template": "distance-raycast",
+    "params": {
+      "minRangeMm": 30,
+      "maxRangeMm": 1200,
+      "beamAngleDeg": 25,
+      "rays": 5,
+      "noiseSigmaPct": 4,
+      "updateHz": 30
+    }
+  },
+  "sources": [
+    "https://www.pololu.com/product/2490",
+    "https://www.pololu.com/file/0J1187/vl53l0x.pdf",
+    "https://www.pololu.com/file/0J1188/vl53l0x-vl53l1x-vl53l3cx-vl53l4cd-time-of-flight-sensor-schematic.pdf"
+  ],
+  "notes": "Published: VIN 2.8-5.5 V (Pololu pin table; the prose says 2.6 V); 2.8 V LDO with about 100 mA spare; SDA/SCL shifted to VIN; XSHUT not level-shifted (ST absolute maximum 3.6 V, so a 3.3 V GPIO is safe; open-drain driving is still recommended); default address 0x29, changed in software and lost on reset; 20 mA typical, 40 mA peak; 13 x 18 x 2 mm, 0.5 g. ST datasheet: 25 deg field of view; default mode about 1.2 m range with 33 ms timing budget (about 30 Hz); accuracy 4% (1 sigma) on a white target at 1.2 m. Minimum range 30 mm is Pololu's experience (not specified). rays is a sim choice."
+}
