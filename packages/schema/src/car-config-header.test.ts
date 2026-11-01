@@ -59,6 +59,11 @@ describe('generateCarConfigHeader', () => {
     expect(text).toContain('#define ECHO_DIVIDER_OUT_PIN 34\n');
   });
 
+  it('quotes the car name, so a trailing backslash cannot continue the comment', () => {
+    const text = generateCarConfigHeader({ ...exampleCar, name: 'Car \\' }, defaultCatalog);
+    expect(text).toContain('// Car: "Car \\"\n');
+  });
+
   it('keeps part names in one comment line, so they cannot inject code', () => {
     const servo = structuredClone(
       DEFAULT_CATALOG_ENTRIES.find((e) => e.source.includes('mg996r'))?.data,

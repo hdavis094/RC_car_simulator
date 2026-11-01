@@ -32,13 +32,15 @@
       "name": "SDA",
       "kind": "i2c-sda",
       "voltage": "supply",
-      "description": "Level-shifted: HIGH is VIN."
+      "description": "Level-shifted: HIGH is VIN. The host side tolerates up to 5.5 V.",
+      "maxInputV": 5.5
     },
     {
       "name": "SCL",
       "kind": "i2c-scl",
       "voltage": "supply",
-      "description": "Level-shifted: HIGH is VIN."
+      "description": "Level-shifted: HIGH is VIN. The host side tolerates up to 5.5 V.",
+      "maxInputV": 5.5
     },
     {
       "name": "XSHUT",

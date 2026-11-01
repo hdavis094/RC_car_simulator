@@ -451,6 +451,23 @@ function i2cRules(netlist: Netlist): Issue[] {
 
   for (const devices of buses.values()) issues.push(...bootAddressRule(netlist, devices));
 
+  // An enable pin tied to ground holds the part in standby for good.
+  for (const devices of buses.values()) {
+    for (const d of devices) {
+      if (d.addressing.kind !== 'software') continue;
+      const net = netlist.netOfPin(d.part, d.addressing.enablePin);
+      if (!net || net.gpios.length > 0 || !net.pins.some((m) => m.pin.kind === 'gnd')) continue;
+      issues.push(
+        issue(
+          'error',
+          'i2c-address-unreachable',
+          `${d.part.instance.instanceId}.${d.addressing.enablePin} is tied to ground, which holds the part in standby so it never answers; wire it to a GPIO or leave it open`,
+          [pinRef(d.part, d.addressing.enablePin)],
+        ),
+      );
+    }
+  }
+
   for (const [key, devices] of buses) {
     const byAddress = new Map<number, ResolvedPart[]>();
     for (const { part, address } of devices) {

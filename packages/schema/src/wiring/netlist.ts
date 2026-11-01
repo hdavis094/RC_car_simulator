@@ -240,20 +240,17 @@ export class Netlist {
   }
 
   /**
-   * The highest voltage on a net including the controller's own outputs:
-   * a GPIO the controller drives (for a digital-in, pwm-in or I²C pin) is at
-   * its logic level. `exclude` leaves one pin out as a driver.
+   * The highest voltage on a net including the controller's own outputs. A
+   * GPIO the controller drives push-pull (for a digital-in or pwm-in pin) is
+   * at its logic level. I²C is open-drain: the controller only pulls low, so
+   * the line's high level comes from the parts' pull-ups alone. `exclude`
+   * leaves one pin out as a driver.
    */
   lineVoltage(net: Net, exclude?: { part: ResolvedPart; pinName: string }): number | undefined {
-    const parts = this.netVoltage(net, new Set(), exclude);
-    let max = parts?.max;
-    const drivenByController = net.pins.some(
-      (m) =>
-        (m.pin.kind === 'digital-in' || m.pin.kind === 'pwm-in' || m.pin.kind.startsWith('i2c')) &&
-        !(exclude && m.part === exclude.part && m.pin.name === exclude.pinName),
-    );
+    let max = this.netVoltage(net, new Set(), exclude)?.max;
+    const pushPull = net.pins.some((m) => m.pin.kind === 'digital-in' || m.pin.kind === 'pwm-in');
     const level = this.controller && electricalOf(this.controller.definition)?.logicLevelV;
-    if (net.gpios.length > 0 && typeof level === 'number' && (drivenByController || exclude)) {
+    if (net.gpios.length > 0 && pushPull && typeof level === 'number') {
       max = Math.max(max ?? 0, level);
     }
     return max;

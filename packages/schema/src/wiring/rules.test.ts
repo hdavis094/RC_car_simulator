@@ -235,6 +235,14 @@ const cases: RuleCase[] = [
     severity: 'error',
     passes: {
       'ToF sensors powered from 3V3': exampleCar,
+      'an I²C bus pulled up to 2.8 V (open-drain, so the GPIO adds nothing)': carWith((_, part) => {
+        part('tof_right').pins = {
+          ...part('tof_right').pins,
+          VIN: { part: 'tof_left', pin: 'VDD' },
+          SDA: { gpio: 32 },
+          SCL: { gpio: 33 },
+        };
+      }),
       'HC-SR04 echo through a 1k/2k divider': carWith((car) => {
         car.parts.push(sonar({ ECHO: { part: 'echo_divider', pin: 'IN' } }), echoDivider);
       }),
@@ -348,6 +356,9 @@ const cases: RuleCase[] = [
       'two of three ToF sensors without XSHUT': carWith((_, part) => {
         remove(part('tof_left'), 'XSHUT');
         remove(part('tof_centre'), 'XSHUT');
+      }),
+      'XSHUT tied to ground holds the sensor off for good': carWith((_, part) => {
+        part('tof_left').pins = { ...part('tof_left').pins, XSHUT: { part: 'esp32', pin: 'GND' } };
       }),
       'the ToF sensor without XSHUT stays at the boot address': carWith((_, part) => {
         remove(part('tof_left'), 'XSHUT');
