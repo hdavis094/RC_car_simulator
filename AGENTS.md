@@ -1,6 +1,6 @@
 # Donkey Car Simulator
 
-A Linux desktop app for designing an ESP32-powered RC car and testing its firmware in a deterministic 3D simulation before it touches hardware. Several AI agents build it in parallel, each working from one task brief.
+A desktop app for Linux and macOS for designing an ESP32-powered RC car and testing its firmware in a deterministic 3D simulation before it touches hardware. Several AI agents build it in parallel, each working from one task brief.
 
 ## Where things are
 
@@ -41,4 +41,12 @@ If `pnpm verify` still fails after three honest attempts at a fix, stop, record 
 - **Coordinates**: right-handed, Y up, car forward is −Z, matching Three.js.
 - **Determinism in `sim-core`**: all time comes from `SimClock`, all randomness from the session's seeded `Rng`. The same firmware, world and seed must produce a bit-identical run.
 - **Layering**: `sim-core` and `hal` run headless. UI code lives only in `apps/desktop/src/renderer/`.
+- **Portability**: everything runs on Linux and macOS (Apple Silicon and Intel).
+  - C++ compiles warning-free with both GCC and Clang (Apple clang on macOS).
+  - Take the compiler from `$CXX`, falling back to `c++`.
+  - Use POSIX APIs only.
+  - Build paths with Node's `path` and `os` modules.
+  - Keep Unix socket paths under 100 bytes, because macOS limits them to 104. Put them in `/tmp`, not `$TMPDIR`.
+  - Treat file names as case-insensitive, because APFS is.
+  - Use `CmdOrCtrl` for keyboard shortcuts.
 - **Tests sit beside the code** they cover (`foo.ts` → `foo.test.ts`; `hal/src/x.cpp` → `hal/test/x_test.cpp`).

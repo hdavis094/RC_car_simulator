@@ -31,14 +31,17 @@ Repo root (`package.json`, `pnpm-workspace.yaml`, `tsconfig.base.json`, ESLint/P
    - `pnpm --filter @rcsim/hal test` runs it.
 4. **Scripts**: `pnpm verify` runs, in order: format check, lint, typecheck, Vitest (all TS packages), hal tests, scenario tests (a placeholder that passes until P2-01), and Playwright (one test: the app launches and all three environments can be reached). `pnpm verify:fast` is the same without Playwright and scenarios.
 5. **Package scope** `@rcsim/*`. Each package has `test` and `typecheck` scripts.
-6. **GitHub Actions**: a workflow running `pnpm verify` on push and PR. Playwright runs under `xvfb-run`. The workflow is inert until a remote exists.
-7. Replace the `.gitignore` entries if the tooling needs more.
+6. **GitHub Actions**: a workflow running `pnpm verify` on push and PR, as a matrix over `ubuntu-latest` and `macos-latest`. Playwright runs under `xvfb-run` on Linux and directly on macOS. The workflow is inert until a remote exists.
+7. **Both compilers**: hal's `test` script builds and runs the suite once per available compiler (`g++`, `clang++`; on macOS, `c++` is Apple clang) and fails if any of them fails.
+8. Replace the `.gitignore` entries if the tooling needs more (add `.DS_Store`).
 
 ## Acceptance
 
 - [ ] `pnpm install && pnpm verify` passes from a fresh clone
 - [ ] the Playwright smoke test opens the app and navigates to all three environments
 - [ ] `pnpm verify:fast` runs in under 60 s on stubs
+- [ ] hal's stub test passes with both `g++` and `clang++` locally
+- [ ] if a GitHub remote exists, the macOS CI job is green; otherwise say so in the Handoff
 
 ## Out of scope
 

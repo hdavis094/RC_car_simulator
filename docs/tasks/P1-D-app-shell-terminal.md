@@ -23,8 +23,9 @@ The Electron app opens a car project, and the Terminal environment edits, builds
 1. **Main services** implementing `ipc.ts`:
    - **ProjectService**: open folder, new project from `packages/firmware-template`, file read/write/watch, `car.json` read/write
    - **CatalogService**: built-in catalog + project `parts/`
-   - **BuildService**: runs hal `build-sim`; parses g++ diagnostics into structured errors
-   - **PtyService**: node-pty
+   - **BuildService**: runs hal `build-sim`; parses GCC and Clang diagnostics into structured errors
+   - **PtyService**: node-pty, starting the user's `$SHELL` (zsh on macOS, usually bash on Linux) as a login shell
+   - on macOS, the app menu and `CmdOrCtrl` shortcuts follow platform conventions
    - stub `run`, `world-edit` and `control` handlers returning "not implemented" (P2-01 wires them)
 2. **Preload**: exposes exactly the `ipc.ts` API via `contextBridge`. Context isolation on, node integration off.
 3. **Shell**:

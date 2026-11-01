@@ -66,7 +66,7 @@ Claude workers are sub-agents started in their worktree.
 When a brief says `Status: in-review`:
 
 1. **Rebase** `ws/<id>` onto `main`. Resolve `pnpm-lock.yaml` conflicts by running `pnpm install`.
-2. **Verify**: `pnpm verify` in the worktree must pass.
+2. **Verify**: `pnpm verify` in the worktree must pass. Once a GitHub remote exists, push `ws/<id>` and wait for CI to pass on both Linux and macOS. That run is the only check of macOS.
 3. **Ownership**: `git diff --name-only main...ws/<id>` lists only the brief's owned paths, plus `docs/tasks/<its brief>`.
 4. **Review by a different vendor** than the author, against the brief and `AGENTS.md`:
    - Claude-authored work: the Codex plugin's adversarial review (`/codex:adversarial-review`).
@@ -88,6 +88,6 @@ Read every Handoff's **Contract change requests**. To accept one, make the small
 
 ## One-time setup the user does
 
-- `gh auth login`, then create the private GitHub repo and push, so CI runs.
+- `gh auth login`, then create the private GitHub repo and push, so CI runs. **Required before Phase 1:** the macOS CI job is the only way this Linux machine can verify macOS support. If it's missing at the end of Phase 0, ask the user.
 - In Claude Code: `/plugin marketplace add openai/codex-plugin-cc`, then `/plugin install codex@openai-codex`, then `/codex:setup`.
 - In T3 Code: grant this session's MCP connection Full access (during P0-01).

@@ -44,6 +44,8 @@ Everything in `docs/`; the Handoff sections of every Phase 1 brief.
 
 - [ ] `pnpm verify` passes, including the v1 scenario and the Playwright demo test
 - [ ] the v1 scenario passes 10 times in a row with seeds 1–10 (seed 1 is the gate; report the others)
+- [ ] CI is green on **both** `ubuntu-latest` and `macos-latest`, including the v1 scenario and the Playwright demo test. The v1 scenario's result (laps, collisions, serial output hash) is identical on both platforms for seed 1
+- [ ] `docs/DEMO.md` lists the setup steps for each platform
 - [ ] the user has walked through `docs/DEMO.md` and approved it
 
 ## Out of scope

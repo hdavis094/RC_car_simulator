@@ -24,7 +24,7 @@ pnpm workspace, one repo.
 ┌──────────── Electron app ─────────────────────────────────────────────┐
 │ renderer (React)                    main process                      │
 │  Workbench ─┐                        ProjectService  (files, car.json) │
-│  Terminal  ─┼── typed IPC ─────────► BuildService    (g++ / pio)       │
+│  Terminal  ─┼── typed IPC ─────────► BuildService    (c++ / pio)       │
 │  3D World  ─┘   (src/shared/ipc.ts)  PtyService      (shells)          │
 │     ▲  60 Hz StateSnapshot           SimService ──┐                    │
 │     └──────────────────────────────────────────── │ ───────┐           │
@@ -45,7 +45,7 @@ pnpm workspace, one repo.
 
 - **The renderer displays and never owns sim state.** It receives `StateSnapshot`s (car pose, wheel states, sensor beams, obstacles) at about 60 Hz and sends user intents (place obstacle, pause, step) back through IPC.
 - **The sim host** is an Electron `utilityProcess` running `sim-core`. Headless runs use the same code in plain Node.
-- **The firmware process** is the user's sketch compiled with g++ against `hal`. One process per Run. If it crashes, the session reports it with stderr; restarting it is equivalent to the ESP32 rebooting.
+- **The firmware process** is the user's sketch compiled natively against `hal`. One process per Run. If it crashes, the session reports it with stderr; restarting it is equivalent to the ESP32 rebooting.
 
 ## Lockstep time
 
@@ -95,12 +95,14 @@ The app's `ControlClient` (main process, using `control-protocol`) carries keybo
 
 ## Builds
 
-- **Sim build**: hal's build driver (`packages/hal/bin/build-sim`) compiles `src/*.cpp` with system g++, with hal's `include/` ahead of the real libraries. It links against a cached prebuilt hal library and writes `.rcsim/build/firmware`. Compiler output is passed through unchanged so the Terminal can link the errors.
+- **Sim build**: hal's build driver (`packages/hal/bin/build-sim`) compiles `src/*.cpp` with the system C++ compiler (`$CXX`, else `c++`), with hal's `include/` ahead of the real libraries. It links against a cached prebuilt hal library and writes `.rcsim/build/firmware`. Compiler output is passed through unchanged so the Terminal can link the errors.
 - **Real build**: `pio run -e esp32dev` (and `-t upload`), driven by BuildService. If PlatformIO is missing, the app offers to install it.
 
 ## Testing
 
-`pnpm verify` is the single bar: lint, typecheck, Vitest, hal's doctest suite (g++ + make), the scenario tests, and Playwright against the Electron app. `pnpm verify:fast` skips Playwright and scenarios for the inner loop.
+`pnpm verify` is the single bar: lint, typecheck, Vitest, hal's doctest suite (make, once with each available compiler of `g++` and `clang++`), the scenario tests, and Playwright against the Electron app. `pnpm verify:fast` skips Playwright and scenarios for the inner loop.
+
+**Platforms.** CI runs `pnpm verify` on `ubuntu-latest` and `macos-latest`. Locally on Linux, building hal with both GCC and Clang catches most problems Apple clang would hit. Only the macOS CI job proves macOS works.
 
 - **schema / sim-core**: Vitest. Physics gets property checks against geometry, e.g. the full-lock turn radius is within ±10% of the Ackermann prediction from the chassis wheelbase and steering angle.
 - **hal**: doctest unit tests, plus protocol tests that replay the golden vectors in `sim-protocol/vectors/`. Both sides decode and encode the same bytes.

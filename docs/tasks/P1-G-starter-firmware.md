@@ -47,7 +47,7 @@ The starter firmware that every new car project starts from. It's real ESP32 fir
 
 - [ ] `pnpm verify` passes
 - [ ] doctest unit tests cover the avoidance decisions, failsafe timing and command parsing
-- [ ] builds with hal `build-sim` with zero warnings at `-Wall -Wextra`
+- [ ] builds with hal `build-sim` with zero warnings at `-Wall -Wextra`, with both GCC and Clang
 - [ ] runs against hal's fake sim for 2 s of sim time: arms the ESC, answers a `hello`, streams telemetry
 - [ ] if PlatformIO is installed, `pio run -e esp32dev` compiles; record the result (or "not available") in the Handoff
 

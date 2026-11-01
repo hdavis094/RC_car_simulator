@@ -8,7 +8,7 @@ Wave: 1
 
 ## Goal
 
-The starter firmware and similar sketches compile unchanged with g++ against hal, run in lockstep with the sim over sim-protocol, and see sensors, PWM, serial and Wi-Fi as if on an ESP32.
+The starter firmware and similar sketches compile unchanged with the system C++ compiler against hal on Linux and macOS, run in lockstep with the sim over sim-protocol, and see sensors, PWM, serial and Wi-Fi as if on an ESP32.
 
 ## Owned paths
 
@@ -38,7 +38,8 @@ The starter firmware and similar sketches compile unchanged with g++ against hal
 7. **Build driver** `bin/build-sim <project-dir>`:
    - compiles `src/*.cpp` with hal includes first and links the cached prebuilt hal
    - outputs `.rcsim/build/firmware`
-   - passes g++ diagnostics through unchanged
+   - uses `$CXX`, else `c++`
+   - passes compiler diagnostics through unchanged
    - exit code reflects success
 8. **Tests**:
    - doctest for each API area
@@ -53,7 +54,9 @@ The starter firmware and similar sketches compile unchanged with g++ against hal
 - [ ] a busy-wait `while (millis() - t < 50) {}` terminates
 - [ ] three VL53L0X instances brought up with the XSHUT sequence get distinct addresses, and read distinct fake-sim readings
 - [ ] a `WiFiServer` on port 3333 is reachable on the reported host port from a test client
-- [ ] a sketch with a compile error yields g++'s `file:line:col: error:` output and a non-zero exit from `build-sim`
+- [ ] a sketch with a compile error yields the compiler's `file:line:col: error:` output and a non-zero exit from `build-sim`
+- [ ] hal and its tests build warning-free at `-Wall -Wextra` with both GCC and Clang
+- [ ] socket paths stay under 100 bytes, checked by a test
 
 ## Out of scope
 

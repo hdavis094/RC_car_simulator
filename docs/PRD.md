@@ -6,6 +6,16 @@ Working name. Standalone: it shares the "Donkey Car" idea of a small autonomous 
 
 Design an RC car's electronics and test its firmware against a faithful simulation before flashing real hardware. The first user is the author building one real car; parts are data files, so the catalog grows without code changes.
 
+## Platforms
+
+Linux (x86_64) and macOS 14+ (Apple Silicon and Intel) are both first-class in v1. Every feature works on both, and CI runs `pnpm verify` on both.
+
+- **v1 runs from source**: `pnpm install && pnpm dev`. Prerequisites:
+  - Node 26 and pnpm
+  - a C++ compiler: GCC or Clang on Linux; Xcode Command Line Tools on macOS (`xcode-select --install`)
+  - PlatformIO, only for flashing a real board; the app offers to install it
+- **Packaged apps** (AppImage, unsigned `.dmg`) come in Phase 3. A signed and notarized macOS app needs an Apple Developer account and is scheduled later.
+
 ## v1 acceptance demo
 
 > In the **Workbench** I pick an ESP32, a steering servo, an ESC and motor, and distance sensors, assign their pins, and get no wiring errors. In the **Terminal** I write firmware and build it. I press **Run in Sim**, and in the **3D World** the car drives the oval and avoids cones I placed, while I watch its serial output and send it commands from the Network Console. I switch to manual and drive it with a gamepad.
@@ -97,9 +107,9 @@ my-car/
 
 ## Out of v1
 
-Camera sensor and image streaming · multiple cars · track editor · scripted part behaviors · visual wiring diagram · Windows and macOS builds.
+Camera sensor and image streaming · multiple cars · track editor · scripted part behaviors · visual wiring diagram · Windows.
 
 ## Later
 
-- **Phase 3**: flash and real serial monitor via PlatformIO, network fault injection UI, physics stage 2, WebSocket transport for the control protocol.
+- **Phase 3**: flash and real serial monitor via PlatformIO, network fault injection UI, physics stage 2, WebSocket transport for the control protocol, packaged Linux and macOS apps.
 - **Beyond**: hardware-in-the-loop (real ESP32 on USB fed by the sim), `gym-donkeycar` protocol so `donkeycar` Python and trained models can drive, a Raspberry Pi brain alongside the ESP32, camera sensor.
