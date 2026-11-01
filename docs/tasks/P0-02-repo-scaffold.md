@@ -53,7 +53,7 @@ Any schema, protocol or real feature code.
   - **Workspace**: pnpm 12 workspace (`packages/*`, `apps/*`), with every package from the Modules table as a `@rcsim/*` stub. Each one has `test` and `typecheck` scripts.
   - **TypeScript**: `tsconfig.base.json` is strict NodeNext ESM with `erasableSyntaxOnly` and `allowImportingTsExtensions`. Relative imports therefore carry `.ts` extensions, and plain Node 26 can run the sources directly; the scenario placeholder already runs as `node scripts/scenarios-placeholder.ts`. Packages export `./src/index.ts`; there is no build step.
   - **Desktop app**: `apps/desktop` uses electron-vite 6, React 19 and Zustand 5. The shell (`src/renderer/shell/`) switches between `WorkbenchRoot`, `TerminalRoot` and `WorldRoot`, each in its own folder. Main and preload bundle the `@rcsim/*` workspace packages through `build.externalizeDeps.exclude`.
-  - **hal**: Makefile (C++17, `-Wall -Wextra -Wpedantic -Werror`, `$CXX` falling back to `c++`), vendored doctest 2.5.3, and one stub test. `scripts/test-all-compilers.sh` runs the suite with `$CXX`, `g++` and `clang++`, and fails if any of them fails.
+  - **hal**: Makefile (C++17, `-Wall -Wextra -Wpedantic -Werror`, `$CXX` falling back to `c++`), vendored doctest 2.5.3, and one stub test. Each `build/<compiler>/` carries a stamp of the compiler's path, version and flags, so a different compiler forces a rebuild. `scripts/test-all-compilers.sh` runs the suite once per distinct compiler among `${CXX:-c++}`, `g++` and `clang++`, deduplicated by version string, and fails if any of them fails.
   - **Verify pipeline**: `pnpm verify` = format check (Prettier, plus clang-format for hal) → ESLint → typecheck → Vitest (one run over every package's project) → hal tests → scenario placeholder → Playwright Electron smoke test. `pnpm verify:fast` stops after the hal tests.
   - **C++ formatting**: hal's clang-format is the pinned WASM build `@wasm-fmt/clang-format` 23.1.1, a hal devDependency. Every OS gets the same formatter, and the check fails if it is missing.
   - **Lint guards**: ESLint keeps `react`, `react-dom`, `electron`, `zustand`, `@rcsim/desktop` and their subpaths out of `packages/*`. It keeps `electron` and every Node built-in (`fs`, `node:fs`, `fs/promises`) out of the renderer.
@@ -68,6 +68,9 @@ Any schema, protocol or real feature code.
   - **Blocking**: the C++ format check passed silently when clang-format was missing (the macOS CI job). It now uses the pinned WASM clang-format and fails if it is missing.
   - The lint layering rules missed subpaths (`react-dom/client`) and bare Node built-ins (`fs`). Both are now caught.
   - The Handoff was empty at the reviewed commit. It is now filled in.
+- **Review round 2** (Codex, changes requested). Confirmed the round 1 fixes, then found two more, both fixed and re-tested against the reviewer's own scenarios:
+  - **Blocking**: build directories were keyed only by the compiler's basename. A different `g++` could reuse stale objects and pass falsely. The compiler stamp now forces a rebuild, and a fake `g++` that exits 42 now fails `make test`.
+  - With `$CXX` unset and only `c++` on PATH, no compiler was found. Discovery now starts at `${CXX:-c++}`.
 - **Contract change requests**: none.
 - **Open questions**:
   - The GitHub repo is **public**, but ORCHESTRATOR.md says private. That is for the user to decide.

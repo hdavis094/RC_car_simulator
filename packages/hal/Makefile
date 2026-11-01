@@ -22,13 +22,19 @@ TEST_SRCS := $(wildcard test/*.cpp)
 LIB_OBJS := $(LIB_SRCS:%.cpp=$(BUILD_DIR)/%.o)
 TEST_OBJS := $(TEST_SRCS:%.cpp=$(BUILD_DIR)/%.o)
 
+# The stamp records which compiler built BUILD_DIR. When the compiler's path,
+# version or flags change, the stamp changes and every object is rebuilt, so a
+# different compiler with the same name can never reuse stale objects.
+COMPILER_ID := $(shell command -v $(firstword $(CXX))) $(shell $(CXX) --version 2>&1 | head -n 1) | $(CXX) $(CPPFLAGS) $(ALL_CXXFLAGS)
+COMPILER_STAMP := $(BUILD_DIR)/compiler.stamp
+
 LIB := $(BUILD_DIR)/libhal.a
 TEST_BIN := $(BUILD_DIR)/hal_tests
 
 CLANG_FORMAT ?= clang-format
 FORMAT_SRCS := $(wildcard include/*.h include/**/*.h src/*.cpp src/*.h test/*.cpp test/*.h)
 
-.PHONY: all lib test clean format format-check
+.PHONY: all lib test clean format format-check FORCE
 
 all: lib
 
@@ -41,7 +47,12 @@ $(LIB): $(LIB_OBJS)
 $(TEST_BIN): $(TEST_OBJS) $(LIB)
 	$(CXX) $(ALL_CXXFLAGS) -o $@ $(TEST_OBJS) $(LIB)
 
-$(BUILD_DIR)/%.o: %.cpp
+$(COMPILER_STAMP): FORCE
+	@mkdir -p $(dir $@)
+	@printf '%s\n' '$(subst ','\'',$(COMPILER_ID))' > $@.new
+	@if cmp -s $@.new $@; then rm $@.new; else mv $@.new $@; fi
+
+$(BUILD_DIR)/%.o: %.cpp $(COMPILER_STAMP)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CPPFLAGS) $(ALL_CXXFLAGS) -c $< -o $@
 
