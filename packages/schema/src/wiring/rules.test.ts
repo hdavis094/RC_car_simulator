@@ -58,6 +58,27 @@ const fixedAt29Catalog = createCatalog(
   defaultCatalog,
 );
 
+/** The default catalog plus a strap-addressed IMU whose addresses are 0x28 (low) and 0x29 (high). */
+const strapAt29Catalog = createCatalog(
+  [
+    {
+      source: 'parts/strap-29.json',
+      data: (() => {
+        const imu = structuredClone(
+          DEFAULT_CATALOG_ENTRIES.find((e) => e.source.includes('gy-521'))?.data,
+        ) as { id: string; i2c: unknown };
+        imu.id = 'custom.strap-29';
+        imu.i2c = {
+          defaultAddress: 0x28,
+          addressing: { kind: 'strap', addresses: [0x28, 0x29], pin: 'AD0' },
+        };
+        return imu;
+      })(),
+    },
+  ],
+  defaultCatalog,
+);
+
 const remove = (part: Part, pin: string): void => {
   const { [pin]: _removed, ...rest } = part.pins ?? {};
   part.pins = rest;
@@ -558,6 +579,30 @@ describe('wiring rule i2c-address-unreachable, fixed device at the boot address'
       { part: 'tof_centre' },
       { part: 'tof_right' },
     ]);
+  });
+});
+
+describe('wiring rule i2c-address-unreachable, strap device at the boot address', () => {
+  const withStrapImu = (ad0: Part['pins']) =>
+    carWith((_, part) => {
+      part('imu').partId = 'custom.strap-29';
+      part('imu').i2cAddress = 0x29;
+      part('imu').pins = { ...part('imu').pins, ...ad0 };
+    });
+
+  it('accepts one whose strap pin is on a GPIO: it is parked at 0x28 while the ToFs come up', () => {
+    expect(
+      issuesOf(withStrapImu({ AD0: { gpio: 4 } }), 'i2c-address-unreachable', strapAt29Catalog),
+    ).toEqual([]);
+  });
+
+  it('rejects one strapped high for good, which sits at 0x29 from power-on', () => {
+    const found = issuesOf(
+      withStrapImu({ AD0: { part: 'esp32', pin: '3V3' } }),
+      'i2c-address-unreachable',
+      strapAt29Catalog,
+    );
+    expect(found.length).toBeGreaterThan(0);
   });
 });
 

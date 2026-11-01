@@ -93,6 +93,7 @@ UI, sim behaviour implementations (only their parameters live here).
   - `prettier` and `vitest` declared as devDependencies;
   - the unreachable two-GPIO branch removed, with the reason in a comment;
   - Slash track width set to an estimated 240 mm between tyre centres.
+
 - **Review round 2.** Both reviews confirmed the round 1 fixes and found more, all fixed with fixtures:
   - **Codex, blocking**: I²C is open-drain, so the controller's 3.3 V no longer counts on I²C lines (a 2.8 V-pulled bus passes). The Pololu SDA/SCL tolerate 5.5 V on the host side.
   - **Codex, blocking**: an enable pin (XSHUT) tied to ground is an error.
@@ -107,6 +108,7 @@ UI, sim behaviour implementations (only their parameters live here).
     - one `isDivider` helper;
     - `lineVoltage` requires its `exclude` argument, as documented;
     - the same-part wire message explains why it is rejected.
+- **Review round 3** (Codex, one blocking finding, fixed): a strap-addressed device whose strap pin is on a GPIO no longer counts as permanently at the boot address. The firmware parks it on its other address while the software-addressed parts come up; only fixed devices and static straps block them.
 - **Contract change requests**: none (this is the contract).
 - **Open questions**:
   - Several values are unpublished estimates, each flagged in its part's `notes`:
@@ -117,5 +119,6 @@ UI, sim behaviour implementations (only their parameters live here).
     - DevKitC: 5 V pin range and mass.
 
     Measure the real car and update them.
+
   - The Traxxas product page says final drive 12.58; the manual's stock gearing gives 15.3. I used 15.3.
   - Track data (oval, technical) is P1-A's, in `sim-core/assets/`. Only the `Track` schema is here.

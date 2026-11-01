@@ -562,7 +562,20 @@ function bootAddressRule(netlist: Netlist, devices: readonly I2cDevice[]): Issue
   const boots = new Set(devices.filter((d) => d.addressing.kind === 'software').map((d) => d.boot));
   for (const boot of boots) {
     const software = devices.filter((d) => d.addressing.kind === 'software' && d.boot === boot);
-    const others = devices.filter((d) => d.addressing.kind !== 'software' && d.address === boot);
+    // Devices that sit at the boot address for good. A strap device whose
+    // strap pin the firmware controls can be parked on its other address
+    // while the software-addressed parts are brought up, so it doesn't count.
+    const others = devices.filter((d) => {
+      if (d.addressing.kind === 'software') return false;
+      if (
+        d.addressing.kind === 'strap' &&
+        strapLevel(netlist, d.part, d.addressing.pin) === 'gpio' &&
+        d.addressing.addresses.some((a) => a !== boot)
+      ) {
+        return false;
+      }
+      return d.address === boot;
+    });
     if (software.length + others.length < 2) continue;
     const isolated = (d: I2cDevice): boolean =>
       d.addressing.kind === 'software' &&
