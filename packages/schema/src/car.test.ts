@@ -16,7 +16,14 @@ describe('Car', () => {
   });
 
   it('rejects instance ids that are not lowercase C identifiers', () => {
-    for (const instanceId of ['TofLeft', 'tof-left', '1tof', 'tof left']) {
+    for (const instanceId of [
+      'TofLeft',
+      'tof-left',
+      '1tof',
+      'tof left',
+      'tof__left',
+      'steering_',
+    ]) {
       const car = structuredClone(exampleCar);
       car.parts[0] = { ...car.parts[0]!, instanceId };
       expect(Car.safeParse(car).success, instanceId).toBe(false);

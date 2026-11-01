@@ -14,6 +14,7 @@ export const DistanceRaycastParams = z
     updateHz: positive.describe('Readings per second.'),
   })
   .refine((p) => p.minRangeMm < p.maxRangeMm, 'minRangeMm must be below maxRangeMm');
+export type DistanceRaycastParams = z.infer<typeof DistanceRaycastParams>;
 
 export const ImuParams = z
   .strictObject({
@@ -27,7 +28,13 @@ export const ImuParams = z
   })
   .refine((p) => p.accelRangesG.includes(p.defaultAccelRangeG), 'default accel range not listed')
   .refine((p) => p.gyroRangesDps.includes(p.defaultGyroRangeDps), 'default gyro range not listed');
+export type ImuParams = z.infer<typeof ImuParams>;
 
+/**
+ * Servo output angle is linear in pulse width: (pulse − neutral) /
+ * (max − min) × travelDeg, positive for pulses above neutral. What that
+ * does to the wheels is the chassis's steeringLinkageRatio.
+ */
 export const ServoParams = z
   .strictObject({
     travelDeg: positive.describe('Total output travel from pulseMinUs to pulseMaxUs.'),
@@ -42,11 +49,13 @@ export const ServoParams = z
     (p) => p.pulseMinUs < p.pulseNeutralUs && p.pulseNeutralUs < p.pulseMaxUs,
     'pulses must satisfy min < neutral < max',
   );
+export type ServoParams = z.infer<typeof ServoParams>;
 
 export const ThrottleCurvePoint = z.strictObject({
   input: z.number().min(0).max(1).describe('Throttle command magnitude, 0..1.'),
   output: z.number().min(0).max(1).describe('Fraction of full motor voltage, 0..1.'),
 });
+export type ThrottleCurvePoint = z.infer<typeof ThrottleCurvePoint>;
 
 export const EscMotorParams = z
   .strictObject({
@@ -75,6 +84,7 @@ export const EscMotorParams = z
       inputs.every((input, i) => i === 0 || input > (inputs[i - 1] ?? 0))
     );
   }, 'throttleCurve inputs must rise strictly from 0 to 1');
+export type EscMotorParams = z.infer<typeof EscMotorParams>;
 
 export const BatteryParams = z
   .strictObject({
@@ -90,11 +100,13 @@ export const BatteryParams = z
     (p) => p.cellEmptyV < p.cellNominalV && p.cellNominalV < p.cellFullV,
     'cell voltages must satisfy empty < nominal < full',
   );
+export type BatteryParams = z.infer<typeof BatteryParams>;
 
 export const VoltageDividerParams = z.strictObject({
   r1Ohm: positive.describe('Top resistor, from IN to OUT.'),
   r2Ohm: positive.describe('Bottom resistor, from OUT to GND.'),
 });
+export type VoltageDividerParams = z.infer<typeof VoltageDividerParams>;
 
 export const RegulatorParams = z.strictObject({
   topology: z.enum(['buck', 'linear']),
@@ -107,6 +119,7 @@ export const RegulatorParams = z.strictObject({
     .optional()
     .describe('Buck efficiency. Linear regulators pass their output current through.'),
 });
+export type RegulatorParams = z.infer<typeof RegulatorParams>;
 
 /** How a part behaves in the sim: one built-in template plus its parameters. */
 export const Behavior = z.discriminatedUnion('template', [
@@ -121,15 +134,10 @@ export const Behavior = z.discriminatedUnion('template', [
 export type Behavior = z.infer<typeof Behavior>;
 export type BehaviorTemplate = Behavior['template'];
 
-export const BEHAVIOR_TEMPLATES = [
-  'distance-raycast',
-  'imu',
-  'servo',
-  'esc-motor',
-  'battery',
-  'voltage-divider',
-  'regulator',
-] as const satisfies readonly BehaviorTemplate[];
+/** Every behavior template, derived from the union so the two can't drift. */
+export const BEHAVIOR_TEMPLATES: readonly BehaviorTemplate[] = Behavior.options.map(
+  (option) => option.shape.template.value,
+);
 
 /** Ratio OUT/IN of a voltage divider. */
 export function dividerRatio(params: z.infer<typeof VoltageDividerParams>): number {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { generateCarConfigHeader } from './car-config-header.ts';
-import { defaultCatalog } from './default-catalog.ts';
+import { createCatalog } from './catalog.ts';
+import { DEFAULT_CATALOG_ENTRIES, defaultCatalog } from './default-catalog.ts';
 import { exampleCar } from './example-car.ts';
 
 describe('generateCarConfigHeader', () => {
@@ -56,5 +57,20 @@ describe('generateCarConfigHeader', () => {
     expect(text).toContain('#define SONAR_TRIG_PIN 13\n');
     expect(text).toContain('#define SONAR_ECHO_PIN 34\n');
     expect(text).toContain('#define ECHO_DIVIDER_OUT_PIN 34\n');
+  });
+
+  it('keeps part names in one comment line, so they cannot inject code', () => {
+    const servo = structuredClone(
+      DEFAULT_CATALOG_ENTRIES.find((e) => e.source.includes('mg996r'))?.data,
+    ) as { id: string; name: string };
+    servo.id = 'custom.servo';
+    servo.name = 'Servo\n#define CAR_WIFI_ENABLED 0';
+    const catalog = createCatalog([{ source: 'parts/servo.json', data: servo }], defaultCatalog);
+    const car = structuredClone(exampleCar);
+    const steering = car.parts.find((p) => p.instanceId === 'steering');
+    if (steering) steering.partId = 'custom.servo';
+    const text = generateCarConfigHeader(car, catalog);
+    expect(text).toContain('// steering: Servo #define CAR_WIFI_ENABLED 0 (custom.servo)');
+    expect(text.match(/^#define CAR_WIFI_ENABLED/gm)).toHaveLength(1);
   });
 });

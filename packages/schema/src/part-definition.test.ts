@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_CATALOG_ENTRIES } from './default-catalog.ts';
-import { PartDefinition } from './part-definition.ts';
+import { BEHAVIOR_TEMPLATES } from './behavior.ts';
+import { PART_CATEGORIES, PartDefinition } from './part-definition.ts';
 
 // The tests edit raw part files, including into invalid shapes, so they are untyped JSON.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -76,5 +77,59 @@ describe('PartDefinition', () => {
     const part = base('controller.esp32-devkitc-v4');
     part.gpios.push({ ...part.gpios[0] });
     expect(messages(part).join()).toMatch(/listed twice/);
+  });
+
+  it('requires regulator params to match the output pin', () => {
+    const part = base('power.pololu-d24v22f5');
+    part.behavior.params.outputV = 3.3;
+    expect(messages(part).join()).toMatch(/matching its params/);
+  });
+
+  it('requires battery params to match the output pin', () => {
+    const part = base('power.lipo-2s-5000');
+    part.behavior.params.cells = 3;
+    expect(messages(part).join()).toMatch(/matching its params/);
+  });
+
+  it('allows maxInputV only on inputs', () => {
+    const part = base('sensor.hc-sr04');
+    part.pins.find((p: { name: string }) => p.name === 'ECHO').maxInputV = 5.5;
+    expect(messages(part).join()).toMatch(/maxInputV/);
+  });
+
+  it('allows exactly two strap addresses', () => {
+    const part = base('sensor.gy-521-mpu6050');
+    part.i2c.addressing.addresses = [0x68, 0x69, 0x6a];
+    expect(messages(part).length).toBeGreaterThan(0);
+  });
+
+  it('rejects a steering linkage ratio of 0 but allows a negative (reversed) one', () => {
+    const part = base('chassis.traxxas-slash-2wd');
+    part.steeringLinkageRatio = 0;
+    expect(messages(part).length).toBeGreaterThan(0);
+    part.steeringLinkageRatio = -0.7;
+    expect(messages(part)).toEqual([]);
+  });
+});
+
+describe('derived lists', () => {
+  it('list every template and category in the unions', () => {
+    expect(BEHAVIOR_TEMPLATES).toEqual([
+      'distance-raycast',
+      'imu',
+      'servo',
+      'esc-motor',
+      'battery',
+      'voltage-divider',
+      'regulator',
+    ]);
+    expect(PART_CATEGORIES).toEqual([
+      'controller',
+      'chassis',
+      'actuator',
+      'sensor',
+      'power',
+      'passive',
+    ]);
   });
 });

@@ -1,8 +1,16 @@
 import type { Catalog } from '../catalog.ts';
 import type { Car } from '../car.ts';
-import { electricalOf, type PinKind } from '../part-definition.ts';
+import { hex } from '../common.ts';
+import {
+  INPUT_KINDS,
+  electricalOf,
+  type I2cInfo,
+  type PinDefinition,
+  type PinKind,
+} from '../part-definition.ts';
+import { headerMacros } from '../car-config-header.ts';
 import type { Issue, IssueRef, WiringRuleId } from './issue.ts';
-import { Netlist, type Net, type ResolvedPart } from './netlist.ts';
+import { DRIVING_KINDS, Netlist, type Net, type ResolvedPart } from './netlist.ts';
 
 /** Kinds the controller has to drive, which an input-only GPIO cannot. */
 const CONTROLLER_DRIVES: ReadonlySet<PinKind> = new Set([
@@ -39,16 +47,8 @@ function gpioRules(netlist: Netlist): Issue[] {
     const memberRefs = members.map((m) => pinRef(m.part, m.pin.name));
     const names = members.map((m) => label(m.part, m.pin.name)).join(', ');
 
-    if (net.gpios.length > 1) {
-      issues.push(
-        issue(
-          'error',
-          'pin-conflict',
-          `GPIOs ${net.gpios.map((g) => g.gpio).join(' and ')} are wired together through ${names}`,
-          [...net.gpios.map((g) => ({ gpio: g.gpio })), ...memberRefs],
-        ),
-      );
-    }
+    // A net never holds two GPIOs: every pin declares at most one wire, so
+    // joining two GPIOs would need more wires than the pins in between have.
 
     for (const gpio of net.gpios) {
       const at = { gpio: gpio.gpio };
@@ -103,7 +103,7 @@ function gpioRules(netlist: Netlist): Issue[] {
             ),
           );
         }
-        if (m.pin.kind === 'analog-out') {
+        if (netlist.isAnalog(m.part, m.pin)) {
           const adc1 = gpio.adc1Channel !== undefined;
           const adc2 = gpio.adc2Channel !== undefined;
           if (!adc1 && !adc2) {
@@ -132,6 +132,7 @@ function gpioRules(netlist: Netlist): Issue[] {
       const voltage = netlist.netVoltage(net);
       if (maxInputV !== undefined && voltage && voltage.max > maxInputV + 1e-9) {
         const drivers = members.filter((m) => {
+          if (!DRIVING_KINDS.has(m.pin.kind)) return false;
           const v = netlist.pinVoltage(m.part, m.pin);
           return v !== undefined && v.max > maxInputV;
         });
@@ -144,6 +145,42 @@ function gpioRules(netlist: Netlist): Issue[] {
           ),
         );
       }
+    }
+  }
+  return issues;
+}
+
+/** The highest voltage an input pin tolerates, if the part says. */
+function inputToleranceV(
+  netlist: Netlist,
+  part: ResolvedPart,
+  pin: PinDefinition,
+): number | undefined {
+  if (pin.maxInputV !== undefined) return pin.maxInputV;
+  if (pin.kind === 'analog-in' && pin.voltage === undefined) return undefined; // a divider input
+  return netlist.pinVoltage(part, pin)?.max;
+}
+
+/** Inputs of parts driven above what they tolerate, on any net (GPIO nets included). */
+function inputLevels(netlist: Netlist): Issue[] {
+  const issues: Issue[] = [];
+  for (const part of netlist.parts) {
+    if (part === netlist.controller) continue;
+    for (const pin of part.definition.pins) {
+      if (!INPUT_KINDS.has(pin.kind)) continue;
+      const net = netlist.netOfPin(part, pin.name);
+      if (!net) continue;
+      const tolerance = inputToleranceV(netlist, part, pin);
+      const voltage = netlist.lineVoltage(net, { part, pinName: pin.name });
+      if (tolerance === undefined || voltage === undefined || voltage <= tolerance + 1e-9) continue;
+      issues.push(
+        issue(
+          'error',
+          'level-mismatch',
+          `${label(part, pin.name)} tolerates ${fmtV(tolerance)} but its line reaches ${fmtV(voltage)}`,
+          [pinRef(part, pin.name), ...net.gpios.map((g) => ({ gpio: g.gpio }))],
+        ),
+      );
     }
   }
   return issues;
@@ -310,11 +347,9 @@ function strapLevel(netlist: Netlist, part: ResolvedPart, pin: string): 'high' |
   return 'low';
 }
 
-const hex = (address: number): string => `0x${address.toString(16).toUpperCase().padStart(2, '0')}`;
-
 function i2cRules(netlist: Netlist): Issue[] {
   const issues: Issue[] = [];
-  const buses = new Map<string, { part: ResolvedPart; address: number }[]>();
+  const buses = new Map<string, I2cDevice[]>();
 
   for (const part of netlist.parts) {
     const definition = part.definition;
@@ -369,21 +404,6 @@ function i2cRules(netlist: Netlist): Issue[] {
         }
       }
     }
-    if (
-      addressing.kind === 'software' &&
-      address !== i2c.defaultAddress &&
-      netlist.gpioOfPin(part, addressing.enablePin) === undefined
-    ) {
-      issues.push(
-        issue(
-          'error',
-          'i2c-address-unreachable',
-          `${id} boots at ${hex(i2c.defaultAddress)}; to give it ${hex(address)} the firmware must hold it off the bus with ${addressing.enablePin}, so wire ${addressing.enablePin} to a GPIO`,
-          [pinRef(part, addressing.enablePin)],
-        ),
-      );
-    }
-
     const sdaPin = definition.pins.find((p) => p.kind === 'i2c-sda');
     const sclPin = definition.pins.find((p) => p.kind === 'i2c-scl');
     const sda = sdaPin && netlist.gpioOfPin(part, sdaPin.name);
@@ -402,10 +422,34 @@ function i2cRules(netlist: Netlist): Issue[] {
     if (sda !== undefined && scl !== undefined) {
       const key = `${sda}/${scl}`;
       const bus = buses.get(key) ?? [];
-      bus.push({ part, address });
+      bus.push({ part, address, boot: i2c.defaultAddress, addressing });
       buses.set(key, bus);
     }
   }
+
+  // A GPIO that is SDA (or SCL) for two different buses joins them.
+  for (const line of ['SDA', 'SCL'] as const) {
+    const partners = new Map<string, Set<string>>();
+    for (const key of buses.keys()) {
+      const [sda, scl] = key.split('/') as [string, string];
+      const [mine, other] = line === 'SDA' ? [sda, scl] : [scl, sda];
+      partners.set(mine, new Set([...(partners.get(mine) ?? []), other]));
+    }
+    for (const [gpio, others] of partners) {
+      if (others.size < 2) continue;
+      const otherLine = line === 'SDA' ? 'SCL' : 'SDA';
+      issues.push(
+        issue(
+          'error',
+          'pin-conflict',
+          `GPIO ${gpio} is ${line} for I²C parts whose ${otherLine} is on different GPIOs (${[...others].join(', ')}); a bus needs one SDA and one SCL`,
+          [{ gpio: Number(gpio) }],
+        ),
+      );
+    }
+  }
+
+  for (const devices of buses.values()) issues.push(...bootAddressRule(netlist, devices));
 
   for (const [key, devices] of buses) {
     const byAddress = new Map<number, ResolvedPart[]>();
@@ -423,6 +467,72 @@ function i2cRules(netlist: Netlist): Issue[] {
           parts.map((p) => ({ part: p.instance.instanceId })),
         ),
       );
+    }
+  }
+  return issues;
+}
+
+interface I2cDevice {
+  readonly part: ResolvedPart;
+  readonly address: number;
+  readonly boot: number;
+  readonly addressing: I2cInfo['addressing'];
+}
+
+/**
+ * Software-addressed parts (VL53L0X) all boot at the same address. When two
+ * or more devices on a bus answer at that boot address, the firmware has to
+ * hold every software-addressed one but one off the bus with its enable pin
+ * (none, if a fixed device also sits there), then re-address them in turn.
+ */
+function bootAddressRule(netlist: Netlist, devices: readonly I2cDevice[]): Issue[] {
+  const issues: Issue[] = [];
+  const boots = new Set(devices.filter((d) => d.addressing.kind === 'software').map((d) => d.boot));
+  for (const boot of boots) {
+    const software = devices.filter((d) => d.addressing.kind === 'software' && d.boot === boot);
+    const others = devices.filter((d) => d.addressing.kind !== 'software' && d.address === boot);
+    if (software.length + others.length < 2) continue;
+    const isolated = (d: I2cDevice): boolean =>
+      d.addressing.kind === 'software' &&
+      netlist.gpioOfPin(d.part, d.addressing.enablePin) !== undefined;
+    const stuck = software.filter((d) => !isolated(d));
+    // The one unisolated device is re-addressed first, while the others are
+    // held off; it must leave the boot address so they can come up after it.
+    const allowed = others.length === 0 ? 1 : 0;
+    const lastStuckMoves = stuck.length === 0 || stuck[0]?.address !== boot;
+    if (stuck.length <= allowed && lastStuckMoves) continue;
+    for (const d of stuck) {
+      const pin = d.addressing.kind === 'software' ? d.addressing.enablePin : '';
+      issues.push(
+        issue(
+          'error',
+          'i2c-address-unreachable',
+          `${d.part.instance.instanceId} boots at ${hex(boot)} along with ${software.length + others.length - 1} other device(s) on its bus; wire ${pin} to a GPIO so the firmware can hold it off the bus while it re-addresses the others`,
+          [pinRef(d.part, pin)],
+        ),
+      );
+    }
+  }
+  return issues;
+}
+
+/** Generated header macros that two pins or parts would both define. */
+function macroClashes(netlist: Netlist): Issue[] {
+  const issues: Issue[] = [];
+  const seen = new Map<string, IssueRef>();
+  for (const macro of headerMacros(netlist)) {
+    const first = seen.get(macro.name);
+    if (first) {
+      issues.push(
+        issue(
+          'error',
+          'macro-clash',
+          `${macro.name} would be defined twice in car_config.h; rename an instance id`,
+          [first, macro.ref],
+        ),
+      );
+    } else {
+      seen.set(macro.name, macro.ref);
     }
   }
   return issues;
@@ -489,11 +599,13 @@ export function checkWiring(car: Car, catalog: Catalog): Issue[] {
     ...netlist.wireIssues,
     ...railConflicts(netlist),
     ...gpioRules(netlist),
+    ...inputLevels(netlist),
     ...supplyVoltage(netlist),
     ...railBudget(netlist),
     ...i2cRules(netlist),
     ...unconnectedPins(netlist),
     ...placementRules(netlist),
+    ...macroClashes(netlist),
   ];
 }
 

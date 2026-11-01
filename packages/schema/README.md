@@ -28,11 +28,15 @@ Types are inferred from the Zod schemas, and each schema and its type share a na
   - `pwm-in`: the part receives PWM.
   - `analog-in`: a divider input.
 - **Pin voltage.**
-  - A number: the level a pin presents (outputs, power-out) or expects (inputs).
+  - A number: the level a pin presents (outputs, power-out) or expects (inputs). An input also tolerates up to that level, or up to `maxInputV` if given (e.g. the VL53L0X XSHUT pin: 2.8 V nominal, 3.6 V absolute maximum).
   - `{min, max}`: a varying source, like a battery.
   - `"supply"`: follows whatever the part's power-in pin is connected to.
   - Omitted: the part's `electrical.logicLevelV`.
   - A voltage divider's `OUT` has no voltage of its own: it is `IN × r2 / (r1 + r2)`.
+- **Polarity.**
+  - **Servo:** the output angle is linear in pulse width, `(pulse − pulseNeutralUs) / (pulseMaxUs − pulseMinUs) × travelDeg`, positive above neutral.
+  - **Steering:** front-wheel angle = servo angle × the chassis's `steeringLinkageRatio`, clamped to `maxSteeringAngleDeg`. A **positive ratio means pulses above neutral steer right** (the default chassis); negative means a reversed servo. Firmware maps control-protocol `steer` +1 (right) to `pulseMaxUs` on such a car.
+  - **ESC:** pulses above neutral drive forward.
 - **Pin assignment.** `car.json` maps each part pin to `{gpio: n}` or `{part: <instanceId>, pin: <name>}`. A wire may be declared from either end. GND is a common ground and never needs listing. Instance ids are lowercase C identifiers, because they become macro prefixes.
 - **I²C.** A part's effective address is `i2cAddress ?? i2c.defaultAddress`. Parts using the same SDA and SCL GPIOs share a bus. `addressing` says how the address can change:
   - `fixed`: it can't.
@@ -47,23 +51,24 @@ Errors block Run in Sim; warnings don't. Issues come out in a fixed order. Each 
 |---|---|---|
 | `reference` | error | Unknown part id, pin, GPIO or target part; wrong category in the controller or chassis slot; an I²C address on a part without I²C |
 | `pin-kind-mismatch` | error | A wire between incompatible pins, e.g. a power pin on a GPIO, or a signal on a power rail |
-| `pin-conflict` | error | A GPIO used twice (shared I²C SDA or SCL lines are fine); two GPIOs wired together |
+| `pin-conflict` | error | A GPIO used twice (shared I²C SDA or SCL lines are fine), or one GPIO serving as SDA (or SCL) for two different buses |
 | `rail-conflict` | error | Two power outputs joined, or a rail shorted to ground or a GPIO |
 | `input-only-output` | error | Something the controller must drive, on GPIO 34–39 |
 | `flash-pin` | error | GPIO 6–11 |
 | `uart0-pin` | error | GPIO 1 or 3 |
 | `strapping-pin` | warning | GPIO 0, 2, 5, 12, 15 |
-| `no-adc` | error | An analog output on a GPIO without an ADC |
-| `adc2-wifi` | error | An analog output on an ADC2-only GPIO while `wifi` is on |
-| `level-mismatch` | error | A part driving a GPIO above `gpioMaxInputV` (3.6 V), e.g. a 5 V echo, or a VIN-shifted I²C breakout powered from 5 V |
+| `no-adc` | error | An analog signal on a GPIO without an ADC. A divided *digital* signal, like an HC-SR04 echo through a divider, needs no ADC. |
+| `adc2-wifi` | error | An analog signal on an ADC2-only GPIO while `wifi` is on |
+| `level-mismatch` | error | A part driving a GPIO above `gpioMaxInputV` (3.6 V), e.g. a 5 V echo, or a VIN-shifted I²C breakout powered from 5 V. Also any part input whose line, including the controller's own 3.3 V drive, exceeds what it tolerates. |
 | `supply-voltage` | error | A rail outside a part's `electrical.supplyV`, or a power pin wired to no source |
 | `rail-over-budget` | error / warning | A rail's load over its pin's `maxCurrentMa`: error at typical load, warning when only the peak exceeds it. The load includes downstream rails, through buck efficiency. |
 | `i2c-incomplete` | error | Only one of SDA and SCL on a GPIO |
 | `i2c-address-invalid` | error | An address the part can't take |
-| `i2c-address-unreachable` | error | A software address with no enable pin on a GPIO, or a strap address with the strap pin at the wrong level |
+| `i2c-address-unreachable` | error | When two or more devices on a bus answer at a software-addressed part's boot address: more than one such part without an enable pin on a GPIO, or the one without moving off the boot address (with a fixed device there too, every one needs it). Also a strap address with the strap pin at the wrong level. |
 | `i2c-address-clash` | error | Two parts at one address on one bus |
 | `unconnected-pin` | warning | A pin that is neither `optional`, nor ground, nor power-out, left open |
 | `placement` | error | A sensor without a placement, or a mount point the chassis lacks |
+| `macro-clash` | error | Two parts or pins that would define the same `car_config.h` macro |
 
 ## The car config header
 
@@ -74,7 +79,7 @@ Errors block Run in Sim; warnings don't. Issues come out in a fixed order. Each 
 - `<INSTANCE>_I2C_ADDR 0x..`;
 - `<INSTANCE>_R1_OHM` and `<INSTANCE>_R2_OHM` for dividers.
 
-Names are uppercased; a trailing `+` becomes `_POS` and a trailing `-` becomes `_NEG`. The output depends only on the car and catalog (not on JSON key order), so the same input gives byte-identical text.
+Names are uppercased; a trailing `+` becomes `_POS` and a trailing `-` becomes `_NEG`. Instance ids can't contain `__` or end in `_`, and the `macro-clash` rule catches any remaining collision (e.g. a custom pin named `LEFT_XSHUT` on an instance `tof` next to `tof_left`). Part names are flattened to one line in comments. The output depends only on the car and catalog (not on JSON key order), so the same input gives byte-identical text.
 
 ## Arduino libraries that hal shims
 

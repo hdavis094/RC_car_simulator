@@ -113,6 +113,11 @@
                 "type": "number",
                 "exclusiveMinimum": 0
               },
+              "maxInputV": {
+                "description": "Inputs only: the highest voltage the pin tolerates, when above its nominal level (e.g. 3.6 V absolute maximum on a 2.8 V pin).",
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
               "optional": {
                 "description": "The part works with this pin unconnected (no warning when left open).",
                 "type": "boolean"
@@ -374,6 +379,11 @@
                 "type": "number",
                 "exclusiveMinimum": 0
               },
+              "maxInputV": {
+                "description": "Inputs only: the highest voltage the pin tolerates, when above its nominal level (e.g. 3.6 V absolute maximum on a 2.8 V pin).",
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
               "optional": {
                 "description": "The part works with this pin unconnected (no warning when left open).",
                 "type": "boolean"
@@ -424,8 +434,7 @@
         },
         "steeringLinkageRatio": {
           "type": "number",
-          "exclusiveMinimum": 0,
-          "description": "Front-wheel degrees per degree of steering-servo travel, up to full lock."
+          "description": "Front-wheel degrees per degree of steering-servo travel, up to full lock. Positive: servo pulses above neutral steer right; negative: they steer left (a reversed servo)."
         },
         "driveWheels": {
           "type": "string",
@@ -626,6 +635,11 @@
                 "type": "number",
                 "exclusiveMinimum": 0
               },
+              "maxInputV": {
+                "description": "Inputs only: the highest voltage the pin tolerates, when above its nominal level (e.g. 3.6 V absolute maximum on a 2.8 V pin).",
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
               "optional": {
                 "description": "The part works with this pin unconnected (no warning when left open).",
                 "type": "boolean"
@@ -736,17 +750,19 @@
                     },
                     "addresses": {
                       "minItems": 2,
+                      "maxItems": 2,
                       "type": "array",
                       "items": {
                         "type": "integer",
                         "minimum": 8,
                         "maximum": 119
-                      }
+                      },
+                      "description": "[address with the pin low, address with it high]."
                     },
                     "pin": {
                       "type": "string",
                       "pattern": "^[A-Za-z0-9][A-Za-z0-9_+-]*$",
-                      "description": "Pin that selects the address; high gives the second address."
+                      "description": "Pin that selects the address."
                     }
                   },
                   "required": ["kind", "addresses", "pin"],
@@ -1302,6 +1318,11 @@
                 "type": "number",
                 "exclusiveMinimum": 0
               },
+              "maxInputV": {
+                "description": "Inputs only: the highest voltage the pin tolerates, when above its nominal level (e.g. 3.6 V absolute maximum on a 2.8 V pin).",
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
               "optional": {
                 "description": "The part works with this pin unconnected (no warning when left open).",
                 "type": "boolean"
@@ -1412,17 +1433,19 @@
                     },
                     "addresses": {
                       "minItems": 2,
+                      "maxItems": 2,
                       "type": "array",
                       "items": {
                         "type": "integer",
                         "minimum": 8,
                         "maximum": 119
-                      }
+                      },
+                      "description": "[address with the pin low, address with it high]."
                     },
                     "pin": {
                       "type": "string",
                       "pattern": "^[A-Za-z0-9][A-Za-z0-9_+-]*$",
-                      "description": "Pin that selects the address; high gives the second address."
+                      "description": "Pin that selects the address."
                     }
                   },
                   "required": ["kind", "addresses", "pin"],
@@ -1975,6 +1998,11 @@
               },
               "maxCurrentMa": {
                 "description": "power-out only: the most current the rail may supply.",
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "maxInputV": {
+                "description": "Inputs only: the highest voltage the pin tolerates, when above its nominal level (e.g. 3.6 V absolute maximum on a 2.8 V pin).",
                 "type": "number",
                 "exclusiveMinimum": 0
               },
@@ -2580,6 +2608,11 @@
               },
               "maxCurrentMa": {
                 "description": "power-out only: the most current the rail may supply.",
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "maxInputV": {
+                "description": "Inputs only: the highest voltage the pin tolerates, when above its nominal level (e.g. 3.6 V absolute maximum on a 2.8 V pin).",
                 "type": "number",
                 "exclusiveMinimum": 0
               },

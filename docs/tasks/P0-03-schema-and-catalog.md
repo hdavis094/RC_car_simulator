@@ -74,6 +74,25 @@ UI, sim behaviour implementations (only their parameters live here).
   - **Extra rules** beyond the PRD list: `reference`, `pin-kind-mismatch`, `rail-conflict`, `supply-voltage`, `no-adc`, `i2c-incomplete`, `i2c-address-invalid`, `i2c-address-unreachable`, `unconnected-pin`, `placement`.
   - **The Drive row** (ESC + 540 motor) is one part, `actuator.quicrun-1060-540`, with the `esc-motor` template.
   - **MPU6050 library**: `electroniccats/MPU6050@^1.4.5` (README has the reasons). hal shims its register API, not the DMP.
+- **Review round 1.** Both reviews (Claude `code-review` and Codex adversarial) asked for changes. All blocking findings are fixed, each with new fixtures:
+  - **Macro collisions** (both reviews): `tof__left` and `steering_` collided with `tof_left` and `steering`. Instance ids now forbid `__` and a trailing `_`, and a new `macro-clash` rule checks every emitted name.
+  - **Missing types**: every exported schema now has its inferred type.
+  - **I²C buses**: one SDA GPIO paired with different SCLs is now a `pin-conflict`.
+  - **Boot-address isolation** (both reviews): it is required only when two or more devices answer at the boot address. The one unisolated part must move off that address.
+  - **Over-voltage on inputs outside GPIO nets**, such as 6 V on AD0: the new input-tolerance check covers them, with an optional pin `maxInputV`. XSHUT gets 3.6 V, ST's absolute maximum.
+  - **Divided digital signals** no longer trigger the ADC rules.
+  - **Steering polarity** is now defined: `steeringLinkageRatio` is signed, positive meaning pulses above neutral steer right. The servo mapping is linear.
+
+  Non-blocking findings fixed:
+  - newlines in part names flattened in header comments;
+  - strap addressing limited to exactly 2 addresses;
+  - level-mismatch refs list only driving pins;
+  - regulator and battery params must match their power-out pins;
+  - `BEHAVIOR_TEMPLATES` and `PART_CATEGORIES` derived from the unions;
+  - `findPin` and `hex` shared;
+  - `prettier` and `vitest` declared as devDependencies;
+  - the unreachable two-GPIO branch removed, with the reason in a comment;
+  - Slash track width set to an estimated 240 mm between tyre centres.
 - **Contract change requests**: none (this is the contract).
 - **Open questions**:
   - Several values are unpublished estimates, each flagged in its part's `notes`:

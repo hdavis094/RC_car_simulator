@@ -1,7 +1,7 @@
 import { dividerRatio } from '../behavior.ts';
 import type { Car, Part } from '../car.ts';
 import type { Catalog } from '../catalog.ts';
-import { electricalOf } from '../part-definition.ts';
+import { electricalOf, findPin } from '../part-definition.ts';
 import type {
   ChassisDefinition,
   ControllerDefinition,
@@ -60,7 +60,7 @@ const PART_TO_PART: readonly (readonly [PinKind, PinKind])[] = [
 ];
 
 /** Kinds that set the voltage of the line they are on. */
-const DRIVING_KINDS: ReadonlySet<PinKind> = new Set([
+export const DRIVING_KINDS: ReadonlySet<PinKind> = new Set([
   'power-out',
   'digital-out',
   'analog-out',
@@ -158,7 +158,7 @@ export class Netlist {
 
   /** The net a part pin is on, or undefined if nothing is wired to it. */
   netOfPin(part: ResolvedPart, pinName: string): Net | undefined {
-    const pin = part.definition.pins.find((p) => p.name === pinName);
+    const pin = findPin(part.definition, pinName);
     if (!pin) return undefined;
     return this.#netMap().get(this.#find(endpointKey({ type: 'pin', part, pin })));
   }
@@ -239,6 +239,52 @@ export class Netlist {
     return result;
   }
 
+  /**
+   * The highest voltage on a net including the controller's own outputs:
+   * a GPIO the controller drives (for a digital-in, pwm-in or I²C pin) is at
+   * its logic level. `exclude` leaves one pin out as a driver.
+   */
+  lineVoltage(net: Net, exclude?: { part: ResolvedPart; pinName: string }): number | undefined {
+    const parts = this.netVoltage(net, new Set(), exclude);
+    let max = parts?.max;
+    const drivenByController = net.pins.some(
+      (m) =>
+        (m.pin.kind === 'digital-in' || m.pin.kind === 'pwm-in' || m.pin.kind.startsWith('i2c')) &&
+        !(exclude && m.part === exclude.part && m.pin.name === exclude.pinName),
+    );
+    const level = this.controller && electricalOf(this.controller.definition)?.logicLevelV;
+    if (net.gpios.length > 0 && typeof level === 'number' && (drivenByController || exclude)) {
+      max = Math.max(max ?? 0, level);
+    }
+    return max;
+  }
+
+  /**
+   * Whether a pin carries an analog quantity the controller must measure with
+   * an ADC. A divider OUT is analog only when what drives its IN is (a rail or
+   * an analog output); a divided digital signal, like an HC-SR04 echo, is not.
+   */
+  isAnalog(part: ResolvedPart, pin: PinDefinition, seen = new Set<string>()): boolean {
+    if (pin.kind !== 'analog-out') return false;
+    const definition = part.definition;
+    if (!('behavior' in definition) || definition.behavior.template !== 'voltage-divider')
+      return true;
+    const key = part.instance.instanceId;
+    if (seen.has(key)) return true;
+    seen.add(key);
+    const input = this.netOfPin(part, 'IN');
+    if (!input) return true;
+    const drivers = input.pins.filter(
+      (m) => m.part !== part && DRIVING_KINDS.has(m.pin.kind) && !m.pin.kind.startsWith('i2c'),
+    );
+    if (drivers.length === 0) return true;
+    return drivers.some(
+      (m) =>
+        m.pin.kind === 'power-out' ||
+        (m.pin.kind === 'analog-out' && this.isAnalog(m.part, m.pin, seen)),
+    );
+  }
+
   #reference(part: string, message: string, pin?: string): void {
     this.referenceIssues.push({
       severity: 'error',
@@ -251,7 +297,7 @@ export class Netlist {
   #addWires(part: ResolvedPart): void {
     const id = part.instance.instanceId;
     for (const [pinName, target] of Object.entries(part.instance.pins ?? {})) {
-      const pin = part.definition.pins.find((p) => p.name === pinName);
+      const pin = findPin(part.definition, pinName);
       if (!pin) {
         this.#reference(id, `"${part.definition.id}" has no pin "${pinName}"`, pinName);
         continue;
@@ -290,7 +336,7 @@ export class Netlist {
         this.#reference(id, `wired to its own pin "${target.pin}"`, pinName);
         continue;
       }
-      const otherPin = other.definition.pins.find((p) => p.name === target.pin);
+      const otherPin = findPin(other.definition, target.pin);
       if (!otherPin) {
         this.#reference(id, `"${other.definition.id}" has no pin "${target.pin}"`, pinName);
         continue;

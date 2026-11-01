@@ -21,6 +21,7 @@ export const WiringRuleId = z.enum([
   'i2c-address-clash',
   'unconnected-pin',
   'placement',
+  'macro-clash',
 ]);
 export type WiringRuleId = z.infer<typeof WiringRuleId>;
 

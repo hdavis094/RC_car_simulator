@@ -45,7 +45,8 @@
       "kind": "digital-in",
       "voltage": 2.8,
       "optional": true,
-      "description": "Active-low shutdown, pulled up to 2.8 V on the board, not level-shifted. Drive it open-drain: OUTPUT LOW, or INPUT for high."
+      "description": "Active-low shutdown, pulled up to 2.8 V on the board, not level-shifted (absolute maximum 3.6 V). Drive it open-drain: OUTPUT LOW, or INPUT for high.",
+      "maxInputV": 3.6
     },
     {
       "name": "GPIO1",
@@ -89,5 +90,5 @@
     "https://www.pololu.com/file/0J1187/vl53l0x.pdf",
     "https://www.pololu.com/file/0J1188/vl53l0x-vl53l1x-vl53l3cx-vl53l4cd-time-of-flight-sensor-schematic.pdf"
   ],
-  "notes": "Published: VIN 2.8-5.5 V (Pololu pin table; the prose says 2.6 V); 2.8 V LDO with about 100 mA spare; SDA/SCL shifted to VIN; XSHUT not level-shifted (abs max 3.6 V); default address 0x29, changed in software and lost on reset; 20 mA typical, 40 mA peak; 13 x 18 x 2 mm, 0.5 g. ST datasheet: 25 deg field of view; default mode about 1.2 m range with 33 ms timing budget (about 30 Hz); accuracy 4% (1 sigma) on a white target at 1.2 m. Minimum range 30 mm is Pololu's experience (not specified). rays is a sim choice."
+  "notes": "Published: VIN 2.8-5.5 V (Pololu pin table; the prose says 2.6 V); 2.8 V LDO with about 100 mA spare; SDA/SCL shifted to VIN; XSHUT not level-shifted (ST absolute maximum 3.6 V, so a 3.3 V GPIO is safe; open-drain driving is still recommended); default address 0x29, changed in software and lost on reset; 20 mA typical, 40 mA peak; 13 x 18 x 2 mm, 0.5 g. ST datasheet: 25 deg field of view; default mode about 1.2 m range with 33 ms timing budget (about 30 Hz); accuracy 4% (1 sigma) on a white target at 1.2 m. Minimum range 30 mm is Pololu's experience (not specified). rays is a sim choice."
 }

@@ -14,6 +14,15 @@ import {
   range,
 } from './common.ts';
 
+/** Kinds through which a part receives a signal. */
+export const INPUT_KINDS: ReadonlySet<string> = new Set([
+  'digital-in',
+  'pwm-in',
+  'analog-in',
+  'i2c-sda',
+  'i2c-scl',
+]);
+
 /**
  * What a pin does, seen from the part that has it. `digital-in` means the
  * part reads the line (the controller drives it); `digital-out` means the
@@ -59,6 +68,13 @@ export const PinDefinition = z.strictObject({
     .positive()
     .optional()
     .describe('power-out only: the most current the rail may supply.'),
+  maxInputV: z
+    .number()
+    .positive()
+    .optional()
+    .describe(
+      'Inputs only: the highest voltage the pin tolerates, when above its nominal level (e.g. 3.6 V absolute maximum on a 2.8 V pin).',
+    ),
   optional: z
     .boolean()
     .optional()
@@ -87,8 +103,11 @@ export const I2cInfo = z.strictObject({
       z.strictObject({ kind: z.literal('fixed') }),
       z.strictObject({
         kind: z.literal('strap'),
-        addresses: z.array(I2cAddress).min(2),
-        pin: PinName.describe('Pin that selects the address; high gives the second address.'),
+        addresses: z
+          .array(I2cAddress)
+          .length(2)
+          .describe('[address with the pin low, address with it high].'),
+        pin: PinName.describe('Pin that selects the address.'),
       }),
       z.strictObject({
         kind: z.literal('software'),
@@ -160,8 +179,10 @@ export const ChassisDefinition = z.strictObject({
   maxSteeringAngleDeg: z.number().gt(0).lt(90).describe('Inner front wheel at full lock.'),
   steeringLinkageRatio: z
     .number()
-    .positive()
-    .describe('Front-wheel degrees per degree of steering-servo travel, up to full lock.'),
+    .refine((v) => v !== 0, 'steeringLinkageRatio must not be 0')
+    .describe(
+      'Front-wheel degrees per degree of steering-servo travel, up to full lock. Positive: servo pulses above neutral steer right; negative: they steer left (a reversed servo).',
+    ),
   driveWheels: z.enum(['rear', 'front', 'all']),
   finalDriveRatio: z.number().positive().describe('Motor turns per wheel turn.'),
   centreOfGravityMm: Vec3Mm.describe('Of the chassis alone, in the chassis frame.'),
@@ -202,140 +223,186 @@ export const PassiveDefinition = z.strictObject({
   behavior: Behavior,
 });
 
-export const PART_CATEGORIES = [
-  'controller',
-  'chassis',
-  'actuator',
-  'sensor',
-  'power',
-  'passive',
-] as const;
-export type PartCategory = (typeof PART_CATEGORIES)[number];
+export type ActuatorDefinition = z.infer<typeof ActuatorDefinition>;
+export type SensorDefinition = z.infer<typeof SensorDefinition>;
+export type PowerDefinition = z.infer<typeof PowerDefinition>;
+export type PassiveDefinition = z.infer<typeof PassiveDefinition>;
+
+const partDefinitionUnion = z.discriminatedUnion('category', [
+  ControllerDefinition,
+  ChassisDefinition,
+  ActuatorDefinition,
+  SensorDefinition,
+  PowerDefinition,
+  PassiveDefinition,
+]);
+export type PartCategory = z.infer<typeof partDefinitionUnion>['category'];
+
+/** Every part category, derived from the union so the two can't drift. */
+export const PART_CATEGORIES: readonly PartCategory[] = partDefinitionUnion.options.map(
+  (option) => option.shape.category.value,
+);
+
+const sameRange = (a: { min: number; max: number }, b: { min: number; max: number }): boolean =>
+  Math.abs(a.min - b.min) < 1e-9 && Math.abs(a.max - b.max) < 1e-9;
 
 /** A part definition file: one kind of part. */
-export const PartDefinition = z
-  .discriminatedUnion('category', [
-    ControllerDefinition,
-    ChassisDefinition,
-    ActuatorDefinition,
-    SensorDefinition,
-    PowerDefinition,
-    PassiveDefinition,
-  ])
-  .superRefine((part, ctx) => {
-    const seen = new Map<string, string>();
-    part.pins.forEach((pin, i) => {
-      const key = macroName(pin.name);
-      const clash = seen.get(key);
-      if (clash !== undefined) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['pins', i, 'name'],
-          message: `pin "${pin.name}" clashes with "${clash}" (pin names are case-insensitive)`,
-        });
-      }
-      seen.set(key, pin.name);
-
-      if (pin.kind === 'power-out' && pin.voltage === undefined) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['pins', i, 'voltage'],
-          message: 'a power-out pin needs a voltage',
-        });
-      }
-      if (pin.maxCurrentMa !== undefined && pin.kind !== 'power-out') {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['pins', i, 'maxCurrentMa'],
-          message: 'only power-out pins have a current budget',
-        });
-      }
-      if (typeof pin.voltage === 'object' && pin.kind !== 'power-out') {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['pins', i, 'voltage'],
-          message: 'only power-out pins have a voltage range',
-        });
-      }
-    });
-
-    const powerIns = part.pins.filter((pin) => pin.kind === 'power-in');
-    const usesSupply =
-      part.pins.some((pin) => pin.voltage === 'supply') ||
-      electricalOf(part)?.logicLevelV === 'supply';
-    if (usesSupply && powerIns.length !== 1) {
+export const PartDefinition = partDefinitionUnion.superRefine((part, ctx) => {
+  const seen = new Map<string, string>();
+  part.pins.forEach((pin, i) => {
+    const key = macroName(pin.name);
+    const clash = seen.get(key);
+    if (clash !== undefined) {
       ctx.addIssue({
         code: 'custom',
-        path: ['pins'],
-        message: 'a part whose pins follow its supply needs exactly one power-in pin',
+        path: ['pins', i, 'name'],
+        message: `pin "${pin.name}" clashes with "${clash}" (pin names are case-insensitive)`,
       });
     }
+    seen.set(key, pin.name);
 
-    if ('behavior' in part && part.behavior.template === 'voltage-divider') {
-      for (const [name, kind] of [
-        ['IN', 'analog-in'],
-        ['OUT', 'analog-out'],
-      ] as const) {
-        if (!part.pins.some((pin) => pin.name === name && pin.kind === kind)) {
-          ctx.addIssue({
-            code: 'custom',
-            path: ['pins'],
-            message: `a voltage divider needs an ${kind} pin named ${name}`,
-          });
-        }
-      }
-    }
-
-    if ('i2c' in part && part.i2c) {
-      const addressing = part.i2c.addressing;
-      const pinName = addressing.kind === 'software' ? addressing.enablePin : undefined;
-      const strapPin = addressing.kind === 'strap' ? addressing.pin : undefined;
-      for (const name of [pinName, strapPin]) {
-        if (name !== undefined && !part.pins.some((pin) => pin.name === name)) {
-          ctx.addIssue({
-            code: 'custom',
-            path: ['i2c', 'addressing'],
-            message: `i2c addressing names pin "${name}", which the part does not have`,
-          });
-        }
-      }
-      if (addressing.kind === 'strap' && addressing.addresses[0] !== part.i2c.defaultAddress) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['i2c', 'addressing', 'addresses'],
-          message: 'the first strap address must be the default address',
-        });
-      }
-    }
-
-    if (part.category === 'controller') {
-      const gpios = new Set<number>();
-      part.gpios.forEach((gpio, i) => {
-        if (gpios.has(gpio.gpio)) {
-          ctx.addIssue({
-            code: 'custom',
-            path: ['gpios', i, 'gpio'],
-            message: `GPIO ${gpio.gpio} is listed twice`,
-          });
-        }
-        gpios.add(gpio.gpio);
+    if (pin.kind === 'power-out' && pin.voltage === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['pins', i, 'voltage'],
+        message: 'a power-out pin needs a voltage',
       });
     }
-
-    if (part.category === 'chassis') {
-      const mounts = new Set<string>();
-      part.mountPoints.forEach((mount, i) => {
-        if (mounts.has(mount.id)) {
-          ctx.addIssue({
-            code: 'custom',
-            path: ['mountPoints', i, 'id'],
-            message: `mount point "${mount.id}" is listed twice`,
-          });
-        }
-        mounts.add(mount.id);
+    if (pin.maxCurrentMa !== undefined && pin.kind !== 'power-out') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['pins', i, 'maxCurrentMa'],
+        message: 'only power-out pins have a current budget',
+      });
+    }
+    if (pin.maxInputV !== undefined && !INPUT_KINDS.has(pin.kind)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['pins', i, 'maxInputV'],
+        message: 'only input pins have maxInputV',
+      });
+    }
+    if (typeof pin.voltage === 'object' && pin.kind !== 'power-out') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['pins', i, 'voltage'],
+        message: 'only power-out pins have a voltage range',
       });
     }
   });
+
+  const powerIns = part.pins.filter((pin) => pin.kind === 'power-in');
+  const usesSupply =
+    part.pins.some((pin) => pin.voltage === 'supply') ||
+    electricalOf(part)?.logicLevelV === 'supply';
+  if (usesSupply && powerIns.length !== 1) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['pins'],
+      message: 'a part whose pins follow its supply needs exactly one power-in pin',
+    });
+  }
+
+  if ('behavior' in part && part.behavior.template === 'regulator') {
+    const { outputV, maxCurrentMa } = part.behavior.params;
+    const outputs = part.pins.filter((pin) => pin.kind === 'power-out');
+    if (
+      outputs.length !== 1 ||
+      outputs[0]?.voltage !== outputV ||
+      outputs[0]?.maxCurrentMa !== maxCurrentMa
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['pins'],
+        message: `a regulator needs one power-out pin with voltage ${outputV} and maxCurrentMa ${maxCurrentMa}, matching its params`,
+      });
+    }
+  }
+
+  if ('behavior' in part && part.behavior.template === 'battery') {
+    const { cells, cellEmptyV, cellFullV, capacityMah, maxContinuousC } = part.behavior.params;
+    const expected = { min: cells * cellEmptyV, max: cells * cellFullV };
+    const outputs = part.pins.filter((pin) => pin.kind === 'power-out');
+    const out = outputs[0];
+    if (
+      outputs.length !== 1 ||
+      typeof out?.voltage !== 'object' ||
+      !sameRange(out.voltage, expected) ||
+      out.maxCurrentMa !== capacityMah * maxContinuousC
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['pins'],
+        message: `a battery needs one power-out pin with voltage {min: ${expected.min}, max: ${expected.max}} and maxCurrentMa ${capacityMah * maxContinuousC}, matching its params`,
+      });
+    }
+  }
+
+  if ('behavior' in part && part.behavior.template === 'voltage-divider') {
+    for (const [name, kind] of [
+      ['IN', 'analog-in'],
+      ['OUT', 'analog-out'],
+    ] as const) {
+      if (!part.pins.some((pin) => pin.name === name && pin.kind === kind)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['pins'],
+          message: `a voltage divider needs an ${kind} pin named ${name}`,
+        });
+      }
+    }
+  }
+
+  if ('i2c' in part && part.i2c) {
+    const addressing = part.i2c.addressing;
+    const pinName = addressing.kind === 'software' ? addressing.enablePin : undefined;
+    const strapPin = addressing.kind === 'strap' ? addressing.pin : undefined;
+    for (const name of [pinName, strapPin]) {
+      if (name !== undefined && !part.pins.some((pin) => pin.name === name)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['i2c', 'addressing'],
+          message: `i2c addressing names pin "${name}", which the part does not have`,
+        });
+      }
+    }
+    if (addressing.kind === 'strap' && addressing.addresses[0] !== part.i2c.defaultAddress) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['i2c', 'addressing', 'addresses'],
+        message: 'the first strap address must be the default address',
+      });
+    }
+  }
+
+  if (part.category === 'controller') {
+    const gpios = new Set<number>();
+    part.gpios.forEach((gpio, i) => {
+      if (gpios.has(gpio.gpio)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['gpios', i, 'gpio'],
+          message: `GPIO ${gpio.gpio} is listed twice`,
+        });
+      }
+      gpios.add(gpio.gpio);
+    });
+  }
+
+  if (part.category === 'chassis') {
+    const mounts = new Set<string>();
+    part.mountPoints.forEach((mount, i) => {
+      if (mounts.has(mount.id)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['mountPoints', i, 'id'],
+          message: `mount point "${mount.id}" is listed twice`,
+        });
+      }
+      mounts.add(mount.id);
+    });
+  }
+});
 export type PartDefinition = z.infer<typeof PartDefinition>;
 
 /** Looks up a pin of a part definition by its exact name. */
