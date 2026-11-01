@@ -6,7 +6,6 @@ export { LineSplitter } from './lines.ts';
 export {
   ControlClient,
   DEFAULT_RECONNECT,
-  type ConnectionState,
   type ControlClientEvents,
   type ControlClientOptions,
   type ReconnectOptions,

@@ -7,13 +7,12 @@ import {
   encodeLine,
   parseCarLine,
   type ClientMessage,
+  type ConnectionState,
   type Hello,
   type Log,
   type Mode,
   type Telemetry,
 } from './messages.ts';
-
-export type ConnectionState = 'idle' | 'connecting' | 'connected' | 'waiting' | 'closed';
 
 export interface ReconnectOptions {
   /** First delay after a failed or lost connection. */

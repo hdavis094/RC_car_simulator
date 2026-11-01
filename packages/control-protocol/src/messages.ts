@@ -1,13 +1,17 @@
 import { z } from 'zod';
 
 // Control protocol v1. SPEC.md is normative. Objects are not strict:
-// unknown fields are stripped, so newer peers can add fields.
+// unknown fields are stripped, so newer peers can add fields. This module is
+// Node-free (`@rcsim/control-protocol/messages`), for renderer code.
 
 export const PROTOCOL_VERSION = 1;
 export const DEFAULT_PORT = 3333;
 export const FAILSAFE_MS = 500;
 export const TELEMETRY_INTERVAL_MS = 50;
 export const MAX_LINE_BYTES = 4096;
+
+/** ControlClient's connection state. Here so renderer code can import it without Node. */
+export type ConnectionState = 'idle' | 'connecting' | 'connected' | 'waiting' | 'closed';
 
 export const Mode = z.enum(['manual', 'auto']);
 export type Mode = z.infer<typeof Mode>;

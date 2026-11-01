@@ -5,7 +5,8 @@
   "description": "JSON-lines car control protocol (laptop <-> car) and its TS client",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./messages": "./src/messages.ts"
   },
   "scripts": {
     "test": "vitest run",
