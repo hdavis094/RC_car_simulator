@@ -8,6 +8,7 @@ import type {
   CatalogProblem,
   Obstacle,
   PartDefinition,
+  Track,
   World as WorldFile,
 } from '@rcsim/schema';
 import type {
@@ -156,7 +157,10 @@ export interface RunStartOptions {
 
 export interface RunInfo {
   readonly runId: string;
-  readonly state: 'running' | 'paused' | 'ended';
+  /** `starting` while checking wiring, building and launching the firmware. */
+  readonly state: 'starting' | 'running' | 'paused' | 'ended';
+  /** The world's track, for `worldEdit.loadTrack`. */
+  readonly trackId: string;
   readonly speed: RunSpeed;
   readonly seed: number;
   /** Set once the run has ended. */
@@ -166,16 +170,20 @@ export interface RunInfo {
 
 export interface RunApi {
   /**
-   * Starts the last successful sim build in the world. Rejects with code
-   * `wiring-errors` if checkWiring reports errors, `no-build` without a
-   * build, `busy` if a run is active.
+   * Run in Sim, the whole action: checks the wiring (rejects with
+   * `wiring-errors`), builds the sim firmware if any source or car.json
+   * changed since the last successful build (progress on `build.onEvent`;
+   * rejects with `build-failed`), then starts the run. Rejects with `busy` if
+   * a run is active. `onStatus` reports `starting` meanwhile.
    */
   start(options: RunStartOptions): Promise<RunInfo>;
   stop(): Promise<void>;
   pause(): Promise<void>;
   resume(): Promise<void>;
-  /** While paused: advances `ticks` ticks (default 1). */
+  /** While paused: advances `ticks` ticks (default 1). Rejects with `busy` while running. */
   step(ticks?: number): Promise<void>;
+  /** Reboots the firmware while the world carries on, like pressing EN on the ESP32. */
+  restartFirmware(): Promise<void>;
   setSpeed(speed: RunSpeed): Promise<void>;
   info(): Promise<RunInfo | null>;
   /** Text to the firmware's Serial RX (the Serial Monitor's send line). */
@@ -198,6 +206,10 @@ export interface RunApi {
  * live world (and a snapshot follows); while running they reject with `busy`.
  */
 export interface WorldEditApi {
+  /** Ids of the built-in tracks (`oval`, `technical`). */
+  listTracks(): Promise<readonly string[]>;
+  /** A built-in track, for drawing the track mesh. Rejects with `not-found`. */
+  loadTrack(id: string): Promise<Track>;
   /** Project-relative paths of `worlds/*.json`. */
   listLayouts(): Promise<readonly string[]>;
   load(path: string): Promise<WorldFile>;
@@ -281,8 +293,20 @@ export const IPC_METHODS = {
   catalog: ['list', 'saveCustomPart'],
   build: ['start', 'cancel'],
   pty: ['spawn', 'write', 'resize', 'kill'],
-  run: ['start', 'stop', 'pause', 'resume', 'step', 'setSpeed', 'info', 'sendSerial'],
+  run: [
+    'start',
+    'stop',
+    'pause',
+    'resume',
+    'step',
+    'restartFirmware',
+    'setSpeed',
+    'info',
+    'sendSerial',
+  ],
   worldEdit: [
+    'listTracks',
+    'loadTrack',
     'listLayouts',
     'load',
     'save',
@@ -329,6 +353,7 @@ export type IpcErrorCode =
   | 'invalid'
   | 'wiring-errors'
   | 'no-build'
+  | 'build-failed'
   | 'no-run'
   | 'busy'
   | 'io'

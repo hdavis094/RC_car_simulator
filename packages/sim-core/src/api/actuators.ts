@@ -40,5 +40,9 @@ export interface ActuatorModel {
   update(nowUs: number): ActuatorOutput;
 }
 
-/** Builds the model for an actuator part (`servo`, `esc-motor`). Implemented by P1-A. */
+/**
+ * Builds the model for an actuator part (`servo`, `esc-motor`). The Run
+ * creates models only for parts whose signal pin reaches a GPIO; an unwired
+ * actuator does nothing. Implemented by P1-A.
+ */
 export type CreateActuatorModel = (part: PartContext) => ActuatorModel;

@@ -20,6 +20,7 @@ import { FakeClock } from './fake-clock.ts';
 import { createFakeActuatorModel, createFakeSensorModel } from './fake-models.ts';
 import { FakeWorld } from './fake-world.ts';
 import { createRngStreams } from './rng.ts';
+import type { RngStreams } from '../clock.ts';
 
 const ACTUATOR_TEMPLATES = new Set(['servo', 'esc-motor']);
 const SENSOR_TEMPLATES = new Set(['distance-raycast', 'imu']);
@@ -40,8 +41,11 @@ export function deviceKindOf(part: PartContext): string | null {
   return null;
 }
 
-/** Every part's PartContext, in car.json order. */
-export function partContexts(options: Pick<RunOptions, 'car' | 'catalog'>): PartContext[] {
+/** Every part's PartContext, in car.json order. `rng` supplies each part's own streams. */
+export function partContexts(
+  options: Pick<RunOptions, 'car' | 'catalog'>,
+  rng: RngStreams = createRngStreams(0),
+): PartContext[] {
   const chassis = options.catalog.get(options.car.chassis.partId);
   if (chassis?.category !== 'chassis')
     throw new Error(`no chassis "${options.car.chassis.partId}"`);
@@ -57,6 +61,12 @@ export function partContexts(options: Pick<RunOptions, 'car' | 'catalog'>): Part
         definition,
         chassis: chassis as ChassisDefinition,
         gpioPins: pins[instance.instanceId] ?? {},
+        stream: (suffix?: string) =>
+          rng.stream(
+            suffix === undefined
+              ? `sensor:${instance.instanceId}`
+              : `sensor:${instance.instanceId}:${suffix}`,
+          ),
       },
     ];
   });
@@ -79,11 +89,11 @@ export async function createFakeRun(
   const createSensor: CreateSensorModel =
     options.createSensorModel ?? ((part) => createFakeSensorModel(part));
 
-  const contexts = partContexts(options);
+  const contexts = partContexts(options, rng);
   const template = (p: PartContext): string =>
     'behavior' in p.definition ? p.definition.behavior.template : '';
   const actuators: ActuatorModel[] = contexts
-    .filter((p) => ACTUATOR_TEMPLATES.has(template(p)))
+    .filter((p) => ACTUATOR_TEMPLATES.has(template(p)) && Object.keys(p.gpioPins).length > 0)
     .map(createActuator);
   const sensorParts = contexts.filter(
     (p) =>
@@ -129,11 +139,14 @@ export async function createFakeRun(
   let collisions = 0;
   let lastCollision: string | null = null;
 
+  /** Ends the run once; later reasons are ignored (a stop beats the failure it causes). */
   const finish = (why: RunEnd): void => {
+    if (status === 'ended') return;
     status = 'ended';
     end = why;
     for (const listener of listeners.end) listener(why);
   };
+  let stepping = false;
 
   const tick = async (): Promise<boolean> => {
     const t0Us = clock.nowUs;
@@ -160,12 +173,15 @@ export async function createFakeRun(
     try {
       output = await source.step(input);
     } catch (error) {
-      if (error instanceof ActuatorSourceEnded) {
-        finish(error.end);
-        return false;
-      }
-      throw error;
+      finish(
+        error instanceof ActuatorSourceEnded
+          ? error.end
+          : { kind: 'error', message: error instanceof Error ? error.message : String(error) },
+      );
+      return false;
     }
+    // stop() may have run while the source was busy: do nothing more.
+    if (status === 'ended') return false;
     if (output.serialTx.length > 0) for (const l of listeners.serial) l(output.serialTx, t0Us);
     for (const line of output.logs) for (const l of listeners.log) l(line, t0Us);
     for (const event of output.netEvents) for (const l of listeners.net) l(event, t0Us);
@@ -203,7 +219,7 @@ export async function createFakeRun(
           dtUs: clock.tickUs,
           world,
           vehicle: state,
-          rng: rng.stream(`sensor:${sensor.instanceId}`),
+          rng: rng.stream(`sensor:${sensor.instanceId}`), // = PartContext.stream()
         })
         .map((reading) => ({ ...reading, instanceId: sensor.instanceId })),
     );
@@ -222,11 +238,17 @@ export async function createFakeRun(
       return end;
     },
     async step(ticks = 1): Promise<RunStepResult> {
+      if (stepping) throw new Error('Run.step called while a previous step is pending');
+      stepping = true;
       let done = 0;
-      while (done < ticks && status !== 'ended') {
-        status = 'running';
-        if (!(await tick())) break;
-        done += 1;
+      try {
+        while (done < ticks && status !== 'ended') {
+          status = 'running';
+          if (!(await tick())) break;
+          done += 1;
+        }
+      } finally {
+        stepping = false;
       }
       return { ticks: done, status, end };
     },
@@ -263,9 +285,13 @@ export async function createFakeRun(
       set.add(listener);
       return () => set.delete(listener);
     },
+    async restartFirmware(): Promise<void> {
+      if (!source.restart) throw new Error('this actuator source cannot restart');
+      await source.restart();
+    },
     async stop(): Promise<void> {
+      finish({ kind: 'stopped' });
       await source.stop();
-      if (status !== 'ended') finish({ kind: 'stopped' });
     },
   };
 }

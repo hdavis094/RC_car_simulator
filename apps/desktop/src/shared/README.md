@@ -29,7 +29,7 @@ The preload exposes exactly this object as `window.rcsim`, and main implements i
 - **project:** files live in a `Map`. The default is the example car, its generated header, a stub `src/main.cpp` and `platformio.ini`. `writeCar` writes `car.json` and regenerates `include/car_config.h` byte-identically to `generateCarConfigHeader`.
 - **catalog:** the built-in parts plus every valid `parts/*.json`. `saveCustomPart` validates with `PartDefinition` and fires `onChange`.
 - **build:** reports the diagnostics set with `setBuildDiagnostics` (none means success), as one `output` event and one `done` event.
-- **run / worldEdit:** `start` loads the world; `pause`, `resume`, `stop` and `setSpeed` fire `onStatus`. Obstacle edits change the live layout returned by `currentLayout()`. Use `emit.snapshot(snapshot)` to drive views. Real snapshots come from `@rcsim/sim-core/stubs` (`createFakeRun`).
+- **run / worldEdit:** `start` loads the world. It doesn't build, whereas main's `start` checks the wiring and builds first. `listTracks`/`loadTrack` serve `FAKE_OVAL`, or `options.tracks`. Live edits and `step` need the run paused (`busy` otherwise), `stop` clears the live layout, and results are cloned as real IPC would. `pause`, `resume`, `stop` and `setSpeed` fire `onStatus`. Obstacle edits change the live layout returned by `currentLayout()`. Use `emit.snapshot(snapshot)` to drive views. Real snapshots come from `@rcsim/sim-core/stubs` (`createFakeRun`).
 - **control:** commands are recorded, and return false until `connect`. Use `emit.controlMessage(telemetry)` for incoming messages.
 - **pty:** `write` echoes the data back as `onData`.
 

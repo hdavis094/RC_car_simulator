@@ -68,12 +68,10 @@ export interface Vehicle {
   /** State after the last `World.step`. */
   state(): VehicleState;
   /**
-   * World pose of a point fixed to the chassis: a mount point plus a
-   * placement, in chassis-frame mm and degrees (schema conventions).
+   * World pose of a frame fixed to the chassis: `offsetM` in the chassis
+   * frame, then `yawRad` about the chassis Y axis (positive left) and
+   * `pitchRad` about the resulting X axis (positive up). SI: convert a mount
+   * point plus placement (mm, degrees in car.json) before calling.
    */
-  chassisToWorld(
-    offsetMm: { x: number; y: number; z: number },
-    yawDeg: number,
-    pitchDeg: number,
-  ): Pose;
+  chassisToWorld(offsetM: Vec3, yawRad: number, pitchRad: number): Pose;
 }

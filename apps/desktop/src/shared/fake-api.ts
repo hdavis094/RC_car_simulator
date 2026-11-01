@@ -15,6 +15,7 @@ import {
   exampleCar,
   generateCarConfigHeader,
   type CatalogProblem,
+  type Track,
   type World as WorldFile,
 } from '@rcsim/schema';
 import {
@@ -57,7 +58,29 @@ export interface FakeApiOptions {
   /** Diagnostics the next builds report (empty = success). */
   readonly buildDiagnostics?: readonly Diagnostic[];
   readonly platform?: RcsimApi['platform'];
+  /** Built-in tracks by id. Default: a small rectangular `oval`. */
+  readonly tracks?: Record<string, Track>;
 }
+
+/** A small stand-in for the real oval: a 6 × 3 m loop. */
+export const FAKE_OVAL: Track = {
+  schemaVersion: 1,
+  id: 'oval',
+  name: 'Oval (fake)',
+  centreline: {
+    kind: 'catmull-rom',
+    pointsM: [
+      { x: 0, z: 0 },
+      { x: 0, z: -6 },
+      { x: 3, z: -6 },
+      { x: 3, z: 0 },
+    ],
+  },
+  widthM: 1.2,
+  wallHeightM: 0.2,
+  startFinish: { point: 0 },
+  start: { positionM: { x: 0, z: -0.5 }, yawDeg: 0 },
+};
 
 /** The fake API plus handles for tests to drive and inspect it. */
 export interface FakeApi {
@@ -93,6 +116,9 @@ export function createFakeRcsimApi(options: FakeApiOptions = {}): FakeApi {
   let buildDiagnostics = options.buildDiagnostics ?? [];
   let project: ProjectInfo | null = { dir, name: 'Fake car' };
   let nextId = 1;
+  const tracks = options.tracks ?? { oval: FAKE_OVAL };
+  // Results are cloned, as real IPC structured-clones them: mutating one can't change the fake.
+  const clone = <T>(value: T): T => structuredClone(value);
 
   const ev = {
     fileChange: new Set() as Listeners<[FileChange]>,
@@ -206,7 +232,7 @@ export function createFakeRcsimApi(options: FakeApiOptions = {}): FakeApi {
         try {
           const car = Car.safeParse(JSON.parse(raw));
           return car.success
-            ? { ok: true, car: car.data }
+            ? { ok: true, car: clone(car.data) }
             : { ok: false, raw, error: car.error.issues[0]?.message ?? 'invalid car.json' };
         } catch (error) {
           return { ok: false, raw, error: String(error) };
@@ -245,7 +271,7 @@ export function createFakeRcsimApi(options: FakeApiOptions = {}): FakeApi {
     },
     catalog: {
       async list() {
-        return listing();
+        return clone(listing());
       },
       async saveCustomPart(definition) {
         record('catalog', 'saveCustomPart', [definition]);
@@ -254,6 +280,9 @@ export function createFakeRcsimApi(options: FakeApiOptions = {}): FakeApi {
           throw new Error(
             ipcErrorMessage('invalid', parsed.error.issues[0]?.message ?? 'invalid part'),
           );
+        }
+        if (defaultCatalog.has(parsed.data.id)) {
+          throw new Error(ipcErrorMessage('invalid', `"${parsed.data.id}" is a built-in part id`));
         }
         const path = `parts/${parsed.data.id}.json`;
         write(path, `${JSON.stringify(parsed.data, null, 2)}\n`);
@@ -321,6 +350,7 @@ export function createFakeRcsimApi(options: FakeApiOptions = {}): FakeApi {
           runId: `run-${nextId++}`,
           state: startOptions.paused ? 'paused' : 'running',
           speed: startOptions.speed ?? 1,
+          trackId: liveWorld.trackId,
           seed: startOptions.seed,
           end: null,
           netMappings: [
@@ -331,6 +361,7 @@ export function createFakeRcsimApi(options: FakeApiOptions = {}): FakeApi {
       },
       async stop() {
         record('run', 'stop', []);
+        liveWorld = null;
         if (run) setRun({ ...run, state: 'ended', end: { kind: 'stopped' } });
       },
       async pause() {
@@ -345,12 +376,16 @@ export function createFakeRcsimApi(options: FakeApiOptions = {}): FakeApi {
         record('run', 'step', [ticks ?? 1]);
         needPaused('step');
       },
+      async restartFirmware() {
+        record('run', 'restartFirmware', []);
+        needRun();
+      },
       async setSpeed(speed: RunSpeed) {
         record('run', 'setSpeed', [speed]);
         setRun({ ...needRun(), speed });
       },
       async info() {
-        return run;
+        return clone(run);
       },
       async sendSerial(text) {
         record('run', 'sendSerial', [text]);
@@ -362,6 +397,14 @@ export function createFakeRcsimApi(options: FakeApiOptions = {}): FakeApi {
       onStatus: (listener) => subscribe(ev.status, listener),
     },
     worldEdit: {
+      async listTracks() {
+        return Object.keys(tracks).sort();
+      },
+      async loadTrack(id) {
+        const track = tracks[id];
+        if (!track) throw new Error(ipcErrorMessage('not-found', `no track "${id}"`));
+        return clone(track);
+      },
       async listLayouts() {
         return [...files.keys()]
           .filter((p) => p.startsWith('worlds/') && p.endsWith('.json'))
@@ -369,7 +412,7 @@ export function createFakeRcsimApi(options: FakeApiOptions = {}): FakeApi {
       },
       async load(path) {
         record('worldEdit', 'load', [path]);
-        return World.parse(JSON.parse(read(path)));
+        return clone(World.parse(JSON.parse(read(path))));
       },
       async save(path, world) {
         record('worldEdit', 'save', [path, world]);
@@ -378,7 +421,14 @@ export function createFakeRcsimApi(options: FakeApiOptions = {}): FakeApi {
       async addObstacle(obstacle) {
         record('worldEdit', 'addObstacle', [obstacle]);
         const layout = editable('adding an obstacle');
-        const id = obstacle.id ?? `obstacle-${nextId++}`;
+        const taken = new Set(layout.obstacles.map((o) => o.id));
+        if (obstacle.id !== undefined && taken.has(obstacle.id)) {
+          throw new Error(
+            ipcErrorMessage('invalid', `obstacle id "${obstacle.id}" is already used`),
+          );
+        }
+        let id = obstacle.id ?? `obstacle-${nextId++}`;
+        while (obstacle.id === undefined && taken.has(id)) id = `obstacle-${nextId++}`;
         liveWorld = { ...layout, obstacles: [...layout.obstacles, { ...obstacle, id }] };
         return id;
       },
@@ -402,7 +452,7 @@ export function createFakeRcsimApi(options: FakeApiOptions = {}): FakeApi {
       },
       async currentLayout() {
         if (!liveWorld) throw new Error(ipcErrorMessage('no-run', 'no run is active'));
-        return liveWorld;
+        return clone(liveWorld);
       },
     },
     control: {

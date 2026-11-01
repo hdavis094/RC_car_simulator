@@ -77,6 +77,8 @@ export function createFakeSensorModel(
     instanceId: part.instance.instanceId,
     template: behavior.template,
     update(context: SensorContext): readonly SensorReading[] {
+      // The HC-SR04's device kind has no readings: it answers with GPIO edges.
+      if (definition.id.includes('hc-sr04')) return [];
       const out: SensorReading[] = [];
       while (nextUs < context.nowUs) {
         out.push(reading(nextUs));

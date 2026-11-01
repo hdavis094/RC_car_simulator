@@ -12,7 +12,7 @@ A headless, deterministic simulation in which a car built from `car.json` drives
 
 ## Owned paths
 
-`packages/sim-core/src/{clock,world,vehicle,actuators,scenario}/`, `packages/sim-core/assets/`
+`packages/sim-core/src/{clock,world,vehicle,actuators,run,scenario}/`, `packages/sim-core/src/index.ts`, `packages/sim-core/assets/`, and adding your dependencies and the `rcsim` bin to `packages/sim-core/package.json`
 
 ## Read first
 
@@ -34,7 +34,7 @@ A headless, deterministic simulation in which a car built from `car.json` drives
 5. **Actuators**:
    - servo (pulse → target angle, slew-limited)
    - ESC (no output until neutral is held for the arming time, deadband, throttle curve; no reverse logic in stage 1)
-6. **Scripted `ActuatorSource`**: a timeline of `{tUs, pin, pulseUs}`.
+6. **Scripted `ActuatorSource`**: a timeline of `ScriptedPwm` entries, `{tUs, gpio, pulseUs}`. Also the `TrackLibrary` (`assets/tracks/<id>.json` by id).
 7. **`Run`**: assemble the clock, world, vehicle and actuators. Expose `step(n)` and `snapshot()`.
 8. **Scenario CLI** `rcsim`:
    - `run --car <car.json> --world <world.json> --seconds N --seed S --script <timeline.json> --assert <expr>...`

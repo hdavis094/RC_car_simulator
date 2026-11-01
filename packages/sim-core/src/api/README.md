@@ -7,11 +7,11 @@ These are the interfaces between the parts of sim-core. P1-A (clock, world, vehi
 | File | Interface | Implemented by |
 |---|---|---|
 | `clock.ts` | `SimClock`; `Rng` and `RngStreams` (named, seeded streams) | P1-A (or adopt `stubs/rng.ts`) |
-| `world.ts` | `World`: physics step, raycasts, obstacle editing, `toWorldFile()`; `CreateWorld` | P1-A |
+| `world.ts` | `World`: physics step, raycasts, obstacle editing, `toWorldFile()`; `CreateWorld`; `TrackLibrary` (built-in tracks by id) | P1-A |
 | `vehicle.ts` | `Vehicle`, `VehicleCommand`, `VehicleState`, `WheelState` | P1-A |
 | `actuators.ts` | `ActuatorModel` (PWM → `ActuatorOutput`); `CreateActuatorModel` | P1-A |
 | `sensors.ts` | `SensorModel` (`update` → readings, plus GPIO hooks for the HC-SR04); `CreateSensorModel` | P1-B |
-| `actuator-source.ts` | `ActuatorSource` (STEP in, STEP_DONE out); `ScriptedPwm`; `ActuatorSourceEnded` | P1-H (firmware); P1-A (scripted) |
+| `actuator-source.ts` | `ActuatorSource` (STEP in, STEP_DONE out, optional `restart`); `ScriptedPwm`; `CreateFirmwareSource`; `ActuatorSourceEnded` | P1-H (firmware); P1-A (scripted) |
 | `run.ts` | `Run`, `RunOptions`, `RunEvents`, `CreateRun` | P1-A |
 | `snapshot.ts` | `StateSnapshot`, what the renderer draws | P1-A (via `Run.snapshot()`) |
 | `scenario.ts` | `ScenarioSpec`, `ScenarioResult`, `parseAssertion` | P1-A (CLI), P1-H (`--firmware`, `--control`) |
@@ -26,9 +26,16 @@ These are the interfaces between the parts of sim-core. P1-A (clock, world, vehi
   - `motorDuty`: positive drives forward.
   - The servo model applies the chassis's signed `steeringLinkageRatio`: `steerAngleRad = −θservo × ratio × π/180`. With the default positive ratio, a pulse above neutral steers right.
 - **Determinism.**
-  - All time comes from `SimClock`, and all randomness from `RngStreams.stream(name)`.
-  - A sensor uses `sensor:<instanceId>`, plus suffixes such as `sensor:imu:bias` for anything else. Never share a stream.
+  - All time comes from `SimClock`, and all randomness from named streams.
+  - A part draws only from its own: `PartContext.stream()` is `sensor:<instanceId>`, the same object `SensorContext.rng` gives `update`. `stream('bias')` is `sensor:<instanceId>:bias`.
+  - Draw per-run constants from a suffixed stream so the noise sequence never shifts.
   - Iterate parts in `car.json` order.
+- **Only wired parts get models.** An actuator needs its signal pin on a GPIO. A sensor needs at least one GPIO-wired pin.
+- **HC-SR04.** Its device kind has no readings: `update` returns `[]`, and the part answers with ECHO edges via `onGpioWrite`/`takeGpioEdges`. The response to a write made during tick n starts no earlier than tick n+1, and is shifted whole so the pulse widths are kept (`sensors.ts`).
+- **Lifecycle.**
+  - Never call `Run.step` concurrently.
+  - `stop()` may come during a step, and the run ends exactly once.
+  - `restartFirmware()` reboots the firmware while the world carries on.
 
 ## One tick
 
@@ -53,7 +60,7 @@ A `Run` is unpaced. Pause, single-step and speed belong to the caller (the app's
 | P1-B | a Rng | `createRngStreams(seed).stream('sensor:x')` |
 | P1-H, testing the bridge before P1-A lands | a Run to plug the firmware into | `createFakeRun({ …, source: yourBridge })` |
 | P1-F / P2-01, needing snapshots | a moving car | `createFakeRun` with a `FakeActuatorSource` holding full throttle, then `run.snapshot()` |
-| anyone | the PartContext of each part | `partContexts({ car, catalog })`, which resolves GPIOs with `@rcsim/schema`'s `gpioAssignments` |
+| anyone | the PartContext of each part | `partContexts({ car, catalog }, rngStreams)`, which resolves GPIOs with `@rcsim/schema`'s `gpioAssignments` |
 | anyone | sim-protocol device kinds | `deviceKindOf(partContext)`, following `sim-protocol/SPEC.md`'s device-kind table |
 
 ```ts

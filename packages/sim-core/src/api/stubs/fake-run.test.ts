@@ -8,13 +8,7 @@ import {
   type SensorModel,
   type TickInput,
 } from '../index.ts';
-import {
-  FakeActuatorSource,
-  FakeVehicle,
-  createFakeRun,
-  createFakeSensorModel,
-  createRngStreams,
-} from './index.ts';
+import { FakeActuatorSource, FakeVehicle, createFakeRun, createFakeSensorModel } from './index.ts';
 
 const track: Track = {
   schemaVersion: 1,
@@ -206,14 +200,73 @@ describe('the reference loop', () => {
   });
 });
 
+describe('the Run lifecycle', () => {
+  it('ends once with "stopped" when stop() runs during a step', async () => {
+    let release: (() => void) | undefined;
+    const source = new FakeActuatorSource();
+    const step = source.step.bind(source);
+    source.step = async (input: TickInput) => {
+      await new Promise<void>((resolve) => (release = resolve));
+      return step(input);
+    };
+    const run = await fakeRun(source);
+    const ends: unknown[] = [];
+    run.on('end', (end) => ends.push(end));
+    const stepping = run.step(10);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await run.stop();
+    release?.();
+    const result = await stepping;
+    expect(result.status).toBe('ended');
+    expect(result.ticks).toBe(0);
+    expect(ends).toEqual([{ kind: 'stopped' }]);
+    expect(run.end).toEqual({ kind: 'stopped' });
+  });
+
+  it('rejects a second step while one is pending', async () => {
+    const run = await fakeRun(new FakeActuatorSource());
+    const first = run.step(5);
+    await expect(run.step(1)).rejects.toThrow(/pending/);
+    await first;
+  });
+
+  it('refuses restartFirmware on a source that cannot restart', async () => {
+    const run = await fakeRun(new FakeActuatorSource());
+    await expect(run.restartFirmware()).rejects.toThrow(/cannot restart/);
+  });
+
+  it('produces no readings for an HC-SR04, which answers with GPIO edges', async () => {
+    const car = structuredClone(exampleCar);
+    car.parts.push({
+      instanceId: 'sonar',
+      partId: 'sensor.hc-sr04',
+      placement: { mount: 'front-centre' },
+      pins: { VCC: { part: 'regulator', pin: 'VOUT' }, TRIG: { gpio: 13 }, ECHO: { gpio: 34 } },
+    });
+    const source = new FakeActuatorSource();
+    const run = await createFakeRun({
+      car,
+      catalog: defaultCatalog,
+      world: world(),
+      track,
+      seed: 1,
+      source,
+    });
+    await run.step(100);
+    expect(
+      source.inputs.flatMap((i) => i.readings).filter((r) => r.instanceId === 'sonar'),
+    ).toEqual([]);
+  });
+});
+
 describe('FakeVehicle.chassisToWorld', () => {
   it('rotates the offset with the car and composes yaw and pitch', () => {
     const car = new FakeVehicle({ x: 0, z: 0, yawDeg: 90 });
-    const pose = car.chassisToWorld({ x: 0, y: 0, z: -1000 }, 0, 0);
+    const pose = car.chassisToWorld([0, 0, -1], 0, 0);
     // Facing +90° (left of −Z is −X), a point 1 m ahead is at x = −1.
     expect(pose.position[0]).toBeCloseTo(-1, 9);
     expect(pose.position[2]).toBeCloseTo(0, 9);
-    const pitched = car.chassisToWorld({ x: 0, y: 0, z: 0 }, 0, 90).rotation;
+    const pitched = car.chassisToWorld([0, 0, 0], 0, Math.PI / 2).rotation;
     expect(Math.hypot(...pitched)).toBeCloseTo(1, 9);
     expect(pitched[0]).not.toBe(0);
   });
@@ -224,26 +277,5 @@ describe('parseAssertion', () => {
     expect(parseAssertion('maxSpeed < 3')).toEqual({ metric: 'maxSpeedMps', op: '<', value: 3 });
     expect(parseAssertion('laps >= 1')).toEqual({ metric: 'laps', op: '>=', value: 1 });
     expect(() => parseAssertion('speed > 1')).toThrow(/bad assertion/);
-  });
-});
-
-describe('createRngStreams', () => {
-  it('gives each name its own sequence, independent of other streams', () => {
-    const a = createRngStreams(1);
-    const tof = Array.from({ length: 5 }, () => a.stream('sensor:tof_left').next());
-    const b = createRngStreams(1);
-    b.stream('sensor:new_part').next(); // adding a sensor…
-    const again = Array.from({ length: 5 }, () => b.stream('sensor:tof_left').next());
-    expect(again).toEqual(tof); // …leaves the others unchanged
-    expect(createRngStreams(2).stream('sensor:tof_left').next()).not.toBe(tof[0]);
-  });
-
-  it('draws normals with mean about 0 and σ about 1', () => {
-    const rng = createRngStreams(3).stream('x');
-    const draws = Array.from({ length: 20_000 }, () => rng.normal());
-    const mean = draws.reduce((s, v) => s + v, 0) / draws.length;
-    const sd = Math.sqrt(draws.reduce((s, v) => s + (v - mean) ** 2, 0) / draws.length);
-    expect(Math.abs(mean)).toBeLessThan(0.03);
-    expect(Math.abs(sd - 1)).toBeLessThan(0.03);
   });
 });

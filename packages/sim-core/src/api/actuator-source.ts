@@ -25,8 +25,9 @@ export interface TickInput {
   readonly tick: number;
   readonly t0Us: number;
   readonly t1Us: number;
-  /** Readings produced during the previous tick, tagged with their part. */
+  /** Readings produced during the previous tick, tagged with their part: in car.json order, then by tUs. */
   readonly readings: readonly (SensorReading & { readonly instanceId: string })[];
+  /** Input edges within [t0Us, t1Us), merged from all sensors in ascending tUs (ties in car.json order). */
   readonly gpioEdges: readonly GpioEdge[];
   readonly serialRx: Uint8Array;
   readonly netFaults?: NetFaults | undefined;
@@ -76,7 +77,27 @@ export interface ActuatorSource {
   step(input: TickInput): Promise<TickOutput>;
   /** Ends the source (kills the firmware). Safe to call twice. */
   stop(): Promise<void>;
+  /**
+   * Restarts the firmware while the world carries on, as an ESP32 reboot
+   * would (a new sim-protocol connection; `setup()` runs again at the current
+   * tick). Optional: scripted sources don't have one.
+   */
+  restart?(): Promise<void>;
 }
+
+export interface FirmwareSourceOptions {
+  /** The firmware binary built by hal's build-sim (`.rcsim/build/firmware`). */
+  readonly binary: string;
+  /** Working directory for the process; default the binary's project. */
+  readonly cwd?: string;
+  /** Wall-clock stall timeout; default 2000 ms. */
+  readonly stallTimeoutMs?: number;
+  /** Bind address for firmware servers, sent in CONFIG; default 127.0.0.1. */
+  readonly bindAddress?: string;
+}
+
+/** The firmware bridge's source (sim-core/src/bridge). Implemented by P1-H. */
+export type CreateFirmwareSource = (options: FirmwareSourceOptions) => ActuatorSource;
 
 /** A scripted PWM change: at `tUs`, `gpio` starts outputting `pulseUs` (50 Hz). */
 export interface ScriptedPwm {

@@ -9,6 +9,7 @@ export type { Rng, RngStreams, SimClock } from './clock.ts';
 export type {
   CollisionEvent,
   CreateWorld,
+  TrackLibrary,
   ObstacleState,
   RaycastHit,
   RaycastOptions,
@@ -36,7 +37,9 @@ export {
   ActuatorSourceEnded,
   type ActuatorSource,
   type ActuatorSourceSetup,
+  type CreateFirmwareSource,
   type CreateScriptedSource,
+  type FirmwareSourceOptions,
   type ScriptedPwm,
   type SourceEnd,
   type TickInput,
@@ -54,6 +57,7 @@ export type {
   Unsubscribe,
 } from './run.ts';
 export {
+  SCENARIO_METRICS,
   parseAssertion,
   type ScenarioAssertion,
   type ScenarioMetric,

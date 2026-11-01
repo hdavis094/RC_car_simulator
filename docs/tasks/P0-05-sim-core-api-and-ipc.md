@@ -82,6 +82,27 @@ Implementations.
     - the root `eslint.config.js` gives `src/shared/` the renderer's import boundary, allowing only Node-free package entry points.
   - **`World` owns the vehicle** (`createVehicle`) and the physics step. The brief listed `Vehicle` separately; Rapier's raycast vehicle lives inside its world.
   - **Pacing is the caller's**: `Run` has `step(n)` but no pause, so pause, single-step and speed live in the app (`RunApi`).
+- **Review round 1.** Both reviews (Codex adversarial, Claude `code-review`) asked for changes. All blocking findings are fixed:
+  - **HC-SR04 edge causality** (both): a response starts no earlier than the tick after its trigger, shifted whole so pulse widths are kept.
+  - **Wheel transforms** (Codex): world-frame pose including chassis, steer and spin.
+  - **No Track for the renderer** (Claude): `TrackLibrary` in the API; `worldEdit.listTracks`/`loadTrack` and `RunInfo.trackId` in IPC.
+  - **HC-SR04 readings** (Claude): it has none; `update` returns `[]`, and the fake follows that.
+
+  Non-blocking findings fixed:
+  - **Reference loop:** GPIO edges merged in ascending tUs; a tick's inputs taken before awaiting the source, so serial queued meanwhile isn't lost; the run ends exactly once; `stop()` may come during a step; concurrent `step` rejected; other errors become `{kind:'error'}`.
+  - **Firmware reboot:** `ActuatorSource.restart?`, `Run.restartFirmware`, `RunApi.restartFirmware`. Also `CreateFirmwareSource` for P1-H.
+  - **`RunApi.start`** is the whole Run in Sim action (check wiring, build if stale, start), with the `starting` state and the `build-failed` code.
+  - **Per-part RNG streams** come through `PartContext.stream(suffix)`.
+  - **SI:** `chassisToWorld(offsetM, yawRad, pitchRad)`.
+  - **Models only for wired parts.**
+  - **Scenarios:** `parseAssertion` accepts `maxSpeed`, and `SCENARIO_METRICS` is derived.
+  - **Fake API:** paused-only edits and steps, a cleared layout on stop, cloned results, unique obstacle ids, built-in ids rejected, broken part files listed as problems.
+  - **Fake vehicle:** placement and wheels rotate with the car.
+  - **Tests** sit beside their code (`rng.test.ts`, `fake-api.test.ts`).
+  - **Briefs (orchestrator):**
+    - P1-A owns `src/run/`, `src/index.ts`, its package.json deps and bin, and the `TrackLibrary`; its timeline uses `gpio`;
+    - P1-H owns the CLI's `--firmware`/`--control` options;
+    - P1-F reads tracks over IPC.
 - **Contract change requests**: none.
 - **Open questions**:
   - `deviceKindOf` in the stubs follows SPEC.md's table by part id. P1-H owns the real mapping, and may want a field on part definitions later.

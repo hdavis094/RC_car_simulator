@@ -46,8 +46,10 @@ export interface SensorModel {
   readonly instanceId: string;
   readonly template: BehaviorTemplate;
   /**
-   * Called once per tick after physics. Returns the readings the part
-   * produced during the tick (usually none or one; empty between updates).
+   * Called once per tick after physics. Returns the readings the part produced during the tick (usually none or one; empty between updates).
+   * Parts whose sim-protocol device kind has no readings, the HC-SR04, always
+   * return [] and answer through `onGpioWrite`/`takeGpioEdges` instead: the
+   * firmware measures the echo with `pulseIn`, as on the real car.
    */
   update(context: SensorContext): readonly SensorReading[];
   /**
@@ -75,6 +77,7 @@ export interface SensorModel {
 
 /**
  * Builds the model for a sensor part (`distance-raycast`, `imu`, or a
- * `voltage-divider` reading the battery). Implemented by P1-B.
+ * `voltage-divider` reading the battery). The Run creates models only for
+ * parts with at least one GPIO-wired pin. Implemented by P1-B.
  */
 export type CreateSensorModel = (part: PartContext) => SensorModel;

@@ -78,3 +78,14 @@ export interface World {
 
 /** Loads a world file onto its track. Implemented by P1-A. */
 export type CreateWorld = (world: WorldFile, track: Track) => Promise<World>;
+
+/**
+ * The built-in tracks (`assets/tracks/<id>.json`), by id: `oval`, `technical`.
+ * Implemented by P1-A; the sim host, the CLI and main (for the renderer's
+ * track mesh, via IPC `worldEdit.loadTrack`) all resolve `World.trackId` with it.
+ */
+export interface TrackLibrary {
+  ids(): readonly string[];
+  /** Throws on an unknown id. */
+  load(id: string): Track;
+}

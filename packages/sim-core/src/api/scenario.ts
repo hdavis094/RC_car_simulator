@@ -1,7 +1,14 @@
 import type { RunEnd } from './run.ts';
 
-/** A number a scenario can assert on. */
-export type ScenarioMetric = 'collisions' | 'laps' | 'maxSpeedMps' | 'distanceM' | 'simSeconds';
+/** The numbers a scenario can assert on. */
+export const SCENARIO_METRICS = [
+  'collisions',
+  'laps',
+  'maxSpeedMps',
+  'distanceM',
+  'simSeconds',
+] as const;
+export type ScenarioMetric = (typeof SCENARIO_METRICS)[number];
 
 export interface ScenarioAssertion {
   readonly metric: ScenarioMetric;
@@ -48,13 +55,7 @@ export interface ScenarioResult {
  */
 export function parseAssertion(text: string): ScenarioAssertion {
   const match = /^\s*([a-zA-Z]+)\s*(==|!=|<=|>=|<|>)\s*(-?\d+(?:\.\d+)?)\s*$/.exec(text);
-  const metrics: readonly string[] = [
-    'collisions',
-    'laps',
-    'maxSpeedMps',
-    'distanceM',
-    'simSeconds',
-  ];
+  const metrics: readonly string[] = SCENARIO_METRICS;
   // Short names the CLI accepts too (P1-A's brief writes `maxSpeed < x`).
   const aliases: Readonly<Record<string, ScenarioMetric>> = {
     maxSpeed: 'maxSpeedMps',

@@ -59,6 +59,13 @@ export type Unsubscribe = () => void;
  *
  * A Run is not paced: `step` runs as fast as it can. Pause, single-step and
  * speed are the caller's (the app's SimService paces to the wall clock).
+ *
+ * Lifecycle: never call `step` while a previous `step` is pending. `stop()`
+ * may be called at any time, including during `step`; that `step` then
+ * resolves with status `ended` and runs no further ticks. A run ends exactly
+ * once: `end` is set and the `end` event fires once, with the first reason
+ * (`stopped` wins over a failure the stop itself causes). An unexpected error
+ * from a part of the loop ends the run with `{kind: 'error'}`.
  */
 export interface Run {
   readonly clock: SimClock;
@@ -73,6 +80,11 @@ export interface Run {
   /** Network fault injection, sent to hal in the next STEP. */
   setNetFaults(faults: NetFaults): void;
   on<E extends keyof RunEvents>(event: E, listener: RunEvents[E]): Unsubscribe;
+  /**
+   * Reboots the firmware while the world carries on (`ActuatorSource.restart`).
+   * Rejects if the source can't restart (a scripted source).
+   */
+  restartFirmware(): Promise<void>;
   /** Ends the run and the source. */
   stop(): Promise<void>;
 }

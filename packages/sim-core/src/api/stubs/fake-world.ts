@@ -71,7 +71,7 @@ export class FakeVehicle implements Vehicle {
     const velocity: Vec3 = [-Math.sin(yaw) * this.#speed, 0, -Math.cos(yaw) * this.#speed];
     const rotation = yawQuat(this.#yawDeg);
     const wheel = (dx: number, dz: number): WheelState => ({
-      position: [this.#position[0] + dx, 0.05, this.#position[2] + dz],
+      position: this.#toWorld([dx, 0.05, dz]),
       rotation,
       steerRad: 0,
       spinRad: this.#spin,
@@ -88,24 +88,26 @@ export class FakeVehicle implements Vehicle {
     };
   }
 
-  chassisToWorld(
-    offsetMm: { x: number; y: number; z: number },
-    yawDeg: number,
-    pitchDeg: number,
-  ): Pose {
-    // Rotate the chassis-frame offset by the car's yaw (the fake car never pitches or rolls).
-    const yaw = (this.#yawDeg * Math.PI) / 180;
-    const x = offsetMm.x / 1000;
-    const z = offsetMm.z / 1000;
+  chassisToWorld(offsetM: Vec3, yawRad: number, pitchRad: number): Pose {
     return {
-      position: [
-        this.#position[0] + x * Math.cos(yaw) + z * Math.sin(yaw),
-        this.#position[1] + offsetMm.y / 1000,
-        this.#position[2] - x * Math.sin(yaw) + z * Math.cos(yaw),
-      ],
+      position: this.#toWorld(offsetM),
       // Car yaw + placement yaw about Y, then placement pitch about the local X axis.
-      rotation: multiply(yawQuat(this.#yawDeg + yawDeg), pitchQuat(pitchDeg)),
+      rotation: multiply(
+        yawQuat(this.#yawDeg + (yawRad * 180) / Math.PI),
+        pitchQuat((pitchRad * 180) / Math.PI),
+      ),
     };
+  }
+
+  /** A chassis-frame point in the world (the fake car only yaws). */
+  #toWorld(offsetM: Vec3): Vec3 {
+    const yaw = (this.#yawDeg * Math.PI) / 180;
+    const [x, y, z] = offsetM;
+    return [
+      this.#position[0] + x * Math.cos(yaw) + z * Math.sin(yaw),
+      this.#position[1] + y,
+      this.#position[2] - x * Math.sin(yaw) + z * Math.cos(yaw),
+    ];
   }
 }
 
@@ -190,6 +192,9 @@ export class FakeWorld implements World {
   }
 
   addObstacle(obstacle: Obstacle): string {
+    if (obstacle.id !== undefined && this.#obstacles.has(obstacle.id)) {
+      throw new Error(`obstacle id "${obstacle.id}" is already in the world`);
+    }
     let id = obstacle.id ?? `obstacle-${this.#nextId++}`;
     while (obstacle.id === undefined && this.#obstacles.has(id)) id = `obstacle-${this.#nextId++}`;
     this.#obstacles.set(id, {
