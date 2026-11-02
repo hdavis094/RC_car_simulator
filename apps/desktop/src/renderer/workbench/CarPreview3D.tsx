@@ -180,14 +180,30 @@ export function CarPreviewScene({ scene }: { readonly scene: PreviewSceneData })
   );
 }
 
+let cachedWebGLSupport: boolean | undefined;
+
 function canUseWebGL(): boolean {
-  if (typeof document === 'undefined' || typeof window === 'undefined') return false;
-  if (typeof ResizeObserver === 'undefined') return false;
+  if (cachedWebGLSupport !== undefined) return cachedWebGLSupport;
+  if (typeof document === 'undefined' || typeof window === 'undefined') {
+    cachedWebGLSupport = false;
+    return false;
+  }
+  if (typeof ResizeObserver === 'undefined') {
+    cachedWebGLSupport = false;
+    return false;
+  }
   try {
     const canvas = document.createElement('canvas');
     const gl = canvas.getContext('webgl2') ?? canvas.getContext('webgl');
-    return Boolean(gl);
+    if (!gl) {
+      cachedWebGLSupport = false;
+      return false;
+    }
+    gl.getExtension('WEBGL_lose_context')?.loseContext();
+    cachedWebGLSupport = true;
+    return true;
   } catch {
+    cachedWebGLSupport = false;
     return false;
   }
 }
@@ -298,7 +314,7 @@ export function CarPreview3D({
               </div>
             }
           >
-            <Canvas camera={{ position: [0.65, 0.55, -0.75], fov: 45 }}>
+            <Canvas frameloop="demand" camera={{ position: [0.65, 0.55, -0.75], fov: 45 }}>
               <CarPreviewScene scene={scene} />
             </Canvas>
           </CanvasErrorBoundary>

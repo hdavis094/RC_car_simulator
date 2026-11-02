@@ -10,9 +10,8 @@ import {
   type PinTarget,
 } from '@rcsim/schema';
 import { useRef, type ReactNode } from 'react';
-import { useWorkbenchStore } from './workbench-store.ts';
-
-const hex = (address: number): string => `0x${address.toString(16).toUpperCase().padStart(2, '0')}`;
+import { NumericInput } from './NumericInput.tsx';
+import { formatHex, useWorkbenchStore } from './workbench-store.ts';
 
 /** Formats a controller GPIO with its capabilities for the GPIO dropdown. */
 export function formatGpioOption(gpio: GpioDefinition): string {
@@ -134,7 +133,7 @@ function collectPowerSources(
         typeof pin.voltage === 'number'
           ? `${pin.voltage} V`
           : typeof pin.voltage === 'object'
-            ? `${pin.voltage.min}–${pin.voltage.max} V`
+            ? `${pin.voltage.min}–{pin.voltage.max} V`
             : '';
       const budgetText = pin.maxCurrentMa !== undefined ? `, ${pin.maxCurrentMa} mA` : '';
       const details = vText ? ` (${vText}${budgetText})` : '';
@@ -459,19 +458,18 @@ export function PinAssignmentTable(): ReactNode {
                             }}
                           >
                             I²C:
-                            <input
-                              type="number"
-                              aria-label={`I2C address for ${part.instanceId}`}
+                            <NumericInput
+                              ariaLabel={`I2C address for ${part.instanceId}`}
                               min={8}
                               max={119}
-                              value={part.i2cAddress ?? i2cInfo.defaultAddress}
-                              onChange={(e) => {
-                                const val = Number(e.target.value);
-                                setI2cAddress(part.instanceId, Number.isNaN(val) ? undefined : val);
-                              }}
+                              step={1}
+                              placeholder={String(i2cInfo.defaultAddress)}
+                              value={part.i2cAddress}
+                              onChange={(val) => setI2cAddress(part.instanceId, Math.trunc(val))}
+                              onClear={() => setI2cAddress(part.instanceId, undefined)}
                               style={{ width: 52, fontSize: 11, padding: '1px 4px' }}
                             />
-                            <span>({hex(part.i2cAddress ?? i2cInfo.defaultAddress)})</span>
+                            <span>({formatHex(part.i2cAddress ?? i2cInfo.defaultAddress)})</span>
                           </label>
                         )}
                       </div>

@@ -14,16 +14,25 @@ import {
   type Placement,
 } from '@rcsim/schema';
 import { create } from 'zustand';
-import { createFakeRcsimApi } from '../../shared/fake-api.ts';
 import { parseIpcError, type CatalogListing, type RcsimApi } from '../../shared/ipc.ts';
 
-/** Builds a Catalog Map from the catalog IPC listing, keeping valid custom parts on top of built-ins. */
+/** Formats a 7-bit I²C address in hex as in datasheets (`0x29`). */
+export function formatHex(address: number): string {
+  return `0x${address.toString(16).toUpperCase().padStart(2, '0')}`;
+}
+
+/**
+ * Builds a Catalog Map from the catalog IPC listing, keeping built-ins first
+ * and skipping any custom part whose id collides with a built-in or an earlier
+ * custom part (matching `createCatalog` in `@rcsim/schema`).
+ */
 export function catalogFromListing(listing: CatalogListing): Catalog {
   const map = new Map<string, PartDefinition>();
   for (const part of listing.builtIn) {
     map.set(part.id, part);
   }
   for (const entry of listing.custom) {
+    if (map.has(entry.definition.id)) continue;
     map.set(entry.definition.id, entry.definition);
   }
   return map;
@@ -34,6 +43,27 @@ const DEFAULT_LISTING: CatalogListing = {
   custom: [],
   problems: [],
 };
+
+const UNLOADED_CAR: Car = {
+  schemaVersion: 1,
+  name: '',
+  wifi: true,
+  controller: { instanceId: 'esp32', partId: 'controller.esp32-devkitc-v4' },
+  chassis: { instanceId: 'chassis', partId: 'chassis.traxxas-slash-2wd' },
+  parts: [],
+};
+
+let nextRowKeyCounter = 1;
+function buildRowKeys(
+  car: Car,
+  existing: Readonly<Record<string, string>> = {},
+): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const part of [car.controller, car.chassis, ...car.parts]) {
+    result[part.instanceId] = existing[part.instanceId] ?? `part-row-${nextRowKeyCounter++}`;
+  }
+  return result;
+}
 
 /** Converts an arbitrary string into a valid lowercase C-identifier base for an InstanceId. */
 export function sanitizeInstanceIdBase(raw: string): string {
@@ -65,22 +95,22 @@ export function uniqueInstanceId(car: Car, partId: string, preferred?: string): 
   return `${base}_${index}`;
 }
 
-/** Resolves the active RcsimApi: explicit prop > window.rcsim (when wired) > fallback in-memory fake API. */
-let fallbackApi: RcsimApi | undefined;
+/**
+ * Resolves the active RcsimApi: explicit `api` prop, else `window.rcsim` when
+ * preload services are present, else throws `'rcsim API unavailable'`.
+ */
 export function resolveRcsimApi(explicit?: RcsimApi): RcsimApi {
   if (explicit) return explicit;
   if (
     typeof window !== 'undefined' &&
     'rcsim' in window &&
     window.rcsim &&
-    typeof window.rcsim.project?.readCar === 'function'
+    typeof window.rcsim.project?.readCar === 'function' &&
+    typeof window.rcsim.catalog?.list === 'function'
   ) {
     return window.rcsim;
   }
-  if (!fallbackApi) {
-    fallbackApi = createFakeRcsimApi().api;
-  }
-  return fallbackApi;
+  throw new Error('rcsim API unavailable');
 }
 
 export interface SaveStatus {
@@ -92,21 +122,30 @@ export interface SaveStatus {
 export interface WorkbenchState {
   api: RcsimApi | null;
   car: Car;
+  partRowKeys: Readonly<Record<string, string>>;
   listing: CatalogListing;
   catalog: Catalog;
   issues: readonly Issue[];
   loaded: boolean;
   dirty: boolean;
   saving: boolean;
+  lastSavedCarJson: string | null;
+  externalChange: boolean;
   saveStatus: SaveStatus | null;
   loadError: string | null;
+  loadErrorRaw: string | null;
   searchQuery: string;
   selectedInstanceId: string | null;
   selectedPartId: string | null;
   focusedRowKey: string | null;
   newPartOpen: boolean;
 
-  load: (api?: RcsimApi) => Promise<void>;
+  load: (api?: RcsimApi, options?: { readonly force?: boolean }) => Promise<void>;
+  reloadFromDisk: () => Promise<void>;
+  dismissExternalChange: () => void;
+  handleExternalCarFileChange: () => Promise<void>;
+  startFromExampleCar: () => void;
+  updateCatalogListing: (listing: CatalogListing) => void;
   setSearchQuery: (query: string) => void;
   selectInstance: (instanceId: string) => void;
   selectCatalogPart: (partId: string) => void;
@@ -129,7 +168,6 @@ export interface WorkbenchState {
   ) => Promise<{ ok: true; path: string } | { ok: false; error: string }>;
 }
 
-const initialCar = structuredClone(exampleCar);
 const initialCatalog = catalogFromListing(DEFAULT_LISTING);
 
 const updateCarState = (
@@ -144,71 +182,189 @@ const updateCarState = (
   ...extra,
 });
 
-export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
-  api: null,
-  car: initialCar,
-  listing: DEFAULT_LISTING,
-  catalog: initialCatalog,
-  issues: checkWiring(initialCar, initialCatalog),
-  loaded: false,
-  dirty: false,
-  saving: false,
-  saveStatus: null,
-  loadError: null,
-  searchQuery: '',
-  selectedInstanceId: initialCar.controller.instanceId,
-  selectedPartId: initialCar.controller.partId,
-  focusedRowKey: null,
-  newPartOpen: false,
+function createInitialState(): Omit<
+  WorkbenchState,
+  | 'load'
+  | 'reloadFromDisk'
+  | 'dismissExternalChange'
+  | 'handleExternalCarFileChange'
+  | 'startFromExampleCar'
+  | 'updateCatalogListing'
+  | 'setSearchQuery'
+  | 'selectInstance'
+  | 'selectCatalogPart'
+  | 'setCarName'
+  | 'setCarWifi'
+  | 'addPart'
+  | 'removePart'
+  | 'renameInstance'
+  | 'assignPin'
+  | 'setI2cAddress'
+  | 'setPlacement'
+  | 'focusIssueRow'
+  | 'setNewPartOpen'
+  | 'saveCar'
+  | 'createCustomPart'
+> {
+  const car = structuredClone(UNLOADED_CAR);
+  return {
+    api: null,
+    car,
+    partRowKeys: buildRowKeys(car),
+    listing: DEFAULT_LISTING,
+    catalog: initialCatalog,
+    issues: [],
+    loaded: false,
+    dirty: false,
+    saving: false,
+    lastSavedCarJson: null,
+    externalChange: false,
+    saveStatus: null,
+    loadError: null,
+    loadErrorRaw: null,
+    searchQuery: '',
+    selectedInstanceId: null,
+    selectedPartId: null,
+    focusedRowKey: null,
+    newPartOpen: false,
+  };
+}
 
-  async load(explicitApi) {
-    const api = resolveRcsimApi(explicitApi);
-    set({ api, loadError: null, saveStatus: null });
+export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
+  ...createInitialState(),
+
+  async load(explicitApi, options) {
+    let api: RcsimApi;
+    try {
+      api = resolveRcsimApi(explicitApi ?? get().api ?? undefined);
+    } catch {
+      set({
+        api: null,
+        loaded: false,
+        loadError: 'rcsim API unavailable',
+        loadErrorRaw: null,
+      });
+      return;
+    }
+
+    const current = get();
+    // Preserve unsaved edits across environment tab switches unless reload is forced.
+    if (!options?.force && current.loaded && current.dirty && current.api === api) {
+      return;
+    }
+
+    set({ api });
     try {
       const [listing, carResult] = await Promise.all([api.catalog.list(), api.project.readCar()]);
       const catalog = catalogFromListing(listing);
       if (carResult.ok) {
         const car = carResult.car;
         const issues = checkWiring(car, catalog);
+        const allIds = new Set([
+          car.controller.instanceId,
+          car.chassis.instanceId,
+          ...car.parts.map((p) => p.instanceId),
+        ]);
+        const prevSelected = get().selectedInstanceId;
+        const nextSelected =
+          prevSelected && allIds.has(prevSelected) ? prevSelected : car.controller.instanceId;
+        const selectedPart = [car.controller, car.chassis, ...car.parts].find(
+          (p) => p.instanceId === nextSelected,
+        );
         set({
           api,
           listing,
           catalog,
           car,
+          partRowKeys: buildRowKeys(car, get().partRowKeys),
           issues,
           loaded: true,
           dirty: false,
+          lastSavedCarJson: `${JSON.stringify(car, null, 2)}\n`,
+          externalChange: false,
           loadError: null,
-          selectedInstanceId: car.controller.instanceId,
-          selectedPartId: car.controller.partId,
+          loadErrorRaw: null,
+          selectedInstanceId: nextSelected,
+          selectedPartId: selectedPart?.partId ?? car.controller.partId,
         });
       } else {
-        const car = structuredClone(exampleCar);
         set({
           api,
           listing,
           catalog,
-          car,
-          issues: checkWiring(car, catalog),
-          loaded: true,
+          loaded: false,
           dirty: false,
+          externalChange: false,
           loadError: carResult.error,
-          selectedInstanceId: car.controller.instanceId,
-          selectedPartId: car.controller.partId,
+          loadErrorRaw: carResult.raw,
         });
       }
     } catch (error) {
       const parsed = parseIpcError(error);
-      const car = structuredClone(exampleCar);
       set({
         api,
-        car,
-        issues: checkWiring(car, get().catalog),
-        loaded: true,
+        loaded: false,
         dirty: false,
+        externalChange: false,
         loadError: parsed.message,
+        loadErrorRaw: null,
       });
     }
+  },
+
+  async reloadFromDisk() {
+    await get().load(get().api ?? undefined, { force: true });
+  },
+
+  dismissExternalChange() {
+    set({ externalChange: false });
+  },
+
+  async handleExternalCarFileChange() {
+    const { api, saving, lastSavedCarJson, dirty } = get();
+    if (!api || saving) return;
+    try {
+      const raw = await api.project.readFile('car.json');
+      if (lastSavedCarJson !== null && raw === lastSavedCarJson) {
+        // Ignore the file-watcher echo of our own writeCar call.
+        return;
+      }
+    } catch {
+      // If readFile fails, fall through to dirty check / reload.
+    }
+    if (dirty) {
+      set({ externalChange: true });
+      return;
+    }
+    await get().load(api, { force: true });
+  },
+
+  startFromExampleCar() {
+    const { catalog } = get();
+    const car = structuredClone(exampleCar);
+    set({
+      car,
+      partRowKeys: buildRowKeys(car),
+      issues: checkWiring(car, catalog),
+      loaded: true,
+      dirty: true,
+      externalChange: false,
+      loadError: null,
+      loadErrorRaw: null,
+      saveStatus: null,
+      selectedInstanceId: car.controller.instanceId,
+      selectedPartId: car.controller.partId,
+    });
+  },
+
+  updateCatalogListing(listing) {
+    const nextCatalog = catalogFromListing(listing);
+    const { car, loaded } = get();
+    set({
+      listing,
+      catalog: nextCatalog,
+      issues: loaded ? checkWiring(car, nextCatalog) : get().issues,
+    });
   },
 
   setSearchQuery(searchQuery) {
@@ -245,7 +401,7 @@ export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
   },
 
   addPart(partId, requestedInstanceId) {
-    const { car, catalog } = get();
+    const { car, catalog, partRowKeys } = get();
     const definition = catalog.get(partId);
     if (!definition) {
       return { ok: false, error: `Unknown part definition "${partId}".` };
@@ -329,6 +485,10 @@ export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
 
     set(
       updateCarState(nextCar, catalog, {
+        partRowKeys: {
+          ...partRowKeys,
+          [instanceId]: `part-row-${nextRowKeyCounter++}`,
+        },
         selectedInstanceId: instanceId,
         selectedPartId: definition.id,
       }),
@@ -337,17 +497,32 @@ export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
   },
 
   removePart(instanceId) {
-    const { car, catalog, selectedInstanceId } = get();
+    const { car, catalog, selectedInstanceId, partRowKeys } = get();
     // Controller and chassis cannot be removed (exactly one of each).
     if (instanceId === car.controller.instanceId || instanceId === car.chassis.instanceId) {
       return;
     }
-    const nextParts = car.parts.filter((p) => p.instanceId !== instanceId);
-    const nextCar: Car = { ...car, parts: nextParts };
+
+    const cleanDanglingPins = (part: Part): Part => {
+      if (!part.pins) return part;
+      const nextPins: Record<string, PinTarget> = {};
+      for (const [pinName, target] of Object.entries(part.pins)) {
+        if ('part' in target && target.part === instanceId) continue;
+        nextPins[pinName] = target;
+      }
+      const { pins: _old, ...rest } = part;
+      return Object.keys(nextPins).length > 0 ? { ...rest, pins: nextPins } : rest;
+    };
+
+    const nextParts = car.parts.filter((p) => p.instanceId !== instanceId).map(cleanDanglingPins);
+    const nextController = cleanDanglingPins(car.controller);
+    const nextCar: Car = { ...car, controller: nextController, parts: nextParts };
     const nextSelected =
       selectedInstanceId === instanceId ? car.controller.instanceId : selectedInstanceId;
+    const { [instanceId]: _removedKey, ...remainingRowKeys } = partRowKeys;
     set(
       updateCarState(nextCar, catalog, {
+        partRowKeys: remainingRowKeys,
         selectedInstanceId: nextSelected,
       }),
     );
@@ -363,7 +538,7 @@ export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
         error: parsed.error.issues[0]?.message ?? 'Invalid instance id.',
       };
     }
-    const { car, catalog, selectedInstanceId } = get();
+    const { car, catalog, selectedInstanceId, partRowKeys } = get();
     const allIds = [
       car.controller.instanceId,
       car.chassis.instanceId,
@@ -411,8 +586,15 @@ export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
       parts: nextParts,
     };
 
+    const preservedKey = partRowKeys[oldId] ?? `part-row-${nextRowKeyCounter++}`;
+    const { [oldId]: _oldKey, ...restRowKeys } = partRowKeys;
+
     set(
       updateCarState(nextCar, catalog, {
+        partRowKeys: {
+          ...restRowKeys,
+          [trimmed]: preservedKey,
+        },
         selectedInstanceId: selectedInstanceId === oldId ? trimmed : selectedInstanceId,
       }),
     );
@@ -480,20 +662,53 @@ export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
   },
 
   async saveCar() {
-    const { car, catalog } = get();
-    const api = resolveRcsimApi(get().api ?? undefined);
-    set({ saving: true, saveStatus: null });
+    const { car, catalog, loaded, loadError } = get();
+    if (!loaded || loadError !== null) {
+      return false;
+    }
+
+    let api: RcsimApi;
     try {
-      const parsed = Car.parse(car);
-      const issues = checkWiring(parsed, catalog);
+      api = resolveRcsimApi(get().api ?? undefined);
+    } catch {
+      set({
+        saveStatus: {
+          ok: false,
+          flaggedErrors: 0,
+          message: 'rcsim API unavailable',
+        },
+      });
+      return false;
+    }
+
+    const parsed = Car.safeParse(car);
+    if (!parsed.success) {
+      const readableError = parsed.error.issues
+        .map((i) => `${i.path.length > 0 ? `${i.path.join('.')}: ` : ''}${i.message}`)
+        .join('; ');
+      set({
+        saveStatus: {
+          ok: false,
+          flaggedErrors: 0,
+          message: readableError || 'Invalid car configuration.',
+        },
+      });
+      return false;
+    }
+
+    const serialized = `${JSON.stringify(parsed.data, null, 2)}\n`;
+    set({ saving: true, saveStatus: null, lastSavedCarJson: serialized });
+    try {
+      const issues = checkWiring(parsed.data, catalog);
       const errorCount = issues.filter((i) => i.severity === 'error').length;
-      await api.project.writeCar(parsed);
+      await api.project.writeCar(parsed.data);
       const message = canRun(issues)
         ? 'Saved car.json and regenerated include/car_config.h.'
         : `Saved car.json and include/car_config.h with ${errorCount} wiring error(s) (flagged: Run in Sim is blocked until resolved).`;
       set({
         saving: false,
         dirty: false,
+        externalChange: false,
         issues,
         saveStatus: {
           ok: true,
@@ -503,13 +718,13 @@ export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
       });
       return true;
     } catch (error) {
-      const parsed = parseIpcError(error);
+      const ipcErr = parseIpcError(error);
       set({
         saving: false,
         saveStatus: {
           ok: false,
           flaggedErrors: 0,
-          message: parsed.message,
+          message: ipcErr.message,
         },
       });
       return false;
@@ -517,7 +732,13 @@ export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
   },
 
   async createCustomPart(definition) {
-    const api = resolveRcsimApi(get().api ?? undefined);
+    let api: RcsimApi;
+    try {
+      api = resolveRcsimApi(get().api ?? undefined);
+    } catch {
+      return { ok: false, error: 'rcsim API unavailable' };
+    }
+
     const parsed = PartDefinition.safeParse(definition);
     if (!parsed.success) {
       return {
@@ -527,6 +748,14 @@ export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
           .join('; '),
       };
     }
+
+    if (defaultCatalog.has(parsed.data.id) || get().catalog.has(parsed.data.id)) {
+      return {
+        ok: false,
+        error: `part id "${parsed.data.id}" is already in the catalog`,
+      };
+    }
+
     try {
       const { path } = await api.catalog.saveCustomPart(parsed.data);
       const listing = await api.catalog.list();
@@ -547,6 +776,11 @@ export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
     }
   },
 }));
+
+/** Resets the Workbench store to its initial unloaded state (for tests). */
+export function resetWorkbenchStore(): void {
+  useWorkbenchStore.setState(createInitialState());
+}
 
 /** Helper returning all parts of the car that have pins (controller + car.parts). */
 export function partsWithPins(car: Car): readonly Part[] {

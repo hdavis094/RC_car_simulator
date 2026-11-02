@@ -11,6 +11,7 @@ export {
   defaultBehaviorParams,
   describeBehaviorParamsSchema,
 } from './NewPartForm.tsx';
+export { NumericInput, type NumericInputProps } from './NumericInput.tsx';
 export { PartInspector } from './PartInspector.tsx';
 export { PartsPanel } from './PartsPanel.tsx';
 export {
@@ -26,7 +27,9 @@ export { PlacementPanel } from './PlacementPanel.tsx';
 export { WorkbenchRoot, type WorkbenchRootProps } from './WorkbenchRoot.tsx';
 export {
   catalogFromListing,
+  formatHex,
   partsWithPins,
+  resetWorkbenchStore,
   resolveRcsimApi,
   sanitizeInstanceIdBase,
   uniqueInstanceId,

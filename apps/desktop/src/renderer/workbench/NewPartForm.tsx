@@ -13,6 +13,7 @@ import {
   type ThrottleCurvePoint,
 } from '@rcsim/schema';
 import { useState, type FormEvent, type ReactNode } from 'react';
+import { NumericInput } from './NumericInput.tsx';
 import { useWorkbenchStore } from './workbench-store.ts';
 
 interface SchemaFieldDescriptor {
@@ -151,14 +152,20 @@ export function defaultBehaviorParams(template: BehaviorTemplate): Record<string
   }
 }
 
-function defaultPinsForTemplate(template: BehaviorTemplate): PinDefinition[] {
+export function defaultPinsForTemplate(template: BehaviorTemplate): PinDefinition[] {
   switch (template) {
     case 'distance-raycast':
-    case 'imu':
       return [
         { name: 'VCC', kind: 'power-in' },
         { name: 'TRIG', kind: 'digital-in' },
         { name: 'ECHO', kind: 'digital-out', voltage: 3.3 },
+        { name: 'GND', kind: 'gnd' },
+      ];
+    case 'imu':
+      return [
+        { name: 'VCC', kind: 'power-in' },
+        { name: 'SDA', kind: 'i2c-sda', voltage: 3.3 },
+        { name: 'SCL', kind: 'i2c-scl', voltage: 3.3 },
         { name: 'GND', kind: 'gnd' },
       ];
     case 'servo':
@@ -186,6 +193,15 @@ function defaultPinsForTemplate(template: BehaviorTemplate): PinDefinition[] {
         { name: 'GND', kind: 'gnd' },
       ];
   }
+}
+
+type PinVoltageMode = 'none' | 'number' | 'supply' | 'range';
+
+function getPinVoltageMode(voltage: PinDefinition['voltage']): PinVoltageMode {
+  if (voltage === undefined) return 'none';
+  if (voltage === 'supply') return 'supply';
+  if (typeof voltage === 'number') return 'number';
+  return 'range';
 }
 
 export function NewPartForm(): ReactNode {
@@ -258,6 +274,49 @@ export function NewPartForm(): ReactNode {
   const [validationErrors, setValidationErrors] = useState<readonly string[]>([]);
   const [submitting, setSubmitting] = useState(false);
 
+  const resetForm = () => {
+    setCategory('sensor');
+    setId('sensor.custom-ranger');
+    setName('Custom Ranger Sensor');
+    setManufacturer('Custom');
+    setDescription('Custom distance sensor');
+    setMassG(5);
+    setDimensionsMm({ width: 20, height: 10, length: 15 });
+    setModelPath('');
+    setSourcesText('https://example.com/datasheet.pdf');
+    setNotes('');
+    setHasElectrical(true);
+    setSupplyMinV(3.0);
+    setSupplyMaxV(5.5);
+    setLogicLevelMode('number');
+    setLogicLevelV(3.3);
+    setCurrentTypicalMa(15);
+    setCurrentPeakMa(30);
+    setHasI2c(false);
+    setI2cDefaultAddress(41);
+    setI2cAddressingKind('fixed');
+    setI2cEnablePin('XSHUT');
+    setI2cStrapPin('AD0');
+    setI2cStrapHighAddress(42);
+    setTemplate('distance-raycast');
+    setBehaviorParams(defaultBehaviorParams('distance-raycast'));
+    setPins(defaultPinsForTemplate('distance-raycast'));
+    setGpioMaxInputV(3.6);
+    setGpios([{ gpio: 0, strapping: true }, { gpio: 21 }, { gpio: 22 }]);
+    setWheelbaseMm(300);
+    setTrackWidthMm(220);
+    setWheelRadiusMm(50);
+    setMaxSteeringAngleDeg(28);
+    setSteeringLinkageRatio(0.7);
+    setDriveWheels('rear');
+    setFinalDriveRatio(12);
+    setCentreOfGravityMm({ x: 0, y: 80, z: 0 });
+    setMountPoints([
+      { id: 'front-centre', positionMm: { x: 0, y: 50, z: -200 }, yawDeg: 0, pitchDeg: 0 },
+    ]);
+    setValidationErrors([]);
+  };
+
   if (!newPartOpen) return null;
 
   const handleCategoryChange = (nextCategory: PartCategory) => {
@@ -302,6 +361,9 @@ export function NewPartForm(): ReactNode {
     setPins(defaultPinsForTemplate(nextTemplate));
     if (nextTemplate === 'battery') {
       setHasElectrical(false);
+    }
+    if (nextTemplate === 'imu') {
+      setHasI2c(true);
     }
   };
 
@@ -458,8 +520,16 @@ export function NewPartForm(): ReactNode {
     if (!result.ok) {
       setValidationErrors([result.error]);
     } else {
-      setValidationErrors([]);
+      resetForm();
     }
+  };
+
+  const updateGpio = (idx: number, updater: (prev: GpioDefinition) => GpioDefinition) => {
+    setGpios((prev) => prev.map((item, i) => (i === idx ? updater(item) : item)));
+  };
+
+  const updatePin = (idx: number, updater: (prev: PinDefinition) => PinDefinition) => {
+    setPins((prev) => prev.map((item, i) => (i === idx ? updater(item) : item)));
   };
 
   const schemaDescriptors = describeBehaviorParamsSchema(template);
@@ -588,45 +658,41 @@ export function NewPartForm(): ReactNode {
 
           <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             <span>Mass (g)</span>
-            <input
-              type="number"
+            <NumericInput
               step="any"
               aria-label="Part mass (g)"
               value={massG}
-              onChange={(e) => setMassG(Number(e.target.value))}
+              onChange={(n) => setMassG(n)}
             />
           </label>
 
           <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             <span>Width (mm)</span>
-            <input
-              type="number"
+            <NumericInput
               step="any"
               aria-label="Part width (mm)"
               value={dimensionsMm.width}
-              onChange={(e) => setDimensionsMm({ ...dimensionsMm, width: Number(e.target.value) })}
+              onChange={(n) => setDimensionsMm({ ...dimensionsMm, width: n })}
             />
           </label>
 
           <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             <span>Height (mm)</span>
-            <input
-              type="number"
+            <NumericInput
               step="any"
               aria-label="Part height (mm)"
               value={dimensionsMm.height}
-              onChange={(e) => setDimensionsMm({ ...dimensionsMm, height: Number(e.target.value) })}
+              onChange={(n) => setDimensionsMm({ ...dimensionsMm, height: n })}
             />
           </label>
 
           <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             <span>Length (mm)</span>
-            <input
-              type="number"
+            <NumericInput
               step="any"
               aria-label="Part length (mm)"
               value={dimensionsMm.length}
-              onChange={(e) => setDimensionsMm({ ...dimensionsMm, length: Number(e.target.value) })}
+              onChange={(n) => setDimensionsMm({ ...dimensionsMm, length: n })}
             />
           </label>
 
@@ -699,22 +765,20 @@ export function NewPartForm(): ReactNode {
               >
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                   <span>Supply Min (V)</span>
-                  <input
-                    type="number"
+                  <NumericInput
                     step="any"
                     aria-label="Supply min V"
                     value={supplyMinV}
-                    onChange={(e) => setSupplyMinV(Number(e.target.value))}
+                    onChange={(n) => setSupplyMinV(n)}
                   />
                 </label>
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                   <span>Supply Max (V)</span>
-                  <input
-                    type="number"
+                  <NumericInput
                     step="any"
                     aria-label="Supply max V"
                     value={supplyMaxV}
-                    onChange={(e) => setSupplyMaxV(Number(e.target.value))}
+                    onChange={(n) => setSupplyMaxV(n)}
                   />
                 </label>
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -731,33 +795,30 @@ export function NewPartForm(): ReactNode {
                 {logicLevelMode === 'number' && (
                   <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                     <span>Logic Level (V)</span>
-                    <input
-                      type="number"
+                    <NumericInput
                       step="any"
                       aria-label="Logic level V"
                       value={logicLevelV}
-                      onChange={(e) => setLogicLevelV(Number(e.target.value))}
+                      onChange={(n) => setLogicLevelV(n)}
                     />
                   </label>
                 )}
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                   <span>Typical Current (mA)</span>
-                  <input
-                    type="number"
+                  <NumericInput
                     step="any"
                     aria-label="Typical current mA"
                     value={currentTypicalMa}
-                    onChange={(e) => setCurrentTypicalMa(Number(e.target.value))}
+                    onChange={(n) => setCurrentTypicalMa(n)}
                   />
                 </label>
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                   <span>Peak Current (mA)</span>
-                  <input
-                    type="number"
+                  <NumericInput
                     step="any"
                     aria-label="Peak current mA"
                     value={currentPeakMa}
-                    onChange={(e) => setCurrentPeakMa(Number(e.target.value))}
+                    onChange={(n) => setCurrentPeakMa(n)}
                   />
                 </label>
               </div>
@@ -789,13 +850,12 @@ export function NewPartForm(): ReactNode {
               >
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                   <span>Default Address (7-bit)</span>
-                  <input
-                    type="number"
+                  <NumericInput
                     min={8}
                     max={119}
                     aria-label="I2C default address"
                     value={i2cDefaultAddress}
-                    onChange={(e) => setI2cDefaultAddress(Number(e.target.value))}
+                    onChange={(n) => setI2cDefaultAddress(n)}
                   />
                 </label>
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -836,13 +896,12 @@ export function NewPartForm(): ReactNode {
                     </label>
                     <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                       <span>High Address</span>
-                      <input
-                        type="number"
+                      <NumericInput
                         min={8}
                         max={119}
                         aria-label="I2C strap high address"
                         value={i2cStrapHighAddress}
-                        onChange={(e) => setI2cStrapHighAddress(Number(e.target.value))}
+                        onChange={(n) => setI2cStrapHighAddress(n)}
                       />
                     </label>
                   </>
@@ -988,18 +1047,14 @@ export function NewPartForm(): ReactNode {
                       {field.key}
                       {field.optional ? ' (optional)' : ''}
                     </span>
-                    <input
-                      type="number"
+                    <NumericInput
                       step="any"
                       aria-label={`Param ${field.key}`}
-                      value={rawVal === undefined ? '' : Number(rawVal)}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        updateBehaviorParam(
-                          field.key,
-                          v === '' && field.optional ? undefined : Number(v),
-                        );
-                      }}
+                      value={rawVal === undefined ? undefined : Number(rawVal)}
+                      onChange={(n) => updateBehaviorParam(field.key, n)}
+                      {...(field.optional
+                        ? { onClear: () => updateBehaviorParam(field.key, undefined) }
+                        : {})}
                     />
                   </label>
                 );
@@ -1016,31 +1071,149 @@ export function NewPartForm(): ReactNode {
               style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginBottom: 8 }}
             >
               <span>Max GPIO Input Voltage (V):</span>
-              <input
-                type="number"
+              <NumericInput
                 step="any"
                 aria-label="Max GPIO input V"
                 value={gpioMaxInputV}
-                onChange={(e) => setGpioMaxInputV(Number(e.target.value))}
+                onChange={(n) => setGpioMaxInputV(n)}
               />
             </label>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {gpios.map((g, idx) => (
-                <div key={idx} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                  <input
-                    type="number"
+                <div
+                  key={idx}
+                  data-testid={`controller-gpio-row-${idx}`}
+                  style={{
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    gap: 6,
+                    alignItems: 'center',
+                    padding: 4,
+                    background: '#f8fafc',
+                    borderRadius: 4,
+                  }}
+                >
+                  <NumericInput
                     aria-label={`Controller GPIO number ${idx}`}
                     value={g.gpio}
-                    onChange={(e) =>
-                      setGpios(
-                        gpios.map((item, i) =>
-                          i === idx ? { ...item, gpio: Number(e.target.value) } : item,
-                        ),
-                      )
+                    onChange={(n) => updateGpio(idx, (prev) => ({ ...prev, gpio: n }))}
+                    style={{ width: 60 }}
+                  />
+                  <input
+                    type="text"
+                    aria-label={`Controller GPIO label ${idx}`}
+                    placeholder="Label"
+                    value={g.label ?? ''}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      updateGpio(idx, (prev) => {
+                        const { label: _l, ...rest } = prev;
+                        return val.trim() ? { ...rest, label: val } : rest;
+                      });
+                    }}
+                    style={{ width: 84 }}
+                  />
+                  <NumericInput
+                    aria-label={`Controller GPIO adc1Channel ${idx}`}
+                    placeholder="ADC1 ch"
+                    value={g.adc1Channel}
+                    onChange={(n) => updateGpio(idx, (prev) => ({ ...prev, adc1Channel: n }))}
+                    onClear={() =>
+                      updateGpio(idx, (prev) => {
+                        const { adc1Channel: _a1, ...rest } = prev;
+                        return rest;
+                      })
                     }
                     style={{ width: 64 }}
                   />
-                  <button type="button" onClick={() => setGpios(gpios.filter((_, i) => i !== idx))}>
+                  <NumericInput
+                    aria-label={`Controller GPIO adc2Channel ${idx}`}
+                    placeholder="ADC2 ch"
+                    value={g.adc2Channel}
+                    onChange={(n) => updateGpio(idx, (prev) => ({ ...prev, adc2Channel: n }))}
+                    onClear={() =>
+                      updateGpio(idx, (prev) => {
+                        const { adc2Channel: _a2, ...rest } = prev;
+                        return rest;
+                      })
+                    }
+                    style={{ width: 64 }}
+                  />
+                  <NumericInput
+                    aria-label={`Controller GPIO touchChannel ${idx}`}
+                    placeholder="Touch ch"
+                    value={g.touchChannel}
+                    onChange={(n) => updateGpio(idx, (prev) => ({ ...prev, touchChannel: n }))}
+                    onClear={() =>
+                      updateGpio(idx, (prev) => {
+                        const { touchChannel: _tc, ...rest } = prev;
+                        return rest;
+                      })
+                    }
+                    style={{ width: 68 }}
+                  />
+                  <select
+                    aria-label={`Controller GPIO uart0 ${idx}`}
+                    value={g.uart0 ?? ''}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      updateGpio(idx, (prev) => {
+                        const { uart0: _u, ...rest } = prev;
+                        return val === 'tx' || val === 'rx' ? { ...rest, uart0: val } : rest;
+                      });
+                    }}
+                  >
+                    <option value="">no UART0</option>
+                    <option value="tx">uart0: tx</option>
+                    <option value="rx">uart0: rx</option>
+                  </select>
+                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                    <input
+                      type="checkbox"
+                      aria-label={`Controller GPIO inputOnly ${idx}`}
+                      checked={Boolean(g.inputOnly)}
+                      onChange={(e) =>
+                        updateGpio(idx, (prev) => {
+                          const { inputOnly: _io, ...rest } = prev;
+                          return e.target.checked ? { ...rest, inputOnly: true } : rest;
+                        })
+                      }
+                    />
+                    <span>inputOnly</span>
+                  </label>
+                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                    <input
+                      type="checkbox"
+                      aria-label={`Controller GPIO strapping ${idx}`}
+                      checked={Boolean(g.strapping)}
+                      onChange={(e) =>
+                        updateGpio(idx, (prev) => {
+                          const { strapping: _s, ...rest } = prev;
+                          return e.target.checked ? { ...rest, strapping: true } : rest;
+                        })
+                      }
+                    />
+                    <span>strapping</span>
+                  </label>
+                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                    <input
+                      type="checkbox"
+                      aria-label={`Controller GPIO flash ${idx}`}
+                      checked={Boolean(g.flash)}
+                      onChange={(e) =>
+                        updateGpio(idx, (prev) => {
+                          const { flash: _f, ...rest } = prev;
+                          return e.target.checked ? { ...rest, flash: true } : rest;
+                        })
+                      }
+                    />
+                    <span>flash</span>
+                  </label>
+                  <button
+                    type="button"
+                    aria-label={`Remove controller GPIO ${idx}`}
+                    onClick={() => setGpios(gpios.filter((_, i) => i !== idx))}
+                  >
                     Remove GPIO
                   </button>
                 </div>
@@ -1069,52 +1242,47 @@ export function NewPartForm(): ReactNode {
             >
               <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                 <span>Wheelbase (mm)</span>
-                <input
-                  type="number"
+                <NumericInput
                   step="any"
                   aria-label="Wheelbase mm"
                   value={wheelbaseMm}
-                  onChange={(e) => setWheelbaseMm(Number(e.target.value))}
+                  onChange={(n) => setWheelbaseMm(n)}
                 />
               </label>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                 <span>Track Width (mm)</span>
-                <input
-                  type="number"
+                <NumericInput
                   step="any"
                   aria-label="Track width mm"
                   value={trackWidthMm}
-                  onChange={(e) => setTrackWidthMm(Number(e.target.value))}
+                  onChange={(n) => setTrackWidthMm(n)}
                 />
               </label>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                 <span>Wheel Radius (mm)</span>
-                <input
-                  type="number"
+                <NumericInput
                   step="any"
                   aria-label="Wheel radius mm"
                   value={wheelRadiusMm}
-                  onChange={(e) => setWheelRadiusMm(Number(e.target.value))}
+                  onChange={(n) => setWheelRadiusMm(n)}
                 />
               </label>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                 <span>Max Steering (deg)</span>
-                <input
-                  type="number"
+                <NumericInput
                   step="any"
                   aria-label="Max steering deg"
                   value={maxSteeringAngleDeg}
-                  onChange={(e) => setMaxSteeringAngleDeg(Number(e.target.value))}
+                  onChange={(n) => setMaxSteeringAngleDeg(n)}
                 />
               </label>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                 <span>Steering Linkage Ratio</span>
-                <input
-                  type="number"
+                <NumericInput
                   step="any"
                   aria-label="Steering linkage ratio"
                   value={steeringLinkageRatio}
-                  onChange={(e) => setSteeringLinkageRatio(Number(e.target.value))}
+                  onChange={(n) => setSteeringLinkageRatio(n)}
                 />
               </label>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -1131,43 +1299,161 @@ export function NewPartForm(): ReactNode {
               </label>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                 <span>Final Drive Ratio</span>
-                <input
-                  type="number"
+                <NumericInput
                   step="any"
                   aria-label="Final drive ratio"
                   value={finalDriveRatio}
-                  onChange={(e) => setFinalDriveRatio(Number(e.target.value))}
+                  onChange={(n) => setFinalDriveRatio(n)}
+                />
+              </label>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <span>CoG X (mm)</span>
+                <NumericInput
+                  step="any"
+                  aria-label="CoG X mm"
+                  value={centreOfGravityMm.x}
+                  onChange={(n) => setCentreOfGravityMm({ ...centreOfGravityMm, x: n })}
                 />
               </label>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                 <span>CoG Y (mm)</span>
-                <input
-                  type="number"
+                <NumericInput
                   step="any"
                   aria-label="CoG Y mm"
                   value={centreOfGravityMm.y}
-                  onChange={(e) =>
-                    setCentreOfGravityMm({ ...centreOfGravityMm, y: Number(e.target.value) })
-                  }
+                  onChange={(n) => setCentreOfGravityMm({ ...centreOfGravityMm, y: n })}
+                />
+              </label>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <span>CoG Z (mm)</span>
+                <NumericInput
+                  step="any"
+                  aria-label="CoG Z mm"
+                  value={centreOfGravityMm.z}
+                  onChange={(n) => setCentreOfGravityMm({ ...centreOfGravityMm, z: n })}
                 />
               </label>
             </div>
-            <div style={{ marginTop: 8 }}>
+            <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
               <strong>Mount Points:</strong>
               {mountPoints.map((mp, idx) => (
-                <div key={idx} style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+                <div
+                  key={idx}
+                  data-testid={`mount-point-row-${idx}`}
+                  style={{
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    gap: 6,
+                    alignItems: 'center',
+                    padding: 4,
+                    background: '#f8fafc',
+                    borderRadius: 4,
+                  }}
+                >
                   <input
                     type="text"
                     aria-label={`Mount point id ${idx}`}
+                    placeholder="Mount id"
                     value={mp.id}
                     onChange={(e) =>
                       setMountPoints(
                         mountPoints.map((m, i) => (i === idx ? { ...m, id: e.target.value } : m)),
                       )
                     }
+                    style={{ width: 110 }}
                   />
+                  <NumericInput
+                    step="any"
+                    aria-label={`Mount point ${idx} X mm`}
+                    placeholder="X (mm)"
+                    value={mp.positionMm.x}
+                    onChange={(n) =>
+                      setMountPoints(
+                        mountPoints.map((m, i) =>
+                          i === idx ? { ...m, positionMm: { ...m.positionMm, x: n } } : m,
+                        ),
+                      )
+                    }
+                    style={{ width: 70 }}
+                  />
+                  <NumericInput
+                    step="any"
+                    aria-label={`Mount point ${idx} Y mm`}
+                    placeholder="Y (mm)"
+                    value={mp.positionMm.y}
+                    onChange={(n) =>
+                      setMountPoints(
+                        mountPoints.map((m, i) =>
+                          i === idx ? { ...m, positionMm: { ...m.positionMm, y: n } } : m,
+                        ),
+                      )
+                    }
+                    style={{ width: 70 }}
+                  />
+                  <NumericInput
+                    step="any"
+                    aria-label={`Mount point ${idx} Z mm`}
+                    placeholder="Z (mm)"
+                    value={mp.positionMm.z}
+                    onChange={(n) =>
+                      setMountPoints(
+                        mountPoints.map((m, i) =>
+                          i === idx ? { ...m, positionMm: { ...m.positionMm, z: n } } : m,
+                        ),
+                      )
+                    }
+                    style={{ width: 70 }}
+                  />
+                  <NumericInput
+                    step="any"
+                    aria-label={`Mount point ${idx} yaw deg`}
+                    placeholder="Yaw (deg)"
+                    value={mp.yawDeg}
+                    onChange={(n) =>
+                      setMountPoints(
+                        mountPoints.map((m, i) => (i === idx ? { ...m, yawDeg: n } : m)),
+                      )
+                    }
+                    style={{ width: 70 }}
+                  />
+                  <NumericInput
+                    step="any"
+                    aria-label={`Mount point ${idx} pitch deg`}
+                    placeholder="Pitch (deg)"
+                    value={mp.pitchDeg}
+                    onChange={(n) =>
+                      setMountPoints(
+                        mountPoints.map((m, i) => (i === idx ? { ...m, pitchDeg: n } : m)),
+                      )
+                    }
+                    style={{ width: 70 }}
+                  />
+                  <button
+                    type="button"
+                    aria-label={`Remove mount point ${idx}`}
+                    onClick={() => setMountPoints(mountPoints.filter((_, i) => i !== idx))}
+                  >
+                    Remove Mount Point
+                  </button>
                 </div>
               ))}
+              <button
+                type="button"
+                onClick={() =>
+                  setMountPoints([
+                    ...mountPoints,
+                    {
+                      id: `mount-${mountPoints.length + 1}`,
+                      positionMm: { x: 0, y: 50, z: 0 },
+                      yawDeg: 0,
+                      pitchDeg: 0,
+                    },
+                  ])
+                }
+                style={{ alignSelf: 'flex-start' }}
+              >
+                Add Mount Point
+              </button>
             </div>
           </fieldset>
         )}
@@ -1176,109 +1462,185 @@ export function NewPartForm(): ReactNode {
         <fieldset style={{ border: '1px solid #e2e8f0', borderRadius: 4, padding: 8 }}>
           <legend style={{ fontWeight: 600 }}>Pins ({pins.length})</legend>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {pins.map((pin, idx) => (
-              <div
-                key={idx}
-                style={{
-                  display: 'flex',
-                  flexWrap: 'wrap',
-                  gap: 6,
-                  alignItems: 'center',
-                }}
-              >
-                <input
-                  type="text"
-                  aria-label={`Pin ${idx} name`}
-                  value={pin.name}
-                  onChange={(e) =>
-                    setPins(pins.map((p, i) => (i === idx ? { ...p, name: e.target.value } : p)))
-                  }
-                  placeholder="Pin name"
-                  style={{ width: 90, fontFamily: 'monospace' }}
-                />
-                <select
-                  aria-label={`Pin ${idx} kind`}
-                  value={pin.kind}
-                  onChange={(e) =>
-                    setPins(
-                      pins.map((p, i) =>
-                        i === idx ? { ...p, kind: e.target.value as PinDefinition['kind'] } : p,
-                      ),
-                    )
-                  }
+            {pins.map((pin, idx) => {
+              const vMode = getPinVoltageMode(pin.voltage);
+              return (
+                <div
+                  key={idx}
+                  data-testid={`pin-def-row-${idx}`}
+                  style={{
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    gap: 6,
+                    alignItems: 'center',
+                    padding: 4,
+                    background: '#f8fafc',
+                    borderRadius: 4,
+                  }}
                 >
-                  {PinKind.options.map((k) => (
-                    <option key={k} value={k}>
-                      {k}
-                    </option>
-                  ))}
-                </select>
-                {typeof pin.voltage !== 'object' && (
                   <input
-                    type="number"
-                    step="any"
-                    aria-label={`Pin ${idx} voltage`}
-                    placeholder="Voltage (V)"
-                    value={typeof pin.voltage === 'number' ? pin.voltage : ''}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setPins(
-                        pins.map((p, i) => {
-                          if (i !== idx) return p;
-                          const { voltage: _v, ...rest } = p;
-                          return val === '' ? rest : { ...rest, voltage: Number(val) };
-                        }),
-                      );
-                    }}
-                    style={{ width: 90 }}
+                    type="text"
+                    aria-label={`Pin ${idx} name`}
+                    value={pin.name}
+                    onChange={(e) => updatePin(idx, (prev) => ({ ...prev, name: e.target.value }))}
+                    placeholder="Pin name"
+                    style={{ width: 84, fontFamily: 'monospace' }}
                   />
-                )}
-                {pin.kind === 'power-out' && (
-                  <input
-                    type="number"
-                    step="any"
-                    aria-label={`Pin ${idx} maxCurrentMa`}
-                    placeholder="Max mA"
-                    value={pin.maxCurrentMa ?? ''}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setPins(
-                        pins.map((p, i) => {
-                          if (i !== idx) return p;
-                          const { maxCurrentMa: _c, ...rest } = p;
-                          return val === '' ? rest : { ...rest, maxCurrentMa: Number(val) };
-                        }),
-                      );
-                    }}
-                    style={{ width: 90 }}
-                  />
-                )}
-                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-                  <input
-                    type="checkbox"
-                    aria-label={`Pin ${idx} optional`}
-                    checked={Boolean(pin.optional)}
+                  <select
+                    aria-label={`Pin ${idx} kind`}
+                    value={pin.kind}
                     onChange={(e) =>
-                      setPins(
-                        pins.map((p, i) => {
-                          if (i !== idx) return p;
-                          const { optional: _o, ...rest } = p;
-                          return e.target.checked ? { ...rest, optional: true } : rest;
-                        }),
-                      )
+                      updatePin(idx, (prev) => ({
+                        ...prev,
+                        kind: e.target.value as PinDefinition['kind'],
+                      }))
                     }
+                  >
+                    {PinKind.options.map((k) => (
+                      <option key={k} value={k}>
+                        {k}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    aria-label={`Pin ${idx} voltage mode`}
+                    value={vMode}
+                    onChange={(e) => {
+                      const nextMode = e.target.value as PinVoltageMode;
+                      updatePin(idx, (prev) => {
+                        const { voltage: _v, ...rest } = prev;
+                        if (nextMode === 'none') return rest;
+                        if (nextMode === 'supply') return { ...rest, voltage: 'supply' };
+                        if (nextMode === 'number') return { ...rest, voltage: 3.3 };
+                        return { ...rest, voltage: { min: 3.0, max: 5.0 } };
+                      });
+                    }}
+                  >
+                    <option value="none">no voltage</option>
+                    <option value="number">fixed V</option>
+                    <option value="supply">supply V</option>
+                    <option value="range">min..max V</option>
+                  </select>
+                  {(vMode === 'none' || vMode === 'number') && (
+                    <NumericInput
+                      step="any"
+                      aria-label={`Pin ${idx} voltage`}
+                      placeholder="Voltage (V)"
+                      value={typeof pin.voltage === 'number' ? pin.voltage : undefined}
+                      onChange={(n) => updatePin(idx, (prev) => ({ ...prev, voltage: n }))}
+                      onClear={() =>
+                        updatePin(idx, (prev) => {
+                          const { voltage: _v, ...rest } = prev;
+                          return rest;
+                        })
+                      }
+                      style={{ width: 80 }}
+                    />
+                  )}
+                  {vMode === 'range' && typeof pin.voltage === 'object' && pin.voltage !== null && (
+                    <>
+                      <NumericInput
+                        step="any"
+                        aria-label={`Pin ${idx} voltage min`}
+                        placeholder="Min V"
+                        value={pin.voltage.min}
+                        onChange={(n) =>
+                          updatePin(idx, (prev) => ({
+                            ...prev,
+                            voltage:
+                              typeof prev.voltage === 'object' && prev.voltage !== null
+                                ? { ...prev.voltage, min: n }
+                                : { min: n, max: n },
+                          }))
+                        }
+                        style={{ width: 68 }}
+                      />
+                      <NumericInput
+                        step="any"
+                        aria-label={`Pin ${idx} voltage max`}
+                        placeholder="Max V"
+                        value={pin.voltage.max}
+                        onChange={(n) =>
+                          updatePin(idx, (prev) => ({
+                            ...prev,
+                            voltage:
+                              typeof prev.voltage === 'object' && prev.voltage !== null
+                                ? { ...prev.voltage, max: n }
+                                : { min: n, max: n },
+                          }))
+                        }
+                        style={{ width: 68 }}
+                      />
+                    </>
+                  )}
+                  <NumericInput
+                    step="any"
+                    aria-label={`Pin ${idx} maxInputV`}
+                    placeholder="Max in (V)"
+                    value={pin.maxInputV}
+                    onChange={(n) => updatePin(idx, (prev) => ({ ...prev, maxInputV: n }))}
+                    onClear={() =>
+                      updatePin(idx, (prev) => {
+                        const { maxInputV: _m, ...rest } = prev;
+                        return rest;
+                      })
+                    }
+                    style={{ width: 78 }}
                   />
-                  <span>optional</span>
-                </label>
-                <button
-                  type="button"
-                  aria-label={`Remove pin ${idx}`}
-                  onClick={() => setPins(pins.filter((_, i) => i !== idx))}
-                >
-                  Remove
-                </button>
-              </div>
-            ))}
+                  {pin.kind === 'power-out' && (
+                    <NumericInput
+                      step="any"
+                      aria-label={`Pin ${idx} maxCurrentMa`}
+                      placeholder="Max mA"
+                      value={pin.maxCurrentMa}
+                      onChange={(n) => updatePin(idx, (prev) => ({ ...prev, maxCurrentMa: n }))}
+                      onClear={() =>
+                        updatePin(idx, (prev) => {
+                          const { maxCurrentMa: _c, ...rest } = prev;
+                          return rest;
+                        })
+                      }
+                      style={{ width: 78 }}
+                    />
+                  )}
+                  <input
+                    type="text"
+                    aria-label={`Pin ${idx} description`}
+                    placeholder="Description"
+                    value={pin.description ?? ''}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      updatePin(idx, (prev) => {
+                        const { description: _d, ...rest } = prev;
+                        return val.trim() ? { ...rest, description: val } : rest;
+                      });
+                    }}
+                    style={{ width: 110 }}
+                  />
+                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                    <input
+                      type="checkbox"
+                      aria-label={`Pin ${idx} optional`}
+                      checked={Boolean(pin.optional)}
+                      onChange={(e) =>
+                        updatePin(idx, (prev) => {
+                          const { optional: _o, ...rest } = prev;
+                          return e.target.checked ? { ...rest, optional: true } : rest;
+                        })
+                      }
+                    />
+                    <span>optional</span>
+                  </label>
+                  <button
+                    type="button"
+                    aria-label={`Remove pin ${idx}`}
+                    onClick={() => setPins(pins.filter((_, i) => i !== idx))}
+                  >
+                    Remove
+                  </button>
+                </div>
+              );
+            })}
             <button
               type="button"
               onClick={() =>

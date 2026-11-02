@@ -1,8 +1,15 @@
 import { electricalOf, type PartDefinition } from '@rcsim/schema';
 import type { ReactNode } from 'react';
-import { useWorkbenchStore } from './workbench-store.ts';
+import { formatHex, useWorkbenchStore } from './workbench-store.ts';
 
-const hex = (address: number): string => `0x${address.toString(16).toUpperCase().padStart(2, '0')}`;
+function isSafeHttpUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
 
 function formatParamValue(value: unknown): string {
   if (Array.isArray(value)) {
@@ -134,8 +141,8 @@ export function PartInspector(): ReactNode {
           <div data-testid="inspector-i2c">
             <strong>I²C Bus</strong>
             <div>
-              Default address: {hex(definition.i2c.defaultAddress)} ({definition.i2c.defaultAddress}
-              )
+              Default address: {formatHex(definition.i2c.defaultAddress)} (
+              {definition.i2c.defaultAddress})
             </div>
             <div>Addressing: {definition.i2c.addressing.kind}</div>
           </div>
@@ -188,14 +195,18 @@ export function PartInspector(): ReactNode {
         <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
           {definition.sources.map((url) => (
             <li key={url}>
-              <a
-                href={url}
-                target="_blank"
-                rel="noreferrer"
-                style={{ color: '#2563eb', wordBreak: 'break-all' }}
-              >
-                {url}
-              </a>
+              {isSafeHttpUrl(url) ? (
+                <a
+                  href={url}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ color: '#2563eb', wordBreak: 'break-all' }}
+                >
+                  {url}
+                </a>
+              ) : (
+                <span style={{ wordBreak: 'break-all', color: '#334155' }}>{url}</span>
+              )}
             </li>
           ))}
         </ul>
