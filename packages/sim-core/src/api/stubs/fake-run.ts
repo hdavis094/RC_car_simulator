@@ -145,7 +145,13 @@ export async function createFakeRun(
     if (status === 'ended') return;
     status = 'ended';
     end = why;
-    for (const listener of listeners.end) listener(why);
+    for (const listener of listeners.end) {
+      try {
+        listener(why);
+      } catch {
+        // A listener's failure must not change how the run ended, or skip the others.
+      }
+    }
   };
   let stepping = false;
 

@@ -67,6 +67,7 @@ export type Unsubscribe = () => void;
  * (`stopped` wins over a failure the stop itself causes). An unexpected error
  * from a part of the loop ends the run with `{kind: 'error'}`, rather than
  * rejecting `step`. However a run ended, call `stop()` to release the source.
+ * An `end` listener that throws affects neither the run nor other listeners.
  */
 export interface Run {
   readonly clock: SimClock;

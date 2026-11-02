@@ -36,7 +36,11 @@ export interface CollisionEvent {
 }
 
 export interface WorldStepEvents {
-  /** Contacts that began during this step (not ongoing ones). */
+  /**
+   * Contacts that began during this step, not ongoing ones. A re-touch of the
+   * same target within a short bounce gap is the same contact, so one hit gives
+   * one event. Each edge of the track is its own target.
+   */
   readonly collisions: readonly CollisionEvent[];
 }
 

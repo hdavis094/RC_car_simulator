@@ -282,6 +282,20 @@ describe('the Run lifecycle', () => {
     expect(run.snapshot().sensors.map((s) => s.instanceId)).not.toContain('tof_left');
   });
 
+  it('keeps the end reason and notifies everyone when an end listener throws', async () => {
+    const source = new FakeActuatorSource();
+    source.step = () => Promise.reject(new Error('source broke'));
+    const run = await fakeRun(source);
+    const ends: unknown[] = [];
+    run.on('end', () => {
+      throw new Error('listener broke');
+    });
+    run.on('end', (end) => ends.push(end));
+    const expected = { kind: 'error', message: 'source broke' };
+    await expect(run.step()).resolves.toMatchObject({ status: 'ended', end: expected });
+    expect(ends).toEqual([expected]);
+  });
+
   it('rejects a second step while one is pending', async () => {
     const run = await fakeRun(new FakeActuatorSource());
     const first = run.step(5);
