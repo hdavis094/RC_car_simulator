@@ -1,3 +1,4 @@
-// The app shell (P1-D): environment switching, layout, docking.
 export { App } from './App.tsx';
+export { BottomPanel, type DockTab } from './BottomPanel.tsx';
+export { useSessionStore } from './session.ts';
 export { ENVIRONMENTS, useEnvironmentStore, type Environment } from './environment-store.ts';
