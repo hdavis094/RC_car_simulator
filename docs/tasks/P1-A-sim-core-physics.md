@@ -109,8 +109,8 @@ All seven items are fixed. Status stays `in-review`.
 - **Golden hash (2).** `matches the golden hash` pins the snapshot hash of `DRIVEN` after 10 000 ticks. It runs in `pnpm verify` on both CI OSes (ubuntu x86-64, macos-latest arm64). I added no math library: only a macOS CI mismatch would justify one. I could only run Linux here, so macOS is unconfirmed until CI. This covers Node's V8, not Electron's. If the physics changes on purpose, paste the new hash from the failure message (the comment above the constant says so).
 - **Stale queries (3).** Your `updateSceneQueries` does not exist in Rapier 0.21. Only `propagateModifiedBodyPositionsToColliders` does, and the spatial index refreshes only inside a step (I re-checked every exported call). No zero-length step is used. What I did instead:
   - **Raycasts** are always current: until the first step and after any obstacle add, move or remove, `raycast` poses the colliders (`propagateModifiedBodyPositionsToColliders`, which advances nothing) and tests each collider; after a step it uses the index.
-  - **Suspension queries** now run after the physics step, in `RapierVehicle.afterStep`, not before it. The rays therefore see the index the step just refreshed, including edits made while paused. The cost is that a command takes effect one step (1 ms) later, which is in the golden hash and documented on `afterStep`.
-  - Moved obstacles do block and unblock correctly (tests in `run/lifecycle.test.ts`). The car's `velocity`, `acceleration` and `angularVelocity` are now read after the step and before the drive impulses.
+  - **Suspension queries** originally moved to after the physics step so they would see the refreshed index. That broke the Vehicle contract and was reversed in round 2 (below). The paused-edit handling in round 2 replaces it.
+  - Moved obstacles do block and unblock correctly (tests in `run/lifecycle.test.ts`).
 - **End listeners (4).** `emit` isolates every listener; `serial`, `log` and `net` get the same protection as `end`. Tests cover a throwing `end` listener during a failed run and during `stop()`.
 - **Collisions (5).**
   - Each track edge is its own target (`wall:left` and `wall:right`); the public `RaycastHit`/`CollisionEvent` still say `wall`.
@@ -120,4 +120,22 @@ All seven items are fixed. Status stays `in-review`.
 - **Rapier resources (6).** `PhysicsWorld.dispose()` frees the world and event queue, idempotently. `Run.stop()` is one shared promise: it ends the run, stops the source, waits for the active `step()` to settle, snapshots, then disposes. `snapshot()` returns that final snapshot afterwards and `metrics()` still works. A disposed world's `raycast` returns null and `step` and edits throw. `createRun` also frees the world if assembly fails.
 - **`--tick-us` (7).** 0, negative, fractional and empty values give `ScenarioInputError` and exit 2. `runScenario` validates `tickUs` and `seconds` too.
 - **Rulings noted.** Steering stays as implemented. `--firmware` wiring is P1-H's.
+
+### Review round 2
+
+All four items are fixed. Status stays `in-review`. The golden hash changed (now `bf735395…`) because the suspension is queried before the step again; CI re-checks it on both OSes.
+
+- **Vehicle contract (1).** The drive (steering, motor force, rolling resistance, `updateVehicle`) runs before `world.step` again, in `RapierVehicle.beforeStep`. Velocity, acceleration, angular velocity and forward speed are read after the step, in `afterStep`. So a command applies to the next step and `state()` shows its effect and the command. The `afterStep` doc comment is replaced accordingly.
+  - Rapier's index is stale for the suspension rays in two cases: the first step, and a ramp added, moved or removed while paused (only ramps are in the ground group the rays look for). In those cases the world first runs a step at the real `dt` with the car's body disabled (`setEnabled(false)`, step, `setEnabled(true)`), in `PhysicsWorld.#refreshGroundIndex`.
+  - I checked that this leaves the car's translation, rotation, linear velocity and angular velocity bit-identical (logged before and after, on the first step and on ramp add and move mid-drive), and a test (`changes nothing about the car`) compares a refreshed world and an unrefreshed one over 400 steps.
+  - **Side effect:** disabling the body drops its contacts, so the stop events from the refresh are fed to the contact history. The real step's re-touches then fall inside the bounce gap and are not counted again. A test pushes against a cone, edits a ramp twice, and still sees one collision.
+  - There are no dynamic obstacles (all fixed), so nothing else moves during the refresh.
+  - **Not fully explained:** after `setEnabled(true)`, `collider.isEnabled()` still reads `false` until the real step. The car's collider behaves normally (tests for contacts, raycasts that hit it, and the ramp lift all pass), but I did not find out why it reads `false`.
+  - **Tests:**
+    - on a settled car, duty 1 for one step changes the reported forward speed, velocity and acceleration in that same step, and `state.command` matches;
+    - the first step has all four wheels in contact;
+    - a ramp added while paused lifts the front-left wheel in the very next step (it fails with the ramp refresh removed).
+- **Reentrant `stop()` (2).** The shared promise is created (`Promise.withResolvers`) before `finish()` emits `end`. A test with `run.on('end', () => void run.stop())` asserts one `source.stop()`, the same promise from the listener and the outer call, and that `stop()` resolves only after the source's cleanup.
+- **Ready snapshot wheels (3).** Before the suspension is first queried, `state()` poses the wheels from the geometry: at the chassis-frame wheel positions, standing on the ground, with the chassis rotation. A Vehicle test and a Run test check a car created at (2.4, 3) with yaw 90°. They report `inContact: false` until the first step.
+- **Unknown track (4).** `runScenario` turns a `trackLibrary.load` failure into `ScenarioInputError` ("unknown track … (built in: …)"), so the CLI exits 2. A test covers it.
 

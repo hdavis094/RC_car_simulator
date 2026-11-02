@@ -93,6 +93,8 @@ export class PhysicsWorld implements World {
   #nextId = 1;
   /** True when Rapier's spatial index lacks edits: before the first step, and after an edit. */
   #indexStale = true;
+  /** True when the index lacks something the suspension rays need: the ground (first step) or an edited ramp. */
+  #groundStale = true;
   #disposed = false;
 
   constructor(rapier: Rapier, file: WorldFile, track: Track) {
@@ -183,12 +185,39 @@ export class PhysicsWorld implements World {
   step(dtS: number, nowUs: number): WorldStepEvents {
     this.#live();
     this.#world.timestep = dtS;
+    const vehicle = this.#vehicle;
+    if (vehicle && this.#groundStale) this.#refreshGroundIndex(vehicle, nowUs);
+    vehicle?.beforeStep(dtS);
     this.#world.step(this.#events);
     this.#indexStale = false;
-    this.#vehicle?.afterStep(dtS);
+    this.#groundStale = false;
+    vehicle?.afterStep(dtS);
     const collisions: CollisionEvent[] = [];
+    this.#drainContacts(nowUs, collisions);
+    return { collisions };
+  }
+
+  /**
+   * Brings Rapier's spatial index up to date for the suspension rays,
+   * which must run before the step: on the first step the index is empty,
+   * and a ramp edited while paused is not in it yet. A step with the car's
+   * body disabled does it at the real `dt` while moving nothing (the car is
+   * the only moving body). A zero-length step does not work: it corrupts
+   * the car's collider. Contacts the car has are dropped and re-made around
+   * it, so the stop events are fed to the contact history here, and the new
+   * touches in the real step then count as the same contacts.
+   */
+  #refreshGroundIndex(vehicle: RapierVehicle, nowUs: number): void {
+    vehicle.body.setEnabled(false);
+    this.#world.step(this.#events);
+    vehicle.body.setEnabled(true);
+    this.#drainContacts(nowUs, null);
+  }
+
+  /** Turns the contact events since the last drain into collisions (`out`), or only tracks them. */
+  #drainContacts(nowUs: number, out: CollisionEvent[] | null): void {
+    const vehicle = this.#vehicle;
     this.#events.drainCollisionEvents((h1, h2, started) => {
-      const vehicle = this.#vehicle;
       if (!vehicle) return;
       const other =
         h1 === vehicle.collider.handle ? h2 : h2 === vehicle.collider.handle ? h1 : null;
@@ -198,15 +227,14 @@ export class PhysicsWorld implements World {
       const key = contactKey(target);
       if (!started) {
         this.#contacts.stopped(key, nowUs);
-      } else if (this.#contacts.started(key, nowUs)) {
-        collisions.push({
+      } else if (this.#contacts.started(key, nowUs) && out) {
+        out.push({
           tUs: nowUs,
           with: target.kind === 'wall' ? { kind: 'wall' } : { kind: 'obstacle', id: target.id },
           impulseNs: this.#impulse(vehicle.collider, other),
         });
       }
     });
-    return { collisions };
   }
 
   /** Total contact impulse between the car and a collider this step; 0 if unknown. */
@@ -302,6 +330,7 @@ export class PhysicsWorld implements World {
   addObstacle(obstacle: Obstacle): string {
     this.#live();
     this.#indexStale = true;
+    if (obstacle.type === 'ramp') this.#groundStale = true;
     return this.#add(obstacle);
   }
 
@@ -363,6 +392,7 @@ export class PhysicsWorld implements World {
     this.#world.propagateModifiedBodyPositionsToColliders();
     this.#contacts.forget(contactKey({ kind: 'obstacle', id }));
     this.#indexStale = true;
+    if (obstacle.type === 'ramp') this.#groundStale = true;
   }
 
   removeObstacle(id: string): void {
@@ -374,6 +404,7 @@ export class PhysicsWorld implements World {
     this.#hittable.delete(obstacle.collider.handle);
     this.#contacts.forget(contactKey({ kind: 'obstacle', id }));
     this.#indexStale = true;
+    if (obstacle.type === 'ramp') this.#groundStale = true;
     if (body) this.#world.removeRigidBody(body);
     else this.#world.removeCollider(obstacle.collider, true);
     this.#obstacles.delete(id);

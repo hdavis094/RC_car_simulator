@@ -29,6 +29,13 @@ beforeAll(() => {
     { tUs: ARMED_BY_US, gpio: ESC_GPIO, pulseUs: throttlePulse(0.3) },
   ]);
   write('idle.json', NEUTRAL);
+  write('missing-track-world.json', {
+    schemaVersion: 1,
+    name: 'no such track',
+    trackId: 'missing-track',
+    seed: 1,
+    obstacles: [],
+  });
   write('bad-script.json', [{ tUs: 'soon' }]);
   writeFileSync(path.join(dir, 'not-json.json'), '{');
 });
@@ -142,6 +149,20 @@ describe('rcsim run', () => {
           'idle.json',
         ],
         /invalid car/,
+      ],
+      [
+        [
+          'run',
+          '--car',
+          'car.json',
+          '--world',
+          'missing-track-world.json',
+          '--seconds',
+          '1',
+          '--script',
+          'idle.json',
+        ],
+        /unknown track "missing-track".*oval/,
       ],
       [[...base, '--seconds', '1', '--firmware', 'fw'], /firmware bridge/],
       [['fly'], /unknown command/],

@@ -57,6 +57,10 @@ export class RapierVehicle implements Vehicle {
   readonly #cog: Vec3;
   readonly #driven: readonly number[];
   readonly #loadN: readonly number[];
+  /** Wheel centres in the chassis frame with the car at rest on flat ground. */
+  readonly #wheelRest: readonly Vec3[];
+  /** False until the suspension has first been queried (`beforeStep`): its hard points are unset before. */
+  #queried = false;
   #command: VehicleCommand = { steerAngleRad: 0, motorDuty: 0 };
   #applied: VehicleCommand = this.#command;
   #steerRad: [number, number, number, number] = [0, 0, 0, 0];
@@ -143,6 +147,7 @@ export class RapierVehicle implements Vehicle {
       this.#controller.setWheelSideFrictionStiffness(i, TUNING.sideFrictionStiffness);
     });
     this.#loadN = loads;
+    this.#wheelRest = wheelXZ.map(([x, z]): Vec3 => [x, Rw, z]);
     this.#driven =
       params.driveWheels === 'front'
         ? [0, 1]
@@ -179,14 +184,19 @@ export class RapierVehicle implements Vehicle {
   }
 
   /**
-   * Called by the world right after each physics step: records the car's
-   * motion, then applies steering, drive and rolling resistance for the
-   * next step. Querying the suspension here, after the step, means the
-   * rays see the scene as the step just left it, with every obstacle edit
-   * made since the last tick already in Rapier's spatial index (it is only
-   * refreshed inside a step). A command takes effect one step after it is
-   * applied.
+   * Called by the world just before each physics step: applies the current
+   * command, so it is the command "used by the next `World.step`". Sets the
+   * steering, works out the motor and rolling-resistance forces from the
+   * speed at the end of the last step, and queries the suspension (the
+   * wheels' rays, which only look for the ground and ramps). The world makes
+   * sure Rapier's spatial index holds those first.
    */
+  beforeStep(dtS: number): void {
+    this.#drive(dtS);
+    this.#cache = undefined;
+  }
+
+  /** Called by the world right after each physics step: records the car's motion over it. */
   afterStep(dtS: number): void {
     const v = this.body.linvel();
     this.#acceleration = [
@@ -200,7 +210,6 @@ export class RapierVehicle implements Vehicle {
     const r = this.body.rotation();
     const f = rotate([r.x, r.y, r.z, r.w], [0, 0, -1]);
     this.#forwardSpeed = v.x * f[0] + v.y * f[1] + v.z * f[2];
-    this.#drive(dtS);
     this.#cache = undefined;
   }
 
@@ -232,6 +241,7 @@ export class RapierVehicle implements Vehicle {
       c.setWheelBrake(i, TUNING.rollingResistance * (this.#loadN[i] ?? 0) * dtS);
     }
     c.updateVehicle(dtS, undefined, groups(0xffff, GROUP.ground));
+    this.#queried = true;
   }
 
   #clamped(command: VehicleCommand): VehicleCommand {
@@ -252,6 +262,23 @@ export class RapierVehicle implements Vehicle {
     const { rotation } = origin;
     const c = this.#controller;
     const wheels = WHEEL_ORDER.map((_, i): WheelState => {
+      if (!this.#queried) {
+        // No step yet: the car stands at rest where it was placed, so pose the
+        // wheels from the geometry rather than from the unset suspension.
+        const [x, y, z] = this.#wheelRest[i] as Vec3;
+        const at = rotate(rotation, [x, y, z]);
+        return {
+          position: [
+            origin.position[0] + at[0],
+            origin.position[1] + at[1],
+            origin.position[2] + at[2],
+          ],
+          rotation,
+          steerRad: 0,
+          spinRad: 0,
+          inContact: false,
+        };
+      }
       const hard = c.wheelHardPoint(i) ?? { x: 0, y: 0, z: 0 };
       const length = c.wheelSuspensionLength(i) ?? TUNING.restLengthM;
       const down = rotate(rotation, [0, -length, 0]);

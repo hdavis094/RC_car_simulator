@@ -212,6 +212,34 @@ describe('stop', () => {
     expect(run.snapshot().tick).toBe(4);
   });
 
+  it('is one shutdown even when an end listener calls stop()', async () => {
+    const inner = createScriptedSource([]);
+    let sourceStops = 0;
+    let cleaned = false;
+    const source: ActuatorSource = {
+      start: (s) => inner.start(s),
+      step: (input) => inner.step(input),
+      async stop() {
+        sourceStops += 1;
+        await new Promise((r) => setTimeout(r, 20));
+        cleaned = true; // the source's cleanup takes a while
+      },
+    };
+    const run = await testRun({ source });
+    let fromListener: Promise<void> | undefined;
+    run.on('end', () => {
+      fromListener = run.stop();
+    });
+    await run.step(3);
+    const outer = run.stop();
+    expect(fromListener).toBe(outer); // the same promise
+    await outer;
+    expect(sourceStops).toBe(1);
+    expect(cleaned).toBe(true); // stop() resolved only after the source's cleanup
+    expect(run.end).toEqual({ kind: 'stopped' });
+    expect(run.snapshot().status).toBe('ended');
+  });
+
   it('frees the world when the run cannot be assembled', async () => {
     const source: ActuatorSource = {
       async start() {
@@ -227,6 +255,25 @@ describe('stop', () => {
 });
 
 describe('snapshot', () => {
+  it('shows the wheels at the car before the first step', async () => {
+    const run = await testRun({ start: { x: 2.4, z: 3, yawDeg: 90 } });
+    const { wheels } = run.snapshot().car;
+    expect(run.snapshot().status).toBe('ready');
+    // yaw 90° faces −X; wheelbase 0.335 m, track 0.24 m, wheel radius 0.055 m
+    const expected = [
+      [2.4 - 0.1675, 3.12],
+      [2.4 - 0.1675, 2.88],
+      [2.4 + 0.1675, 3.12],
+      [2.4 + 0.1675, 2.88],
+    ];
+    wheels.forEach((w, i) => {
+      expect(w.position[0]).toBeCloseTo(expected[i]![0]!, 3);
+      expect(w.position[1]).toBeCloseTo(0.055, 3);
+      expect(w.position[2]).toBeCloseTo(expected[i]![1]!, 3);
+    });
+    await run.stop();
+  });
+
   it('describes the car, obstacles, laps and collisions as plain data', async () => {
     const run = await testRun({
       obstacles: [{ id: 'c', type: 'cone', positionM: { x: 0, z: -4 }, yawDeg: 0 }],
