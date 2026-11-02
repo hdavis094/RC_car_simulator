@@ -12,10 +12,22 @@
 
 #include "WiFiUdp.h"
 #include "fake_sim.h"
+#include "rcsim/network.h"
 
 using namespace rcsim::hal;
 using hal_test::FakeSim;
 namespace {
+template <typename T, typename = void>
+struct HasFd : std::false_type {};
+template <typename T>
+struct HasFd<T, std::void_t<decltype(std::declval<T>().fd())>> : std::true_type {};
+template <typename T, typename = void>
+struct HasHostPort : std::false_type {};
+template <typename T>
+struct HasHostPort<T, std::void_t<decltype(std::declval<T>().hostPort())>> : std::true_type {};
+static_assert(HasFd<WiFiClient>::value);
+static_assert(!HasFd<WiFiServer>::value && !HasFd<WiFiUDP>::value);
+static_assert(!HasHostPort<WiFiServer>::value);
 using SteadyClock = std::chrono::steady_clock;
 // Wall time belongs only in this host-side barrier. Never spend sim time waiting
 // for the OS to deliver a packet, or start a latency assertion at peer send().
@@ -93,16 +105,16 @@ TEST_CASE(
   delay(1);
   auto port = reportedPort(sim, "tcp");
   REQUIRE(port != 0);
-  CHECK(port == server.hostPort());
+  CHECK(port == hostPort(server));
   Host host;
   auto addr = hostAddress(port);
   REQUIRE(::connect(host.fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0);
-  REQUIRE(waitSocket(server.fd()));
+  REQUIRE(waitSocket(socketFd(server)));
   auto client = server.available();
   REQUIRE(static_cast<bool>(client));
   auto copy = client;
   CHECK(copy.connected());
-  checkSocketFlags(server.fd());
+  checkSocketFlags(socketFd(server));
   checkSocketFlags(client.fd());
   CHECK(client.available() == 0);
   CHECK(client.read() == -1);
@@ -112,7 +124,8 @@ TEST_CASE(
   CHECK(copy.peek() == 'h');
   CHECK(client.read() == 'h');
   CHECK(copy.read() == 'e');
-  REQUIRE(client.print("reply") == 5);
+  char reply[] = "reply";
+  REQUIRE(client.write(reply, 5) == 5);
   REQUIRE(host.readable());
   char b[16];
   CHECK(::recv(host.fd, b, sizeof(b), 0) == 5);
@@ -169,7 +182,7 @@ TEST_CASE("UDP preserves packets and applies latency, total loss and dropout fro
   sim.start();
   WiFiUDP udp;
   REQUIRE(udp.begin(4210));
-  checkSocketFlags(udp.fd());
+  checkSocketFlags(socketFd(udp));
   CHECK(udp.parsePacket() == 0);
   delay(1);
   auto port = reportedPort(sim, "udp");
@@ -177,7 +190,7 @@ TEST_CASE("UDP preserves packets and applies latency, total loss and dropout fro
   Host host(true);
   auto addr = hostAddress(port);
   REQUIRE(sendto(host.fd, "packet", 6, 0, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 6);
-  REQUIRE(waitSocket(udp.fd()));
+  REQUIRE(waitSocket(socketFd(udp)));
   CHECK(udp.parsePacket() == 0);
   delay(1);
   CHECK(udp.parsePacket() == 0);
@@ -203,7 +216,7 @@ TEST_CASE("UDP preserves packets and applies latency, total loss and dropout fro
   latency = 0;
   delay(1);
   REQUIRE(sendto(host.fd, "lost", 4, 0, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 4);
-  REQUIRE(waitSocket(udp.fd()));
+  REQUIRE(waitSocket(socketFd(udp)));
   delay(1);
   CHECK(udp.parsePacket() == 0);
   CHECK(udp.beginPacket(remoteIP, remotePort));
@@ -214,13 +227,13 @@ TEST_CASE("UDP preserves packets and applies latency, total loss and dropout fro
   dropout = true;
   delay(1);
   REQUIRE(sendto(host.fd, "blocked", 7, 0, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 7);
-  REQUIRE(waitSocket(udp.fd()));
+  REQUIRE(waitSocket(socketFd(udp)));
   delay(1);
   CHECK(udp.parsePacket() == 0);
   dropout = false;
   delay(1);
   REQUIRE(sendto(host.fd, "back", 4, 0, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 4);
-  REQUIRE(waitSocket(udp.fd()));
+  REQUIRE(waitSocket(socketFd(udp)));
   CHECK(udp.parsePacket() == 4);
   udp.stop();
 }
@@ -235,7 +248,7 @@ TEST_CASE("releasing the final socket handle reports disconnect and unlisten eve
     Host host;
     auto addr = hostAddress(reportedPort(sim, "tcp"));
     REQUIRE(::connect(host.fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0);
-    REQUIRE(waitSocket(server.fd()));
+    REQUIRE(waitSocket(socketFd(server)));
     auto client = server.available();
     REQUIRE(static_cast<bool>(client));
     auto copy = client;
@@ -249,4 +262,52 @@ TEST_CASE("releasing the final socket handle reports disconnect and unlisten eve
   CHECK(events[0]["type"] == "connect");
   CHECK(events[1]["type"] == "disconnect");
   CHECK(events[2]["type"] == "unlisten");
+}
+
+TEST_CASE("refused outbound connects return failure without spending sim time waiting") {
+  FakeSim sim;
+  sim.start();
+  Host portHolder;
+  auto addr = hostAddress(0);
+  REQUIRE(::bind(portHolder.fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0);
+  socklen_t size = sizeof(addr);
+  REQUIRE(getsockname(portHolder.fd, reinterpret_cast<sockaddr*>(&addr), &size) == 0);
+  WiFiClient client;
+  auto before = runtime().nowNs();
+  CHECK(client.connect("127.0.0.1", ntohs(addr.sin_port)) == 0);
+  CHECK(runtime().nowNs() - before == 1000);
+  CHECK(client.fd() == -1);
+  CHECK_FALSE(client.connected());
+  delay(1);
+  CHECK(sim.done.back()["message"]["netEvents"].size() == 0);
+}
+TEST_CASE("closing outgoing TCP clients emits no unmatched server connection events") {
+  FakeSim sim;
+  sim.start();
+  Host server;
+  auto addr = hostAddress(0);
+  REQUIRE(::bind(server.fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0);
+  REQUIRE(::listen(server.fd, 1) == 0);
+  socklen_t size = sizeof(addr);
+  REQUIRE(getsockname(server.fd, reinterpret_cast<sockaddr*>(&addr), &size) == 0);
+  {
+    WiFiClient client;
+    REQUIRE(client.connect("127.0.0.1", ntohs(addr.sin_port)) == 1);
+    REQUIRE(server.readable());
+    int peer = ::accept(server.fd, nullptr, nullptr);
+    REQUIRE(peer >= 0);
+    REQUIRE(client.connected());
+    client.stop();
+    ::close(peer);
+  }
+  {
+    WiFiClient client;
+    REQUIRE(client.connect("127.0.0.1", ntohs(addr.sin_port)) == 1);
+    REQUIRE(server.readable());
+    int peer = ::accept(server.fd, nullptr, nullptr);
+    REQUIRE(peer >= 0);
+    ::close(peer);
+  }
+  delay(1);
+  CHECK(sim.done.back()["message"]["netEvents"].size() == 0);
 }

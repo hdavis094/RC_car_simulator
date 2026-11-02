@@ -12,6 +12,23 @@
 #include "rcsim/hal_version.h"
 
 namespace rcsim::hal {
+namespace {
+int exitSocket = -1;
+void firmwareExit() {
+  int fd = exitSocket;
+  exitSocket = -1;
+  if (fd < 0) return;
+  try {
+    JsonDocument bye;
+    bye["type"] = "BYE";
+    bye["message"]["reason"] = "firmware-exit";
+    bye["message"]["message"] = "firmware called exit()";
+    send(fd, bye);
+  } catch (...) {
+  }
+  ::close(fd);
+}
+}  // namespace
 Runtime& runtime() {
   // Firmware may own global Wi-Fi objects. Keep the runtime alive while their
   // destructors report socket events, independent of static destruction order.
@@ -25,6 +42,9 @@ void Runtime::start(const JsonDocument& config, const JsonDocument& first, Excha
   if (config["type"] != "CONFIG" || c["protocolVersion"] != 1 || c["tickUs"] == 0)
     throw ProtocolError("invalid CONFIG");
   exchange_ = std::move(exchange);
+  randomState_ = c["seed"].as<uint32_t>();
+  if (!randomState_) randomState_ = 1;
+  adcBits = 12;
   modes_.fill(0);
   levels_.fill(false);
   written_.fill(false);
@@ -75,6 +95,7 @@ void Runtime::step(const JsonDocument& message, bool first) {
   }
   if (!s["netFaults"].isNull()) faults_.set(s["netFaults"]);
   step_ = message;
+  serialCount_ = 0;
   done_.clear();
   done_["type"] = "STEP_DONE";
   auto d = done_["message"].to<JsonObject>();
@@ -103,6 +124,12 @@ void Runtime::advance(uint64_t ns) {
   edges();
   if (poll) poll();
 }
+uint32_t Runtime::randomWord() {
+  randomState_ ^= randomState_ << 13;
+  randomState_ ^= randomState_ >> 17;
+  randomState_ ^= randomState_ << 5;
+  return randomState_;
+}
 void Runtime::call() { advance(config()["halCallCostNs"].as<uint64_t>()); }
 void Runtime::loopReturned() { advance(config()["loopCostNs"].as<uint64_t>()); }
 int Runtime::pin(size_t device, const char* name) const {
@@ -129,7 +156,12 @@ int Runtime::route(uint8_t address, int sda, int scl, const char* kind) const {
 }
 void Runtime::mode(uint8_t pin, uint8_t mode) {
   modes_[pin] = mode;
-  if (mode == 5 && !written_[pin]) levels_[pin] = true;
+  if (mode == 1 || mode == 5) {
+    written_[pin] = false;
+    if (mode == 5) levels_[pin] = true;
+    for (size_t d = 0; d < deviceCount(); ++d)
+      if (this->pin(d, "XSHUT") == pin) levels_[pin] = true;
+  }
 }
 void Runtime::write(uint8_t pin, bool level) {
   if (!written_[pin] || levels_[pin] != level) {
@@ -167,13 +199,14 @@ void Runtime::pwm(uint8_t pin, uint32_t period, uint32_t pulse) {
   p["pulseUs"] = pulse;
 }
 void Runtime::serial(const uint8_t* data, size_t size) {
+  auto a = done_["message"]["serialTx"].as<JsonArray>();
   for (size_t i = 0; i < size; ++i) {
-    auto a = done_["message"]["serialTx"].as<JsonArray>();
-    if (a.size() == 16384) {
+    if (serialCount_ == 16384) {
       advance(end_ - now_);
       a = done_["message"]["serialTx"].as<JsonArray>();
     }
     a.add(data[i]);
+    ++serialCount_;
   }
 }
 JsonObject Runtime::netEvent() {
@@ -203,6 +236,9 @@ int runFirmware(void (*setup)(), void (*loop)()) {
     std::strcpy(addr.sun_path, env);
     if (::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0)
       throw std::runtime_error("cannot connect sim socket");
+    static const bool registered = std::atexit(firmwareExit) == 0;
+    if (!registered) throw std::runtime_error("cannot register firmware exit handler");
+    exitSocket = fd;
     JsonDocument hello;
     hello["type"] = "HELLO";
     hello["message"]["protocolVersion"] = 1;
@@ -225,6 +261,7 @@ int runFirmware(void (*setup)(), void (*loop)()) {
     }
   } catch (const EndRun& e) {
     std::fprintf(stderr, "hal: sim stopped: %s\n", e.what());
+    exitSocket = -1;
     if (fd >= 0) ::close(fd);
     return 0;
   } catch (const std::exception& e) {
@@ -241,6 +278,7 @@ int runFirmware(void (*setup)(), void (*loop)()) {
       }
       ::close(fd);
     }
+    exitSocket = -1;
     return 1;
   }
 }

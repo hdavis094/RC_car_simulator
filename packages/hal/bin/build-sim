@@ -1,9 +1,18 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, readdirSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+} from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { compilerWords, makeCompiler } from '../scripts/compiler-command.mjs';
 
 const hal = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const project = process.argv[2];
@@ -11,32 +20,101 @@ if (!project || process.argv.length !== 3) {
   console.error('usage: build-sim <project-dir>');
   process.exit(2);
 }
-const cxx = process.env.CXX || 'c++';
 function run(command, args, cwd) {
   const result = spawnSync(command, args, { cwd, stdio: 'inherit' });
-  if (result.error) console.error(`build-sim: ${result.error.message}`);
-  if (result.status !== 0) process.exit(result.status || 1);
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    const error = new Error(`compiler/build exited with ${result.status ?? result.signal}`);
+    error.status = result.status || 1;
+    throw error;
+  }
+}
+function sourceDigest(hash, dir) {
+  for (const entry of readdirSync(path.join(hal, dir), { withFileTypes: true }).sort((a, b) =>
+    a.name.localeCompare(b.name),
+  )) {
+    const file = path.join(dir, entry.name);
+    if (entry.isDirectory()) sourceDigest(hash, file);
+    else
+      hash
+        .update(file)
+        .update('\0')
+        .update(readFileSync(path.join(hal, file)));
+  }
 }
 try {
   const root = path.resolve(project);
   const output = path.join(root, '.rcsim', 'build');
-  const cacheDir = path.join('build', createHash('sha256').update(cxx).digest('hex').slice(0, 16));
-  const cache = path.join(hal, cacheDir);
+  const words = compilerWords(process.env.CXX || 'c++');
+  const [command, ...prefix] = words;
+  const version = spawnSync(command, [...prefix, '--version'], { cwd: root, encoding: 'utf8' });
+  if (version.error) throw version.error;
+  if (version.status !== 0) throw new Error('cannot determine CXX version');
+  const hash = createHash('sha256')
+    .update(JSON.stringify(words))
+    .update(version.stdout)
+    .update(process.env.CXXFLAGS || '')
+    .update(process.env.CPPFLAGS || '')
+    .update(readFileSync(path.join(hal, 'Makefile')));
+  for (const dir of ['include', 'src', 'libraries']) sourceDigest(hash, dir);
+  const cache = path.join(hal, 'build', hash.digest('hex'));
   const sources = readdirSync(path.join(root, 'src'), { withFileTypes: true })
     .filter((entry) => entry.isFile() && entry.name.endsWith('.cpp'))
     .map((entry) => path.join(root, 'src', entry.name))
     .sort();
   if (!sources.length) throw new Error('project src/ contains no .cpp files');
   mkdirSync(output, { recursive: true });
-  run('make', ['--no-print-directory', '-s', `CXX=${cxx}`, `BUILD_DIR=${cacheDir}`, 'lib'], hal);
-  run(cxx, [
-    '-std=c++17', '-O2', '-Wall', '-Wextra',
-    '-I', path.join(hal, 'include'),
-    '-isystem', path.join(hal, 'libraries', 'ArduinoJson'),
-    '-I', path.join(root, 'include'),
-    ...sources, path.join(cache, 'libhal.a'), '-o', path.join(output, 'firmware'),
-  ], root);
+  if (!existsSync(path.join(cache, 'libhal.a'))) {
+    mkdirSync(path.join(hal, 'build'), { recursive: true });
+    const temporary = mkdtempSync(path.join(hal, 'build', '.hal-'));
+    try {
+      run(
+        'make',
+        [
+          '--no-print-directory',
+          '-s',
+          `CXX=${makeCompiler(words)}`,
+          `BUILD_DIR=${path.relative(hal, temporary)}`,
+          'lib',
+        ],
+        hal,
+      );
+      try {
+        renameSync(temporary, cache);
+      } catch (error) {
+        // Another first builder may have published the same complete immutable cache.
+        if (
+          !['EEXIST', 'ENOTEMPTY'].includes(error.code) ||
+          !existsSync(path.join(cache, 'libhal.a'))
+        )
+          throw error;
+      }
+    } finally {
+      rmSync(temporary, { recursive: true, force: true });
+    }
+  }
+  run(
+    command,
+    [
+      ...prefix,
+      '-std=c++17',
+      '-O2',
+      '-Wall',
+      '-Wextra',
+      '-I',
+      path.join(hal, 'include'),
+      '-isystem',
+      path.join(hal, 'libraries', 'ArduinoJson'),
+      '-I',
+      path.join(root, 'include'),
+      ...sources,
+      path.join(cache, 'libhal.a'),
+      '-o',
+      path.join(output, 'firmware'),
+    ],
+    root,
+  );
 } catch (error) {
   console.error(`build-sim: ${error.message}`);
-  process.exit(1);
+  process.exit(error.status || 1);
 }

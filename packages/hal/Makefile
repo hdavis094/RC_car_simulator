@@ -13,7 +13,12 @@ endif
 BUILD_DIR ?= build/$(notdir $(firstword $(CXX)))
 
 CXXFLAGS ?= -O1 -g
-WARNINGS := -Wall -Wextra -Wpedantic -Werror
+WARNINGS := -Wall -Wextra -Wpedantic
+# Library builds used by firmware tolerate new compiler warnings. Our own tests
+# compile both tests and HAL with warnings promoted to errors.
+ifneq ($(filter test %/hal_tests,$(MAKECMDGOALS)),)
+WARNINGS += -Werror
+endif
 CPPFLAGS += -Iinclude -isystem third_party -isystem libraries/ArduinoJson
 ALL_CXXFLAGS := -std=c++17 $(WARNINGS) $(CXXFLAGS) -MMD -MP
 
@@ -25,7 +30,7 @@ TEST_OBJS := $(TEST_SRCS:%.cpp=$(BUILD_DIR)/%.o)
 # The stamp records which compiler built BUILD_DIR. When the compiler's path,
 # version or flags change, the stamp changes and every object is rebuilt, so a
 # different compiler with the same name can never reuse stale objects.
-COMPILER_ID := $(shell command -v $(firstword $(CXX))) $(shell $(CXX) --version 2>&1 | head -n 1) | $(CXX) $(CPPFLAGS) $(ALL_CXXFLAGS)
+COMPILER_ID := $(shell command -v $(CXX) 2>/dev/null) $(shell $(CXX) --version 2>&1 | head -n 1) | $(CXX) $(CPPFLAGS) $(ALL_CXXFLAGS)
 COMPILER_STAMP := $(BUILD_DIR)/compiler.stamp
 
 LIB := $(BUILD_DIR)/libhal.a

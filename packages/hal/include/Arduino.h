@@ -23,6 +23,9 @@
 #define PROGMEM
 #define F(s) (s)
 constexpr double PI = 3.14159265358979323846;
+constexpr double HALF_PI = PI / 2;
+constexpr int LED_BUILTIN = 2;
+constexpr uint32_t SERIAL_8N1 = 0x800001cU;
 constexpr double DEG_TO_RAD = PI / 180;
 constexpr double RAD_TO_DEG = 180 / PI;
 using byte = uint8_t;
@@ -63,6 +66,21 @@ class String : public std::string {
     append(s, n);
     return true;
   }
+  template <typename T,
+            std::enable_if_t<std::is_arithmetic_v<T> && !std::is_same_v<T, char>, int> = 0>
+  bool concat(T value) {
+    return concat(String(value));
+  }
+  template <typename T>
+  String& operator+=(const T& value) {
+    concat(value);
+    return *this;
+  }
+  void replace(char from, char to) { std::replace(begin(), end(), from, to); }
+  void replace(const String& from, const String& to);
+  char charAt(unsigned int index) const { return index < size() ? at(index) : '\0'; }
+  void toUpperCase();
+  void toLowerCase();
   bool equals(const String& s) const { return *this == s; }
   bool startsWith(const String& s) const { return rfind(s, 0) == 0; }
   bool endsWith(const String& s) const {
@@ -123,6 +141,12 @@ inline String operator+(const char* a, const String& b) {
   return String(a + static_cast<const std::string&>(b));
 }
 
+class Print;
+class Printable {
+ public:
+  virtual ~Printable() = default;
+  virtual size_t printTo(Print& output) const = 0;
+};
 class Print {
  public:
   virtual ~Print() = default;
@@ -131,6 +155,10 @@ class Print {
   size_t write(const char* s) {
     return s ? write(reinterpret_cast<const uint8_t*>(s), std::strlen(s)) : 0;
   }
+  size_t write(const char* data, size_t size) {
+    return write(reinterpret_cast<const uint8_t*>(data), size);
+  }
+  size_t print(const Printable& value) { return value.printTo(*this); }
   size_t print(const String& s) {
     return write(reinterpret_cast<const uint8_t*>(s.data()), s.size());
   }
@@ -156,6 +184,8 @@ class Print {
   }
   size_t printf(const char* format, ...) __attribute__((format(printf, 2, 3)));
 };
+enum LookaheadMode { SKIP_ALL, SKIP_NONE, SKIP_WHITESPACE };
+constexpr char NO_IGNORE_CHAR = 1;
 class Stream : public Print {
  public:
   virtual int available() = 0;
@@ -167,15 +197,19 @@ class Stream : public Print {
   size_t readBytes(uint8_t* buffer, size_t size) {
     return readBytes(reinterpret_cast<char*>(buffer), size);
   }
+  long parseInt(LookaheadMode mode = SKIP_ALL, char ignore = NO_IGNORE_CHAR);
+  String readString();
   String readStringUntil(char terminator);
   void setTimeout(unsigned long ms) { timeoutMs_ = ms; }
 
  private:
+  int timedPeek();
+  int timedRead();
   unsigned long timeoutMs_ = 1000;
 };
 class HardwareSerial : public Stream {
  public:
-  void begin(unsigned long baud);
+  void begin(unsigned long baud, uint32_t config = SERIAL_8N1);
   using Print::write;
   using Stream::read;
   size_t write(const uint8_t* data, size_t size) override;
@@ -201,8 +235,24 @@ bool ledcWrite(uint8_t pin, uint32_t duty);
 bool ledcDetach(uint8_t pin);
 long map(long value, long inMin, long inMax, long outMin, long outMax);
 template <typename T, typename L, typename H>
-constexpr T constrain(T value, L low, H high) {
-  return value < low ? static_cast<T>(low) : value > high ? static_cast<T>(high) : value;
+constexpr std::common_type_t<T, L, H> constrain(T value, L low, H high) {
+  using C = std::common_type_t<T, L, H>;
+  return static_cast<C>(value) < static_cast<C>(low)    ? static_cast<C>(low)
+         : static_cast<C>(value) > static_cast<C>(high) ? static_cast<C>(high)
+                                                        : static_cast<C>(value);
+}
+void randomSeed(unsigned long seed);
+long random(long maximum);
+long random(long minimum, long maximum);
+void analogWrite(uint8_t pin, int value);
+void analogReadResolution(uint8_t bits);
+template <typename T>
+constexpr auto radians(T degrees) {
+  return degrees * DEG_TO_RAD;
+}
+template <typename T>
+constexpr auto sq(T value) {
+  return value * value;
 }
 using std::max;
 using std::min;

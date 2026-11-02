@@ -111,7 +111,7 @@ TEST_CASE("LEDC records changed pulse widths and detach") {
   auto pwm = sim.done[0]["message"]["pwm"];
   REQUIRE(pwm.size() == 1);
   CHECK(pwm[0]["periodUs"] == 20000);
-  CHECK(pwm[0]["pulseUs"] == 1499);
+  CHECK(pwm[0]["pulseUs"] == 1500);
   CHECK(ledcDetach(25));
   delay(1);
   CHECK(sim.done[1]["message"]["pwm"][0]["periodUs"] == 0);

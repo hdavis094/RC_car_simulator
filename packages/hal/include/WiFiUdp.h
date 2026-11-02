@@ -20,10 +20,9 @@ class WiFiUDP : public Stream {
   void flush() override;
   IPAddress remoteIP() const;
   uint16_t remotePort() const;
-  // Sim-only host descriptor for readiness checks; does not advance sim time.
-  int fd() const;
 
  private:
+  friend struct rcsim::hal::NetworkAccess;
   std::shared_ptr<rcsim::hal::Socket> socket_;
   std::string host_;
   uint16_t port_ = 0;

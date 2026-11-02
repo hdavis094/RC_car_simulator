@@ -7,13 +7,14 @@
 #define WL_DISCONNECTED 6
 #define WL_CONNECTED 3
 #define WIFI_STA 1
-class IPAddress {
+class IPAddress : public Printable {
  public:
   IPAddress() = default;
   IPAddress(uint8_t a, uint8_t b, uint8_t c, uint8_t d) : bytes_{a, b, c, d} {}
   explicit IPAddress(uint32_t address);
   bool fromString(const char* address);
   String toString() const;
+  size_t printTo(Print& output) const override { return output.print(toString()); }
   uint8_t operator[](int index) const { return bytes_[index]; }
   operator uint32_t() const;
 
@@ -22,7 +23,8 @@ class IPAddress {
 };
 namespace rcsim::hal {
 struct Socket;
-}
+struct NetworkAccess;
+}  // namespace rcsim::hal
 class WiFiClient : public Stream {
  public:
   WiFiClient() = default;
@@ -57,11 +59,9 @@ class WiFiServer {
   void end();
   void stop();
   void setNoDelay(bool enabled);
-  uint16_t hostPort() const;
-  // Host descriptor for diagnostics/readiness; observing it does not advance sim time.
-  int fd() const;
 
  private:
+  friend struct rcsim::hal::NetworkAccess;
   uint16_t port_;
   uint8_t maxClients_;
   bool noDelay_ = false;

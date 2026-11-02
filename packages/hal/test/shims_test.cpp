@@ -98,3 +98,36 @@ TEST_CASE("Servo maps angle and explicit microseconds to PWM and stops on detach
   delay(1);
   CHECK(sim.done[1]["message"]["pwm"][0]["periodUs"] == 0);
 }
+
+TEST_CASE("INPUT and INPUT_PULLUP release XSHUT after an output-low shutdown") {
+  FakeSim sim;
+  sim.start();
+  Wire.begin();
+  VL53L0X sensors[3];
+  for (int pin : {16, 17, 18}) {
+    pinMode(pin, OUTPUT);
+    digitalWrite(pin, LOW);
+  }
+  for (int i = 0; i < 3; ++i) {
+    pinMode(16 + i, i == 1 ? INPUT_PULLUP : INPUT);
+    CHECK(digitalRead(16 + i) == HIGH);
+    REQUIRE(sensors[i].init());
+    sensors[i].setAddress(0x30 + i);
+    sensors[i].startContinuous();
+  }
+  CHECK(sensors[0].readRangeContinuousMillimeters() == 812);
+  CHECK(sensors[1].readRangeContinuousMillimeters() == 1200);
+  CHECK(sensors[2].readRangeContinuousMillimeters() == 640);
+}
+TEST_CASE("Servo defaults match upstream ESP32Servo 3.2.1") {
+  FakeSim sim;
+  sim.start();
+  Servo servo;
+  REQUIRE(servo.attach(25));
+  servo.write(0);
+  CHECK(servo.readMicroseconds() == 544);
+  servo.write(90);
+  CHECK(servo.readMicroseconds() == 1472);
+  servo.write(180);
+  CHECK(servo.readMicroseconds() == 2400);
+}

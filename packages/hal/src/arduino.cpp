@@ -69,7 +69,7 @@ String Stream::readStringUntil(char terminator) {
   }
   return out;
 }
-void HardwareSerial::begin(unsigned long) { runtime().call(); }
+void HardwareSerial::begin(unsigned long, uint32_t) { runtime().call(); }
 size_t HardwareSerial::write(const uint8_t* data, size_t size) {
   runtime().call();
   runtime().serial(data, size);
@@ -122,7 +122,7 @@ std::array<Ledc, 256> channels;
 }  // namespace
 uint16_t analogRead(uint8_t pin) {
   runtime().call();
-  return static_cast<uint16_t>(std::lround(volts(pin) * 4095 / 3.3));
+  return static_cast<uint16_t>(std::lround(volts(pin) * ((1U << runtime().adcBits) - 1) / 3.3));
 }
 uint32_t analogReadMilliVolts(uint8_t pin) {
   runtime().call();
@@ -169,8 +169,9 @@ bool ledcWrite(uint8_t pin, uint32_t duty) {
   if (!c.frequency) return false;
   uint32_t maximum = (1U << c.resolution) - 1;
   auto period = 1000000 / c.frequency;
-  runtime().pwm(pin, period,
-                static_cast<uint32_t>(uint64_t(std::min(duty, maximum)) * period / maximum));
+  runtime().pwm(
+      pin, period,
+      static_cast<uint32_t>((uint64_t(std::min(duty, maximum)) * period + maximum / 2) / maximum));
   return true;
 }
 bool ledcDetach(uint8_t pin) {
@@ -183,4 +184,89 @@ bool ledcDetach(uint8_t pin) {
 long map(long value, long inMin, long inMax, long outMin, long outMax) {
   runtime().call();
   return inMax == inMin ? outMin : (value - inMin) * (outMax - outMin) / (inMax - inMin) + outMin;
+}
+
+void String::replace(const String& from, const String& to) {
+  if (from.empty()) return;
+  // Copies also cover replace(text, text) and references into this String.
+  std::string needle = from, replacement = to;
+  size_t pos = 0;
+  while ((pos = find(needle, pos)) != npos) {
+    std::string::replace(pos, needle.size(), replacement);
+    pos += replacement.size();
+  }
+}
+void String::toUpperCase() {
+  for (char& c : *this)
+    if (c >= 'a' && c <= 'z') c -= 'a' - 'A';
+}
+void String::toLowerCase() {
+  for (char& c : *this)
+    if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
+}
+int Stream::timedPeek() {
+  auto start = millis();
+  do {
+    int c = peek();
+    if (c >= 0) return c;
+  } while (static_cast<uint32_t>(millis() - start) < timeoutMs_);
+  return -1;
+}
+int Stream::timedRead() {
+  auto start = millis();
+  do {
+    int c = read();
+    if (c >= 0) return c;
+  } while (static_cast<uint32_t>(millis() - start) < timeoutMs_);
+  return -1;
+}
+String Stream::readString() {
+  String result;
+  int c;
+  while ((c = timedRead()) >= 0) result += static_cast<char>(c);
+  return result;
+}
+long Stream::parseInt(LookaheadMode mode, char ignore) {
+  int c;
+  while (true) {
+    c = timedPeek();
+    if (c < 0) return 0;
+    if ((c >= '0' && c <= '9') || c == '-') break;
+    if (mode == SKIP_NONE ||
+        (mode == SKIP_WHITESPACE && c != ' ' && c != '\t' && c != '\r' && c != '\n'))
+      return 0;
+    read();
+  }
+  bool negative = c == '-';
+  unsigned long value = 0;
+  do {
+    if (c >= '0' && c <= '9') value = value * 10 + static_cast<unsigned>(c - '0');
+    read();
+    c = timedPeek();
+  } while ((c >= '0' && c <= '9') || c == ignore);
+  return static_cast<long>(negative ? 0UL - value : value);
+}
+void randomSeed(unsigned long seed) {
+  runtime().call();
+  runtime().randomSeed(static_cast<uint32_t>(seed));
+}
+long random(long minimum, long maximum) {
+  runtime().call();
+  if (minimum >= maximum) return minimum;
+  uint64_t range = uint64_t(maximum) - uint64_t(minimum), value;
+  uint64_t threshold = (uint64_t(0) - range) % range;
+  do {
+    value = uint64_t(runtime().randomWord()) << 32;
+    value |= runtime().randomWord();
+  } while (value < threshold);
+  return static_cast<long>(uint64_t(minimum) + value % range);
+}
+long random(long maximum) { return random(0, std::max(0L, maximum)); }
+void analogReadResolution(uint8_t bits) {
+  runtime().call();
+  if (bits >= 1 && bits <= 16) runtime().adcBits = bits;
+}
+void analogWrite(uint8_t pin, int value) {
+  if (!channels[pin].frequency) ledcAttach(pin, 1000, 8);
+  ledcWrite(pin, static_cast<uint32_t>(constrain(value, 0, 255)));
 }

@@ -145,9 +145,10 @@ struct Codec {
     size_t n = static_cast<size_t>(raw(reading ? 0 : v.size(), countBytes));
     require(n <= limit, "array over limit");
     JsonArray a = reading ? v.template to<JsonArray>() : v.template as<JsonArray>();
-    for (size_t i = 0; i < n; ++i) {
-      if (reading) a.add(nullptr);
-      element(a[i]);
+    if (reading) {
+      for (size_t i = 0; i < n; ++i) element(a.add<JsonVariant>());
+    } else {
+      for (auto entry : a) element(entry);
     }
   }
   template <typename V>

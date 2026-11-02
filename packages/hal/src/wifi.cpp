@@ -3,14 +3,17 @@
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <netinet/tcp.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
 #include <cerrno>
+#include <chrono>
 #include <deque>
 #include <vector>
 
 #include "WiFiUdp.h"
+#include "rcsim/network.h"
 #include "rcsim/runtime.h"
 
 namespace rcsim::hal {
@@ -22,7 +25,7 @@ struct Packet {
 };
 struct Socket {
   int fd = -1;
-  bool udp = false, listener = false, mapped = false, connecting = false, connected = false,
+  bool udp = false, listener = false, mapped = false, serverClient = false, connected = false,
        reported = false;
   uint16_t firmwarePort = 0, hostPort = 0;
   sockaddr_in peer{};
@@ -61,12 +64,11 @@ void closeSocket(Socket& s) {
   s.fd = -1;
   if (s.mapped)
     event(s, "unlisten");
-  else if (s.connected && !s.reported) {
+  else if (s.serverClient && s.connected && !s.reported) {
     event(s, "disconnect");
     s.reported = true;
   }
   s.connected = false;
-  s.connecting = false;
 }
 bool blocked() { return runtime().faults()["dropout"].as<bool>(); }
 bool lost() {
@@ -93,21 +95,6 @@ void pump() {
     }
     ++it;
     if (s->fd < 0 || s->listener) continue;
-    if (s->connecting) {
-      int error = 0;
-      socklen_t size = sizeof(error);
-      if (getsockopt(s->fd, SOL_SOCKET, SO_ERROR, &error, &size) < 0 || error) {
-        closeSocket(*s);
-        continue;
-      }
-      sockaddr_in peer{};
-      size = sizeof(peer);
-      if (getpeername(s->fd, reinterpret_cast<sockaddr*>(&peer), &size) == 0) {
-        s->connecting = false;
-        s->connected = true;
-      } else
-        continue;
-    }
     // Bound work per HAL boundary so a host flooding the port cannot stall sim time.
     for (int i = 0; i < 16 && s->fd >= 0 && queued(s->rx) < kQueueBytes; ++i) {
       uint8_t b[65536];
@@ -226,7 +213,7 @@ Socket::~Socket() {
   try {
     if (mapped)
       event(*this, "unlisten");
-    else if (connected && !reported)
+    else if (serverClient && connected && !reported)
       event(*this, "disconnect");
   } catch (...) {
   }
@@ -279,18 +266,39 @@ bool WiFiClass::disconnect(bool, bool) {
 WiFiClient::WiFiClient(std::shared_ptr<Socket> socket) : socket_(std::move(socket)) {}
 int WiFiClient::connect(const char* host, uint16_t port) {
   runtime().call();
+  if (socket_) closeSocket(*socket_);
   socket_ = create(false);
-  if (!socket_ || !destination(host, port, socket_->peer)) return 0;
-  int result =
-      ::connect(socket_->fd, reinterpret_cast<sockaddr*>(&socket_->peer), sizeof(socket_->peer));
-  if (result == 0)
-    socket_->connected = true;
-  else if (errno == EINPROGRESS)
-    socket_->connecting = true;
-  else {
+  if (!socket_) return 0;
+  if (!destination(host, port, socket_->peer)) {
     closeSocket(*socket_);
     return 0;
   }
+  int result =
+      ::connect(socket_->fd, reinterpret_cast<sockaddr*>(&socket_->peer), sizeof(socket_->peer));
+  if (result < 0 && errno == EINPROGRESS) {
+    // Resolve the Arduino connect result in host time; never advance the sim clock.
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    while (true) {
+      auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+                           deadline - std::chrono::steady_clock::now())
+                           .count();
+      if (remaining < 0) break;
+      pollfd p{socket_->fd, POLLOUT, 0};
+      int ready = ::poll(&p, 1, static_cast<int>(remaining) + 1);
+      if (ready < 0 && errno == EINTR) continue;
+      int error = 0;
+      socklen_t size = sizeof(error);
+      if (ready > 0 && (p.revents & (POLLOUT | POLLERR | POLLHUP)) &&
+          getsockopt(socket_->fd, SOL_SOCKET, SO_ERROR, &error, &size) == 0 && error == 0)
+        result = 0;
+      break;
+    }
+  }
+  if (result < 0) {
+    closeSocket(*socket_);
+    return 0;
+  }
+  socket_->connected = true;
   return 1;
 }
 int WiFiClient::connect(IPAddress host, uint16_t port) {
@@ -298,8 +306,7 @@ int WiFiClient::connect(IPAddress host, uint16_t port) {
 }
 uint8_t WiFiClient::connected() {
   runtime().call();
-  return socket_ &&
-         (socket_->connected || socket_->connecting || rcsim::hal::available(socket_.get()));
+  return socket_ && (socket_->connected || rcsim::hal::available(socket_.get()));
 }
 WiFiClient::operator bool() const {
   runtime().call();
@@ -371,6 +378,7 @@ WiFiClient WiFiServer::accept() {
   int noDelay = noDelay_;
   setsockopt(s->fd, IPPROTO_TCP, TCP_NODELAY, &noDelay, sizeof(noDelay));
   s->connected = true;
+  s->serverClient = true;
   s->firmwarePort = port_;
   sockets.push_back(s);
   event(*s, "connect");
@@ -386,7 +394,7 @@ void WiFiServer::setNoDelay(bool enabled) {
   runtime().call();
   noDelay_ = enabled;
 }
-uint16_t WiFiServer::hostPort() const { return socket_ ? socket_->hostPort : 0; }
+
 uint8_t WiFiUDP::begin(uint16_t port) {
   runtime().call();
   if (socket_) stop();
@@ -470,5 +478,21 @@ uint16_t WiFiUDP::remotePort() const {
 }
 
 int WiFiClient::fd() const { return socket_ ? socket_->fd : -1; }
-int WiFiServer::fd() const { return socket_ ? socket_->fd : -1; }
-int WiFiUDP::fd() const { return socket_ ? socket_->fd : -1; }
+namespace rcsim::hal {
+struct NetworkAccess {
+  static const std::shared_ptr<Socket>& socket(const WiFiServer& server) { return server.socket_; }
+  static const std::shared_ptr<Socket>& socket(const WiFiUDP& udp) { return udp.socket_; }
+};
+int socketFd(const WiFiServer& server) {
+  auto& s = NetworkAccess::socket(server);
+  return s ? s->fd : -1;
+}
+int socketFd(const WiFiUDP& udp) {
+  auto& s = NetworkAccess::socket(udp);
+  return s ? s->fd : -1;
+}
+uint16_t hostPort(const WiFiServer& server) {
+  auto& s = NetworkAccess::socket(server);
+  return s ? s->hostPort : 0;
+}
+}  // namespace rcsim::hal

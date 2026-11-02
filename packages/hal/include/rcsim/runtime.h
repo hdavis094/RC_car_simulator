@@ -19,6 +19,11 @@ class Runtime {
   uint64_t nowNs() const { return now_; }
   uint64_t uptimeNs() const { return now_ - boot_; }
   void loopReturned();
+  void randomSeed(uint32_t seed) {
+    if (seed) randomState_ = seed;
+  }
+  uint32_t randomWord();
+  uint8_t adcBits = 12;
   void mode(uint8_t pin, uint8_t mode);
   void write(uint8_t pin, bool level);
   bool read(uint8_t pin);
@@ -52,7 +57,8 @@ class Runtime {
   std::vector<uint8_t> addresses_;
   std::deque<uint8_t> rx_;
   uint64_t now_ = 0, boot_ = 0, end_ = 0, tick_ = 0;
-  size_t edge_ = 0;
+  size_t edge_ = 0, serialCount_ = 0;
+  uint32_t randomState_ = 1;
   bool active_ = false;
 };
 Runtime& runtime();
