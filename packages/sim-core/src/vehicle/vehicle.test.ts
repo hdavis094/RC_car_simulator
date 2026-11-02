@@ -250,3 +250,48 @@ describe('chassisToWorld', () => {
     for (let i = 0; i < 4; i++) expect(mount.rotation[i]).toBeCloseTo(expected[i]!, 3);
   });
 });
+
+describe('the Vehicle contract', () => {
+  it('uses a command in the very step it is applied for, and reports it with its effect', async () => {
+    const { car, step } = await openFloor();
+    step(1500, { steerAngleRad: 0, motorDuty: 0 });
+    const settled = car.state();
+    expect(Math.abs(settled.forwardSpeedMps)).toBeLessThan(0.001);
+    step(1, { steerAngleRad: 0.1, motorDuty: 1 });
+    const s = car.state();
+    // the step after applyCommand already shows the motor's push, and the command that caused it
+    expect(s.command).toEqual({ steerAngleRad: 0.1, motorDuty: 1 });
+    expect(s.forwardSpeedMps).toBeGreaterThan(0.01);
+    expect(s.velocity[2]).toBeLessThan(-0.01); // forward is −Z
+    expect(s.acceleration[2]).toBeLessThan(-5);
+    expect(s.wheels[0].steerRad).toBeGreaterThan(0.1); // inner front wheel of a 0.1 rad left turn
+  });
+
+  it('has its wheels on the ground from the first step', async () => {
+    const { car, step } = await openFloor();
+    step(1, { steerAngleRad: 0, motorDuty: 0 });
+    const s = car.state();
+    expect(s.wheels.map((w) => w.inContact)).toEqual([true, true, true, true]);
+    for (const w of s.wheels) expect(w.position[1]).toBeCloseTo(0.055, 2);
+    // and it was held up: after one millisecond it has not dropped
+    expect(s.pose.position[1]).toBeGreaterThan(-0.001);
+  });
+
+  it('shows its wheels at the car, standing on the ground, before any step', async () => {
+    const { car } = await openFloor({ x: 2.4, z: 3, yawDeg: 90 });
+    const s = car.state();
+    // yaw 90° faces −X, so left is +Z: front-left is ahead (−X) and to the left (+Z)
+    const expected: [number, number][] = [
+      [2.4 - WHEELBASE / 2, 3 + TRACK_WIDTH / 2],
+      [2.4 - WHEELBASE / 2, 3 - TRACK_WIDTH / 2],
+      [2.4 + WHEELBASE / 2, 3 + TRACK_WIDTH / 2],
+      [2.4 + WHEELBASE / 2, 3 - TRACK_WIDTH / 2],
+    ];
+    s.wheels.forEach((w, i) => {
+      expect(w.position[0]).toBeCloseTo(expected[i]![0], 3);
+      expect(w.position[1]).toBeCloseTo(0.055, 3);
+      expect(w.position[2]).toBeCloseTo(expected[i]![1], 3);
+      expect(yawOf(w.rotation)).toBeCloseTo(Math.PI / 2, 3);
+    });
+  });
+});

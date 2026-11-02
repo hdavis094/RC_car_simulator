@@ -222,3 +222,67 @@ describe('vehicle', () => {
     );
   });
 });
+
+describe('the suspension and edits made while paused', () => {
+  async function settledCar(extra: Parameters<typeof testWorldFile>[0] = {}) {
+    const world = await createWorld(
+      testWorldFile({ start: { x: 2.4, z: 0, yawDeg: 0 }, ...extra }),
+      trackLibrary.load('oval'),
+    );
+    const car = world.createVehicle({ car: exampleCar, catalog: defaultCatalog });
+    let tick = 0;
+    const hits = { count: 0 };
+    const step = (n: number, duty = 0) => {
+      for (let i = 0; i < n; i++) {
+        car.applyCommand({ steerAngleRad: 0, motorDuty: duty });
+        hits.count += world.step(0.001, ++tick * 1000).collisions.length;
+      }
+    };
+    step(1000);
+    return { world, car, step, hits };
+  }
+
+  it('lets a ramp edited while paused lift the wheels in the very next step', async () => {
+    const { world, car, step } = await settledCar();
+    expect(car.state().wheels[0].position[1]).toBeCloseTo(0.055, 2);
+    // a ramp under the front wheels: its surface is about 2.7 cm up at the front-left wheel
+    world.addObstacle({ type: 'ramp', positionM: { x: 2.4, z: -0.3 }, yawDeg: 0 });
+    step(1);
+    expect(car.state().wheels[0].position[1]).toBeGreaterThan(0.07);
+    // moving it away is seen at once, too
+    const id = world.obstacles()[0]!.id;
+    world.moveObstacle(id, { x: 2.4, z: -9 }, 0);
+    step(300);
+    expect(car.state().wheels[0].position[1]).toBeCloseTo(0.055, 2);
+  });
+
+  it('changes nothing about the car: edits that need an index refresh leave its motion bit-identical', async () => {
+    const a = await settledCar();
+    const b = await settledCar();
+    a.step(1, 0.3);
+    b.step(1, 0.3);
+    b.world.addObstacle({ type: 'ramp', positionM: { x: -20, z: -20 }, yawDeg: 0 }); // far away
+    for (let i = 0; i < 200; i++) {
+      a.step(1, 0.3);
+      b.step(1, 0.3);
+      expect(b.car.state()).toEqual(a.car.state());
+    }
+    b.world.moveObstacle(b.world.obstacles()[0]!.id, { x: -21, z: -20 }, 10);
+    for (let i = 0; i < 200; i++) {
+      a.step(1, 0.3);
+      b.step(1, 0.3);
+      expect(b.car.state()).toEqual(a.car.state());
+    }
+  });
+
+  it('does not count a hit twice when a ramp edit happens while the car is against an obstacle', async () => {
+    const { world, step, hits } = await settledCar({ obstacles: [cone('c', 2.4, -0.6)] });
+    step(1500, 0.5); // drives into the cone and pushes against it
+    expect(hits.count).toBe(1);
+    world.addObstacle({ type: 'ramp', positionM: { x: -20, z: -20 }, yawDeg: 0 });
+    step(300, 0.5);
+    world.moveObstacle(world.obstacles().find((o) => o.type === 'ramp')!.id, { x: -21, z: -20 }, 0);
+    step(300, 0.5);
+    expect(hits.count).toBe(1);
+  });
+});

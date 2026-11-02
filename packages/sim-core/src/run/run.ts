@@ -317,9 +317,14 @@ async function assemble(
       await source.restart();
     },
     stop(): Promise<void> {
-      // Once: ends the run, releases the source, waits for a tick in progress to
-      // settle, then frees the physics world (keeping the last snapshot).
-      stopping ??= (async () => {
+      // One shutdown: ends the run, releases the source, waits for a tick in
+      // progress to settle, then frees the physics world (keeping the last
+      // snapshot). The shared promise is installed before `end` is emitted, so
+      // a listener that calls `stop()` gets this promise, not a second shutdown.
+      if (stopping) return stopping;
+      const { promise, resolve, reject } = Promise.withResolvers<void>();
+      stopping = promise;
+      void (async () => {
         finish({ kind: 'stopped' });
         try {
           await source.stop();
@@ -328,8 +333,8 @@ async function assemble(
           finalSnapshot = buildSnapshot();
           world.dispose();
         }
-      })();
-      return stopping;
+      })().then(resolve, reject);
+      return promise;
     },
   };
 }

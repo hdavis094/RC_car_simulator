@@ -108,7 +108,12 @@ export async function runScenario(
   const at = (file: string): string => path.resolve(io.cwd ?? process.cwd(), file);
   const car = parseWith(Car, await readJson(at(spec.car), 'car'), `car "${spec.car}"`);
   const world = await readWorld(spec.world, io);
-  const track = trackLibrary.load(world.trackId);
+  let track;
+  try {
+    track = trackLibrary.load(world.trackId);
+  } catch (error) {
+    throw new ScenarioInputError(`world "${spec.world}": ${(error as Error).message}`);
+  }
 
   let source: ActuatorSource;
   if (spec.firmware !== undefined) {
