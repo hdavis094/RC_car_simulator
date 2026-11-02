@@ -468,3 +468,7 @@ uint16_t WiFiUDP::remotePort() const {
   runtime().call();
   return socket_ ? ntohs(socket_->peer.sin_port) : 0;
 }
+
+int WiFiClient::fd() const { return socket_ ? socket_->fd : -1; }
+int WiFiServer::fd() const { return socket_ ? socket_->fd : -1; }
+int WiFiUDP::fd() const { return socket_ ? socket_->fd : -1; }

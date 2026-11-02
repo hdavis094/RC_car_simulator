@@ -1,10 +1,13 @@
 #include "WiFi.h"
 
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <cerrno>
+#include <chrono>
 #include <cstring>
 
 #include "WiFiUdp.h"
@@ -13,16 +16,56 @@
 using namespace rcsim::hal;
 using hal_test::FakeSim;
 namespace {
+using SteadyClock = std::chrono::steady_clock;
+// Wall time belongs only in this host-side barrier. Never spend sim time waiting
+// for the OS to deliver a packet, or start a latency assertion at peer send().
+bool waitSocket(int fd, short events, SteadyClock::time_point deadline) {
+  if (fd < 0) return false;
+  while (true) {
+    auto remaining = deadline - SteadyClock::now();
+    int ms = remaining > SteadyClock::duration::zero()
+                 ? static_cast<int>(
+                       std::chrono::duration_cast<std::chrono::milliseconds>(remaining).count()) +
+                       1
+                 : 0;
+    pollfd p{fd, events, 0};
+    int result = ::poll(&p, 1, ms);
+    if (result < 0 && errno == EINTR && SteadyClock::now() < deadline) continue;
+    return result > 0 && (p.revents & events);
+  }
+}
+bool waitSocket(int fd, short events = POLLIN, int ms = 1000) {
+  return waitSocket(fd, events, SteadyClock::now() + std::chrono::milliseconds(ms));
+}
+bool waitClientBytes(WiFiClient& client, int count) {
+  auto deadline = SteadyClock::now() + std::chrono::seconds(1);
+  while (client.available() < count) {
+    if (SteadyClock::now() >= deadline || !waitSocket(client.fd(), POLLIN, deadline)) return false;
+  }
+  return true;
+}
+void checkSocketFlags(int fd) {
+  REQUIRE(fd >= 0);
+  int status = fcntl(fd, F_GETFL, 0);
+  REQUIRE(status >= 0);
+  CHECK((status & O_NONBLOCK) != 0);
+  int descriptor = fcntl(fd, F_GETFD, 0);
+  REQUIRE(descriptor >= 0);
+  CHECK((descriptor & FD_CLOEXEC) != 0);
+#ifdef SO_NOSIGPIPE
+  int value = 0;
+  socklen_t size = sizeof(value);
+  REQUIRE(getsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &value, &size) == 0);
+  CHECK(value == 1);
+#endif
+}
 struct Host {
   int fd;
   explicit Host(bool udp = false) : fd(::socket(AF_INET, udp ? SOCK_DGRAM : SOCK_STREAM, 0)) {
     REQUIRE(fd >= 0);
   }
   ~Host() { ::close(fd); }
-  bool readable(int ms = 1000) {
-    pollfd p{fd, POLLIN, 0};
-    return ::poll(&p, 1, ms) == 1 && (p.revents & POLLIN);
-  }
+  bool readable(int ms = 1000) { return waitSocket(fd, POLLIN, ms); }
 };
 sockaddr_in hostAddress(uint16_t port) {
   sockaddr_in a{};
@@ -54,11 +97,17 @@ TEST_CASE(
   Host host;
   auto addr = hostAddress(port);
   REQUIRE(::connect(host.fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0);
+  REQUIRE(waitSocket(server.fd()));
   auto client = server.available();
   REQUIRE(static_cast<bool>(client));
   auto copy = client;
   CHECK(copy.connected());
+  checkSocketFlags(server.fd());
+  checkSocketFlags(client.fd());
+  CHECK(client.available() == 0);
+  CHECK(client.read() == -1);
   REQUIRE(::send(host.fd, "hello", 5, 0) == 5);
+  REQUIRE(waitClientBytes(client, 5));
   CHECK(client.available() == 5);
   CHECK(copy.peek() == 'h');
   CHECK(client.read() == 'h');
@@ -97,10 +146,11 @@ TEST_CASE("WiFiClient opens a nonblocking outbound TCP connection") {
   REQUIRE(server.readable());
   int peer = ::accept(server.fd, nullptr, nullptr);
   REQUIRE(peer >= 0);
+  REQUIRE(waitSocket(client.fd(), POLLOUT));
   CHECK(client.connected());
+  checkSocketFlags(client.fd());
   CHECK(client.print("outbound") == 8);
-  pollfd p{peer, POLLIN, 0};
-  REQUIRE(::poll(&p, 1, 1000) == 1);
+  REQUIRE(waitSocket(peer));
   char b[16];
   CHECK(::recv(peer, b, sizeof(b), 0) == 8);
   ::close(peer);
@@ -118,23 +168,27 @@ TEST_CASE("UDP preserves packets and applies latency, total loss and dropout fro
   };
   sim.start();
   WiFiUDP udp;
-  CHECK(udp.begin(4210));
+  REQUIRE(udp.begin(4210));
+  checkSocketFlags(udp.fd());
+  CHECK(udp.parsePacket() == 0);
   delay(1);
   auto port = reportedPort(sim, "udp");
   REQUIRE(port != 0);
   Host host(true);
   auto addr = hostAddress(port);
   REQUIRE(sendto(host.fd, "packet", 6, 0, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 6);
+  REQUIRE(waitSocket(udp.fd()));
   CHECK(udp.parsePacket() == 0);
   delay(1);
   CHECK(udp.parsePacket() == 0);
   delay(1);
-  CHECK(udp.parsePacket() == 6);
+  REQUIRE(udp.parsePacket() == 6);
   CHECK(udp.peek() == 'p');
   CHECK(udp.read() == 'p');
   CHECK(udp.available() == 5);
   auto remoteIP = udp.remoteIP();
   auto remotePort = udp.remotePort();
+  REQUIRE(remotePort != 0);
   CHECK(udp.beginPacket(remoteIP, remotePort));
   CHECK(udp.print("reply") == 5);
   CHECK(udp.endPacket());
@@ -149,6 +203,7 @@ TEST_CASE("UDP preserves packets and applies latency, total loss and dropout fro
   latency = 0;
   delay(1);
   REQUIRE(sendto(host.fd, "lost", 4, 0, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 4);
+  REQUIRE(waitSocket(udp.fd()));
   delay(1);
   CHECK(udp.parsePacket() == 0);
   CHECK(udp.beginPacket(remoteIP, remotePort));
@@ -159,11 +214,13 @@ TEST_CASE("UDP preserves packets and applies latency, total loss and dropout fro
   dropout = true;
   delay(1);
   REQUIRE(sendto(host.fd, "blocked", 7, 0, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 7);
+  REQUIRE(waitSocket(udp.fd()));
   delay(1);
   CHECK(udp.parsePacket() == 0);
   dropout = false;
   delay(1);
   REQUIRE(sendto(host.fd, "back", 4, 0, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 4);
+  REQUIRE(waitSocket(udp.fd()));
   CHECK(udp.parsePacket() == 4);
   udp.stop();
 }
@@ -178,6 +235,7 @@ TEST_CASE("releasing the final socket handle reports disconnect and unlisten eve
     Host host;
     auto addr = hostAddress(reportedPort(sim, "tcp"));
     REQUIRE(::connect(host.fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0);
+    REQUIRE(waitSocket(server.fd()));
     auto client = server.available();
     REQUIRE(static_cast<bool>(client));
     auto copy = client;

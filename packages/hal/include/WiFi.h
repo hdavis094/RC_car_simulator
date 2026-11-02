@@ -42,6 +42,8 @@ class WiFiClient : public Stream {
   IPAddress remoteIP() const;
   uint16_t remotePort() const;
   int setNoDelay(bool enabled);
+  // Host descriptor for diagnostics/readiness; observing it does not advance sim time.
+  int fd() const;
 
  private:
   std::shared_ptr<rcsim::hal::Socket> socket_;
@@ -56,6 +58,8 @@ class WiFiServer {
   void stop();
   void setNoDelay(bool enabled);
   uint16_t hostPort() const;
+  // Host descriptor for diagnostics/readiness; observing it does not advance sim time.
+  int fd() const;
 
  private:
   uint16_t port_;
