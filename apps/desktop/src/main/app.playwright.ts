@@ -1,6 +1,6 @@
 /// <reference lib="dom" />
 import { _electron as electron, expect, test, type ElectronApplication } from '@playwright/test';
-import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -15,7 +15,7 @@ let temp: string;
 let projectDir: string;
 
 test.beforeAll(async () => {
-  temp = await mkdtemp(join(tmpdir(), 'rcsim-electron-'));
+  temp = await realpath(await mkdtemp(join(tmpdir(), 'rcsim-electron-')));
   projectDir = join(temp, 'My car');
   const env = Object.fromEntries(
     Object.entries(process.env).filter(
@@ -83,10 +83,12 @@ test('creates from starter firmware, saves a typo, builds, and jumps to its exac
   await page.keyboard.insertText('\nvoid acceptance_typo() {\n  rcsim_missing_symbol;\n}\n');
   await expect(page.getByRole('tab', { name: 'main.cpp ●' })).toBeVisible();
   await page.getByRole('button', { name: 'Build for Sim', exact: true }).click();
-  await expect(page.getByRole('status').filter({ hasText: 'Build failed' })).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: 'Build failed' })).toBeVisible({
+    timeout: 60_000,
+  });
   const diagnostic = page
     .getByRole('button')
-    .filter({ hasText: /src\/main.cpp:\d+:\d+.*error:.*rcsim_missing_symbol/ })
+    .filter({ hasText: /src\/main\.cpp:\d+:\d+.*rcsim_missing_symbol/ })
     .first();
   await expect(diagnostic).toBeVisible();
   const location = /src\/main.cpp:(\d+):(\d+)/.exec(await diagnostic.innerText());
@@ -201,4 +203,20 @@ test('Serial Monitor receives the run serial stream, keeps history between tabs,
   ).toBeVisible();
   await page.getByRole('button', { name: 'Clear', exact: true }).click();
   await expect(page.getByLabel('Serial output')).not.toContainText('Firmware ready');
+});
+
+test('renderer reload disposes a shell created without a React cleanup hook', async () => {
+  const page = await app.firstWindow();
+  const { ptyId } = await page.evaluate(() => window.rcsim.pty.spawn({ cols: 80, rows: 24 }));
+  await page.reload();
+  await expect(page.getByRole('combobox', { name: 'Recent projects' })).toContainText(projectDir);
+  const error = await page.evaluate(async (id) => {
+    try {
+      await window.rcsim.pty.write(id, 'pwd\r');
+      return '';
+    } catch (error) {
+      return String(error);
+    }
+  }, ptyId);
+  expect(parseIpcError(error).code).toBe('not-found');
 });

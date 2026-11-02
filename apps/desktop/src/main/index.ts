@@ -1,17 +1,22 @@
-import { app, BrowserWindow, dialog, Menu } from 'electron';
+import { pathToFileURL } from 'node:url';
+import { app, BrowserWindow, dialog, Menu, session } from 'electron';
 import { join, resolve } from 'node:path';
 import { registerIpc } from './ipc.ts';
+import { disposeRendererResources } from './renderer-lifecycle.ts';
 import { BuildService } from './services/build.ts';
 import { CatalogService } from './services/catalog.ts';
 import { ProjectService } from './services/project.ts';
 import { PtyService } from './services/pty.ts';
 
 // Tests and source-development launches may isolate Electron's persisted data.
-const userDataDir = process.env['RCSIM_USER_DATA_DIR'];
+const userDataDir = !app.isPackaged ? process.env['RCSIM_USER_DATA_DIR'] : undefined;
 if (userDataDir) app.setPath('userData', userDataDir);
 
 function createWindow(): BrowserWindow {
   const root = resolve(__dirname, '../../../..');
+  const devServerUrl = !app.isPackaged ? process.env['ELECTRON_RENDERER_URL'] : undefined;
+  const rendererFile = join(__dirname, '../renderer/index.html');
+  const rendererUrl = devServerUrl ?? pathToFileURL(rendererFile).href;
   const window = new BrowserWindow({
     width: 1440,
     height: 900,
@@ -56,12 +61,15 @@ function createWindow(): BrowserWindow {
   const catalog = new CatalogService(project);
   const build = new BuildService(
     project,
-    process.env['RCSIM_BUILD_SIM'] ?? join(root, 'packages/hal/bin/build-sim'),
+    (!app.isPackaged ? process.env['RCSIM_BUILD_SIM'] : undefined) ??
+      join(root, 'packages/hal/bin/build-sim'),
   );
   const pty = new PtyService(project);
-  const removeIpc = registerIpc(window, { project, catalog, build, pty });
+  const removeIpc = registerIpc(window, { project, catalog, build, pty }, rendererUrl);
+  const removeLifecycle = disposeRendererResources(window.webContents, [build, pty]);
   window.on('closed', () => {
     removeIpc();
+    removeLifecycle();
     build.dispose();
     pty.dispose();
     catalog.dispose();
@@ -113,12 +121,14 @@ function createWindow(): BrowserWindow {
     ]),
   );
   window.once('ready-to-show', () => window.show());
-  const devServerUrl = process.env['ELECTRON_RENDERER_URL'];
   if (devServerUrl) void window.loadURL(devServerUrl);
-  else void window.loadFile(join(__dirname, '../renderer/index.html'));
+  else void window.loadFile(rendererFile);
   return window;
 }
 void app.whenReady().then(() => {
+  session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) =>
+    callback(false),
+  );
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

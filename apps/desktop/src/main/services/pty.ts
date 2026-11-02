@@ -2,11 +2,13 @@ import { randomUUID } from 'node:crypto';
 import { realpath, stat } from 'node:fs/promises';
 import { spawn, type IPty } from 'node-pty';
 import type { PtyApi } from '../../shared/ipc.ts';
-import { fail } from './errors.ts';
+import { errorText, fail } from './errors.ts';
 import { Signal } from './events.ts';
+import { ensurePtyHelperExecutable, ptyHelperPath, selectShell } from './pty-support.ts';
 import type { ProjectService } from './project.ts';
 
 export class PtyService implements PtyApi {
+  private generation = 0;
   private readonly terminals = new Map<string, IPty>();
   private readonly data = new Signal<[string, string]>();
   private readonly exit = new Signal<[string, number]>();
@@ -27,8 +29,10 @@ export class PtyService implements PtyApi {
     readonly rows: number;
   }): Promise<{ readonly ptyId: string }> {
     this.size(options.cols, options.rows);
-    const cwd = await realpath(options.cwd ?? this.project.requireProject().dir);
-    if (!(await stat(cwd)).isDirectory()) fail('invalid', 'Shell directory does not exist.');
+    const generation = this.generation;
+    let cwd = options.cwd ?? this.project.requireProject().dir;
+    let shell = process.platform === 'darwin' ? '/bin/zsh' : '/bin/sh';
+    let helper = '(not resolved)';
     const env = Object.fromEntries(
       Object.entries(process.env).filter(
         (entry): entry is [string, string] =>
@@ -36,17 +40,29 @@ export class PtyService implements PtyApi {
           !['ELECTRON_RUN_AS_NODE', 'ELECTRON_NO_ASAR', 'NODE_OPTIONS'].includes(entry[0]),
       ),
     );
-    const terminal = spawn(
-      process.env['SHELL'] || (process.platform === 'darwin' ? '/bin/zsh' : '/bin/bash'),
-      ['-l'],
-      {
+    let terminal: IPty;
+    try {
+      shell = await selectShell();
+      helper = ptyHelperPath();
+      cwd = await realpath(cwd);
+      if (!(await stat(cwd)).isDirectory()) throw new Error('Shell directory does not exist.');
+      if (process.platform === 'darwin') await ensurePtyHelperExecutable(helper);
+      // A navigation may dispose the renderer while path/helper checks await IO.
+      if (generation !== this.generation)
+        fail('busy', 'Shell creation was cancelled by renderer navigation.');
+      terminal = spawn(shell, ['-l'], {
         name: 'xterm-256color',
         cols: options.cols,
         rows: options.rows,
         cwd,
         env,
-      },
-    );
+      });
+    } catch (error) {
+      fail(
+        generation !== this.generation ? 'busy' : 'io',
+        `Could not start shell (shell=${shell}, cwd=${cwd}, helper=${helper}): ${errorText(error)}`,
+      );
+    }
     const ptyId = randomUUID();
     this.terminals.set(ptyId, terminal);
     terminal.onData((text) => this.data.emit(ptyId, text));
@@ -71,6 +87,7 @@ export class PtyService implements PtyApi {
     this.terminals.get(id)?.kill();
   }
   dispose(): void {
+    this.generation++;
     for (const terminal of this.terminals.values()) terminal.kill();
     this.terminals.clear();
   }

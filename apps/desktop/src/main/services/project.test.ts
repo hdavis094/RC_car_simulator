@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { defaultCatalog, exampleCar, generateCarConfigHeader } from '@rcsim/schema';
@@ -11,7 +11,7 @@ describe('ProjectService and CatalogService', () => {
   let project: ProjectService;
   let catalog: CatalogService;
   beforeEach(async () => {
-    dir = await mkdtemp(join(tmpdir(), 'rcsim-project-'));
+    dir = await realpath(await mkdtemp(join(tmpdir(), 'rcsim-project-')));
     const templateDir = join(dir, 'template');
     await mkdir(join(templateDir, 'src'), { recursive: true });
     await writeFile(join(templateDir, 'src/main.cpp'), 'void setup() {}\nvoid loop() {}\n');
@@ -71,6 +71,24 @@ describe('ProjectService and CatalogService', () => {
     }
     expect(await readFile(join(dir, 'secret'), 'utf8')).toBe('outside');
     expect((await project.listFiles()).some((entry) => entry.path.includes('escape'))).toBe(false);
+  });
+
+  it('rejects writes to the dangling symlink itself without creating an outside file', async () => {
+    await project.create(join(dir, 'car'));
+    const outside = join(dir, 'not-created');
+    await symlink(outside, join(dir, 'car/dangling'));
+    await expect(project.writeFile('dangling', 'PWNED')).rejects.toThrow('[rcsim:invalid]');
+    await expect(readFile(outside, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await project.writeFile('new/nested/file.txt', 'inside');
+    expect(await project.readFile('new/nested/file.txt')).toBe('inside');
+  });
+
+  it('opens the project when recents cannot be persisted', async () => {
+    await mkdir(join(dir, 'settings'), { recursive: true });
+    await mkdir(join(dir, 'settings/recent.json'));
+    const info = await project.create(join(dir, 'car'));
+    expect(await project.current()).toEqual(info);
+    expect((await project.recent())[0]).toEqual(info);
   });
 
   it('leaves invalid car.json editable and reports malformed and duplicate custom parts', async () => {

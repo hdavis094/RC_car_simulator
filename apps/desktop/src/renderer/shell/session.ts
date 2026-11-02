@@ -63,6 +63,7 @@ export const useSessionStore = create<SessionState>((set) => ({
             buildStatus: 'building',
           }
         : {
+            output: state.buildId === event.buildId ? state.output : '',
             buildStatus: event.ok ? 'succeeded' : 'failed',
             buildId: event.buildId,
             diagnostics: event.diagnostics,

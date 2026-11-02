@@ -1,4 +1,4 @@
-import { cp, mkdir, readFile, readdir, realpath, stat, writeFile } from 'node:fs/promises';
+import { cp, lstat, mkdir, readFile, readdir, realpath, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { watch, type FSWatcher } from 'chokidar';
 import {
@@ -69,6 +69,13 @@ export class ProjectService implements ProjectApi {
         break;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        // realpath also returns ENOENT for a dangling link. Such a link
+        // already exists and writeFile would follow it to its missing target.
+        const entry = await lstat(ancestor).catch((error: NodeJS.ErrnoException) => {
+          if (error.code !== 'ENOENT') throw error;
+          return null;
+        });
+        if (entry) fail('invalid', 'Cannot access a dangling symlink in the car project.');
         const parent = dirname(ancestor);
         if (parent === ancestor) throw error;
         ancestor = parent;
@@ -111,8 +118,12 @@ export class ProjectService implements ProjectApi {
     });
     await this.recent();
     this.recents = [this.project, ...this.recents.filter((p) => p.dir !== root)].slice(0, 10);
-    await mkdir(dirname(this.options.recentFile), { recursive: true });
-    await writeFile(this.options.recentFile, JSON.stringify(this.recents, null, 2));
+    try {
+      await mkdir(dirname(this.options.recentFile), { recursive: true });
+      await writeFile(this.options.recentFile, JSON.stringify(this.recents, null, 2));
+    } catch {
+      // Recent history is best-effort; a settings failure must not undo an open.
+    }
     return this.project;
   }
 

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { chmod, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -21,6 +21,7 @@ describe('BuildService', () => {
     await project.open(dir);
   });
   afterEach(async () => {
+    vi.unstubAllEnvs();
     build?.dispose();
     await project.dispose();
     await rm(dir, { force: true, recursive: true });
@@ -37,6 +38,65 @@ describe('BuildService', () => {
       { file: 'src/a.cpp', line: 8, column: 1, severity: 'warning', message: 'unused' },
       { file: '/usr/include/a.h', line: 3, column: 2, severity: 'error', message: 'missing' },
     ]);
+  });
+  it('normalises relative diagnostics and preserves absolute paths outside the project', () => {
+    expect(
+      parseDiagnostics(
+        '../car/src/a.cpp:2:3: error: typo\nsrc/../main.cpp:4:5: warning: unused\n../external.cpp:6:7: note: see here',
+        '/tmp/car',
+      ),
+    ).toEqual([
+      { file: 'src/a.cpp', line: 2, column: 3, severity: 'error', message: 'typo' },
+      { file: 'main.cpp', line: 4, column: 5, severity: 'warning', message: 'unused' },
+      { file: '/tmp/external.cpp', line: 6, column: 7, severity: 'note', message: 'see here' },
+    ]);
+  });
+  it('parses GNU and Apple linker failures without a source line', () => {
+    expect(
+      parseDiagnostics(
+        "/usr/bin/ld: /tmp/car/src/foo.cpp:(.text+0x5): undefined reference to `missing()'\nld: symbol(s) not found for architecture arm64\nclang++: error: linker command failed with exit code 1",
+        '/tmp/car',
+      ),
+    ).toEqual([
+      {
+        file: 'src/foo.cpp',
+        line: 1,
+        column: 1,
+        severity: 'error',
+        message: "undefined reference to `missing()'",
+      },
+      {
+        file: '',
+        line: 1,
+        column: 1,
+        severity: 'error',
+        message: 'symbol(s) not found for architecture arm64',
+      },
+      {
+        file: '',
+        line: 1,
+        column: 1,
+        severity: 'error',
+        message: 'linker command failed with exit code 1',
+      },
+    ]);
+  });
+  it('forces compiler messages to C regardless of the launch locale', async () => {
+    for (const name of ['LC_ALL', 'LC_MESSAGES', 'LANGUAGE']) vi.stubEnv(name, 'fr_FR.UTF-8');
+    const driver = join(dir, 'locale-build');
+    await writeFile(driver, '#!/bin/sh\nprintf "%s|%s|%s" "$LC_ALL" "$LC_MESSAGES" "$LANGUAGE"\n');
+    await chmod(driver, 0o755);
+    build = new BuildService(project, driver);
+    const events: BuildEvent[] = [];
+    build.onEvent((event) => events.push(event));
+    await build.start('sim');
+    await expect.poll(() => events.some((event) => event.kind === 'done')).toBe(true);
+    expect(
+      events
+        .filter((event) => event.kind === 'output')
+        .map((event) => event.text)
+        .join(''),
+    ).toBe('C|C|C');
   });
   it('uses the real compiler, preserves output, reports diagnostics, and succeeds after a fix', async () => {
     const driver = join(dir, 'build-sim');
@@ -81,6 +141,19 @@ describe('BuildService', () => {
       .poll(() => events.find((event) => event.kind === 'done'))
       .toMatchObject({ ok: false });
     await expect(build.start('esp32')).rejects.toThrow('[rcsim:not-implemented]');
+  });
+  it('terminates the active compiler when its renderer resources are disposed', async () => {
+    const driver = join(dir, 'slow-build');
+    await writeFile(driver, '#!/bin/sh\nsleep 30\n');
+    await chmod(driver, 0o755);
+    build = new BuildService(project, driver);
+    const events: BuildEvent[] = [];
+    build.onEvent((event) => events.push(event));
+    await build.start('sim');
+    build.dispose();
+    await expect
+      .poll(() => events.find((event) => event.kind === 'done'))
+      .toMatchObject({ ok: false });
   });
   it('finishes cleanly when the build driver is missing', async () => {
     build = new BuildService(project, join(dir, 'missing-build-sim'));

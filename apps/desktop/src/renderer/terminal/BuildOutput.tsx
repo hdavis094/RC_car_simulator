@@ -22,10 +22,13 @@ export function BuildOutput({ jump }: { jump: (diagnostic: Diagnostic) => void }
               <button
                 type="button"
                 className={`diagnostic ${diagnostic.severity}`}
+                disabled={!diagnostic.file}
                 onClick={() => jump(diagnostic)}
               >
                 <span>
-                  {diagnostic.file}:{diagnostic.line}:{diagnostic.column}
+                  {diagnostic.file
+                    ? `${diagnostic.file}:${diagnostic.line}:${diagnostic.column}`
+                    : 'Linker'}
                 </span>{' '}
                 {diagnostic.severity}: {diagnostic.message}
               </button>

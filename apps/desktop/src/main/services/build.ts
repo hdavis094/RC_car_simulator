@@ -1,7 +1,7 @@
 import { stripVTControlCharacters } from 'node:util';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { isAbsolute, relative, sep } from 'node:path';
+import { relative, resolve, sep } from 'node:path';
 import type { BuildApi, BuildEvent, BuildTarget, Diagnostic } from '../../shared/ipc.ts';
 import { errorText, fail } from './errors.ts';
 import { Signal } from './events.ts';
@@ -10,22 +10,52 @@ import type { ProjectService } from './project.ts';
 /** GCC and Clang share file:line:column; strip only ANSI for parsing, never for output. */
 export function parseDiagnostics(output: string, projectDir: string): Diagnostic[] {
   const diagnostics: Diagnostic[] = [];
-  const plain = stripVTControlCharacters(output);
-  for (const line of plain.split(/\r?\n/)) {
+  const filePath = (file: string): string => {
+    const absolute = resolve(projectDir, file);
+    const rel = relative(projectDir, absolute);
+    return rel === '..' || rel.startsWith(`..${sep}`) ? absolute : rel.split(sep).join('/');
+  };
+  for (const line of stripVTControlCharacters(output).split(/\r?\n/)) {
     const match = /^(.*?):(\d+):(?:(\d+):)?\s*(fatal error|error|warning|note):\s*(.*)$/.exec(line);
-    if (!match) continue;
-    const file = match[1] ?? '';
-    const rel = isAbsolute(file) ? relative(projectDir, file) : file.replace(/^\.\//, '');
-    diagnostics.push({
-      file:
-        isAbsolute(file) && (rel === '..' || rel.startsWith(`..${sep}`))
-          ? file
-          : rel.split(sep).join('/'),
-      line: Number(match[2]),
-      column: Number(match[3] ?? 1),
-      severity: match[4] === 'fatal error' ? 'error' : (match[4] as Diagnostic['severity']),
-      message: match[5] ?? '',
-    });
+    if (match) {
+      diagnostics.push({
+        file: filePath(match[1] ?? ''),
+        line: Number(match[2]),
+        column: Number(match[3] ?? 1),
+        severity: match[4] === 'fatal error' ? 'error' : (match[4] as Diagnostic['severity']),
+        message: match[5] ?? '',
+      });
+      continue;
+    }
+    // GNU ld may attach a source/object path and a section offset rather than
+    // a source line. Use line 1 when that is all the linker provides.
+    const located =
+      /(?:^|:\s*)([^:]+):(?:(\d+):|\([^)]*\):)\s*((?:undefined reference|multiple definition|undefined symbol).*)$/.exec(
+        line,
+      );
+    if (located) {
+      diagnostics.push({
+        file: filePath(located[1]?.trim() ?? ''),
+        line: Number(located[2] ?? 1),
+        column: 1,
+        severity: 'error',
+        message: (located[3] ?? '').trimEnd(),
+      });
+      continue;
+    }
+    // Apple ld, lld and compiler-driver summaries need no invented file path.
+    const summary =
+      /^(?:.*\/)?(?:ld(?:\.lld)?|collect2|clang\+\+|clang|g\+\+|gcc|c\+\+):\s*(?:error:\s*)?(.*(?:undefined|not found|multiple definition|duplicate symbol|linker command failed|ld returned).*)$/i.exec(
+        line,
+      );
+    if (summary)
+      diagnostics.push({
+        file: '',
+        line: 1,
+        column: 1,
+        severity: 'error',
+        message: summary[1] ?? '',
+      });
   }
   return diagnostics;
 }
@@ -50,7 +80,11 @@ export class BuildService implements BuildApi {
     const buildId = randomUUID();
     const started = performance.now();
     // No shell interpolation: project paths can contain spaces and shell metacharacters.
-    const child = spawn(this.driver, [dir], { cwd: dir, env: process.env, detached: true });
+    const child = spawn(this.driver, [dir], {
+      cwd: dir,
+      env: { ...process.env, LC_ALL: 'C', LC_MESSAGES: 'C', LANGUAGE: 'C' },
+      detached: true,
+    });
     this.active = { id: buildId, child };
     const output: Record<'stdout' | 'stderr', string> = { stdout: '', stderr: '' };
     let finished = false;

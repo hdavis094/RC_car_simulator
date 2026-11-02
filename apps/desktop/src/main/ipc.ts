@@ -10,7 +10,27 @@ import { errorText, fail } from './services/errors.ts';
 
 export type MainServices = Pick<RcsimApi, 'project' | 'catalog' | 'build' | 'pty'>;
 
-export function registerIpc(window: BrowserWindow, services: MainServices): () => void {
+function isAppUrl(url: string, rendererUrl: string): boolean {
+  try {
+    const sender = new URL(url);
+    const trusted = new URL(rendererUrl);
+    if (trusted.protocol === 'http:' || trusted.protocol === 'https:')
+      return sender.origin === trusted.origin;
+    if (trusted.protocol !== 'file:') return false;
+    // file: URLs all have a null origin. Trust only our actual entry document.
+    sender.hash = '';
+    trusted.hash = '';
+    return sender.href === trusted.href;
+  } catch {
+    return false;
+  }
+}
+
+export function registerIpc(
+  window: BrowserWindow,
+  services: MainServices,
+  rendererUrl: string,
+): () => void {
   const disposers: (() => void)[] = [];
   for (const service of Object.keys(IPC_METHODS) as ServiceName[]) {
     const implementation =
@@ -22,7 +42,8 @@ export function registerIpc(window: BrowserWindow, services: MainServices): () =
       ipcMain.handle(channel, async (event, ...args: unknown[]) => {
         if (
           event.sender !== window.webContents ||
-          event.senderFrame !== window.webContents.mainFrame
+          event.senderFrame !== window.webContents.mainFrame ||
+          !isAppUrl(event.senderFrame?.url ?? '', rendererUrl)
         )
           fail('invalid', 'Untrusted IPC sender.');
         if (!members)
@@ -32,7 +53,9 @@ export function registerIpc(window: BrowserWindow, services: MainServices): () =
         } catch (error) {
           const message = errorText(error);
           if (message.includes('[rcsim:')) throw error;
-          fail('io', message);
+          const code =
+            typeof error === 'object' && error !== null && 'code' in error ? error.code : undefined;
+          fail(code === 'ENOENT' ? 'not-found' : 'io', message);
         }
       });
       disposers.push(() => ipcMain.removeHandler(channel));
