@@ -182,7 +182,7 @@ export function WorkbenchRoot({ api }: WorkbenchRootProps = {}): ReactNode {
               gap: 12,
             }}
           >
-            <span>Failed to read car.json: {loadError}</span>
+            <span>{loadError}</span>
             <button
               type="button"
               onClick={startFromExampleCar}

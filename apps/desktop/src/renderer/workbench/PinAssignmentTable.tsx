@@ -133,7 +133,7 @@ function collectPowerSources(
         typeof pin.voltage === 'number'
           ? `${pin.voltage} V`
           : typeof pin.voltage === 'object'
-            ? `${pin.voltage.min}–{pin.voltage.max} V`
+            ? `${pin.voltage.min}–${pin.voltage.max} V`
             : '';
       const budgetText = pin.maxCurrentMa !== undefined ? `, ${pin.maxCurrentMa} mA` : '';
       const details = vText ? ` (${vText}${budgetText})` : '';
@@ -244,6 +244,10 @@ export function PinAssignmentTable(): ReactNode {
       }
     }
 
+    const hasKnownTarget =
+      gpios.some((g) => String(g.gpio) === currentValue) ||
+      otherPins.some((opt) => opt.value === currentValue);
+
     return (
       <select
         aria-label={`Target for ${part.instanceId}.${pin.name}`}
@@ -259,6 +263,13 @@ export function PinAssignmentTable(): ReactNode {
         }}
       >
         <option value="">Unconnected</option>
+        {currentValue && !hasKnownTarget && (
+          <option value={currentValue}>
+            {currentTarget && 'gpio' in currentTarget
+              ? `GPIO ${currentTarget.gpio} (unlisted)`
+              : currentValue}
+          </option>
+        )}
         <optgroup label="Controller GPIOs">
           {gpios.map((g) => (
             <option key={g.gpio} value={String(g.gpio)}>

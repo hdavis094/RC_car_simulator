@@ -21,6 +21,42 @@ export function formatHex(address: number): string {
   return `0x${address.toString(16).toUpperCase().padStart(2, '0')}`;
 }
 
+function canonicalizeValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(canonicalizeValue);
+  }
+  if (value !== null && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, v]) => v !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of entries) {
+      out[k] = canonicalizeValue(v);
+    }
+    return out;
+  }
+  return value;
+}
+
+/** Deterministic JSON string of a parsed `Car`, independent of key order or whitespace. */
+export function canonicalCarJson(car: Car): string {
+  return JSON.stringify(canonicalizeValue(car));
+}
+
+/** Parses raw `car.json` text with `Car.safeParse` and returns its canonical JSON, or `null` if invalid. */
+export function parseCanonicalCarFromRaw(raw: string): string | null {
+  try {
+    const parsed = Car.safeParse(JSON.parse(raw));
+    return parsed.success ? canonicalCarJson(parsed.data) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function isSameCar(a: Car, b: Car): boolean {
+  return canonicalCarJson(a) === canonicalCarJson(b);
+}
+
 /**
  * Builds a Catalog Map from the catalog IPC listing, keeping built-ins first
  * and skipping any custom part whose id collides with a built-in or an earlier
@@ -238,6 +274,9 @@ export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
     try {
       api = resolveRcsimApi(explicitApi ?? get().api ?? undefined);
     } catch {
+      if (!options?.force && get().dirty) {
+        return;
+      }
       set({
         api: null,
         loaded: false,
@@ -247,67 +286,116 @@ export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
       return;
     }
 
-    const current = get();
-    // Preserve unsaved edits across environment tab switches unless reload is forced.
-    if (!options?.force && current.loaded && current.dirty && current.api === api) {
+    set({ api });
+
+    const [catalogSettled, carSettled] = await Promise.allSettled([
+      api.catalog.list(),
+      api.project.readCar(),
+    ]);
+
+    const after = get();
+
+    // If the store was already dirty on remount, or became dirty while awaiting IPC,
+    // never overwrite unsaved edits; instead compare disk against what was last saved.
+    if (!options?.force && after.dirty) {
+      const nextListing =
+        catalogSettled.status === 'fulfilled' ? catalogSettled.value : after.listing;
+      const nextCatalog =
+        catalogSettled.status === 'fulfilled' ? catalogFromListing(nextListing) : after.catalog;
+      const diskCanonical =
+        carSettled.status === 'fulfilled' && carSettled.value.ok
+          ? canonicalCarJson(carSettled.value.car)
+          : null;
+      const baselineCanonical = after.lastSavedCarJson;
+      const changedOnDisk =
+        baselineCanonical !== null
+          ? diskCanonical !== baselineCanonical
+          : diskCanonical !== null && diskCanonical !== canonicalCarJson(after.car);
+
+      set({
+        listing: nextListing,
+        catalog: nextCatalog,
+        issues: checkWiring(after.car, nextCatalog),
+        ...(baselineCanonical === null && diskCanonical !== null
+          ? { lastSavedCarJson: diskCanonical }
+          : {}),
+        ...(changedOnDisk ? { externalChange: true } : {}),
+      });
       return;
     }
 
-    set({ api });
-    try {
-      const [listing, carResult] = await Promise.all([api.catalog.list(), api.project.readCar()]);
-      const catalog = catalogFromListing(listing);
-      if (carResult.ok) {
-        const car = carResult.car;
-        const issues = checkWiring(car, catalog);
-        const allIds = new Set([
-          car.controller.instanceId,
-          car.chassis.instanceId,
-          ...car.parts.map((p) => p.instanceId),
-        ]);
-        const prevSelected = get().selectedInstanceId;
-        const nextSelected =
-          prevSelected && allIds.has(prevSelected) ? prevSelected : car.controller.instanceId;
-        const selectedPart = [car.controller, car.chassis, ...car.parts].find(
-          (p) => p.instanceId === nextSelected,
-        );
-        set({
-          api,
-          listing,
-          catalog,
-          car,
-          partRowKeys: buildRowKeys(car, get().partRowKeys),
-          issues,
-          loaded: true,
-          dirty: false,
-          lastSavedCarJson: `${JSON.stringify(car, null, 2)}\n`,
-          externalChange: false,
-          loadError: null,
-          loadErrorRaw: null,
-          selectedInstanceId: nextSelected,
-          selectedPartId: selectedPart?.partId ?? car.controller.partId,
-        });
-      } else {
-        set({
-          api,
-          listing,
-          catalog,
-          loaded: false,
-          dirty: false,
-          externalChange: false,
-          loadError: carResult.error,
-          loadErrorRaw: carResult.raw,
-        });
-      }
-    } catch (error) {
-      const parsed = parseIpcError(error);
+    if (catalogSettled.status === 'rejected') {
+      const parsed = parseIpcError(catalogSettled.reason);
       set({
         api,
         loaded: false,
         dirty: false,
         externalChange: false,
-        loadError: parsed.message,
+        loadError: `Failed to load catalog: ${parsed.message}`,
         loadErrorRaw: null,
+      });
+      return;
+    }
+
+    const listing = catalogSettled.value;
+    const catalog = catalogFromListing(listing);
+
+    if (carSettled.status === 'rejected') {
+      const parsed = parseIpcError(carSettled.reason);
+      set({
+        api,
+        listing,
+        catalog,
+        loaded: false,
+        dirty: false,
+        externalChange: false,
+        loadError: `Failed to read car.json: ${parsed.message}`,
+        loadErrorRaw: null,
+      });
+      return;
+    }
+
+    const carResult = carSettled.value;
+    if (carResult.ok) {
+      const car = carResult.car;
+      const issues = checkWiring(car, catalog);
+      const allIds = new Set([
+        car.controller.instanceId,
+        car.chassis.instanceId,
+        ...car.parts.map((p) => p.instanceId),
+      ]);
+      const prevSelected = get().selectedInstanceId;
+      const nextSelected =
+        prevSelected && allIds.has(prevSelected) ? prevSelected : car.controller.instanceId;
+      const selectedPart = [car.controller, car.chassis, ...car.parts].find(
+        (p) => p.instanceId === nextSelected,
+      );
+      set({
+        api,
+        listing,
+        catalog,
+        car,
+        partRowKeys: buildRowKeys(car, get().partRowKeys),
+        issues,
+        loaded: true,
+        dirty: false,
+        lastSavedCarJson: canonicalCarJson(car),
+        externalChange: false,
+        loadError: null,
+        loadErrorRaw: null,
+        selectedInstanceId: nextSelected,
+        selectedPartId: selectedPart?.partId ?? car.controller.partId,
+      });
+    } else {
+      set({
+        api,
+        listing,
+        catalog,
+        loaded: false,
+        dirty: false,
+        externalChange: false,
+        loadError: `Failed to read car.json: ${carResult.error}`,
+        loadErrorRaw: carResult.raw,
       });
     }
   },
@@ -321,22 +409,29 @@ export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
   },
 
   async handleExternalCarFileChange() {
-    const { api, saving, lastSavedCarJson, dirty } = get();
+    const { api, saving } = get();
     if (!api || saving) return;
     try {
       const raw = await api.project.readFile('car.json');
-      if (lastSavedCarJson !== null && raw === lastSavedCarJson) {
-        // Ignore the file-watcher echo of our own writeCar call.
+      const afterRead = get();
+      if (afterRead.saving) return;
+      const diskCanonical = parseCanonicalCarFromRaw(raw);
+      if (
+        diskCanonical !== null &&
+        afterRead.lastSavedCarJson !== null &&
+        diskCanonical === afterRead.lastSavedCarJson
+      ) {
+        // Ignore the file-watcher echo of our own writeCar call, or a formatting-only / touch change.
         return;
       }
     } catch {
-      // If readFile fails, fall through to dirty check / reload.
+      if (get().saving) return;
     }
-    if (dirty) {
+    if (get().dirty) {
       set({ externalChange: true });
       return;
     }
-    await get().load(api, { force: true });
+    await get().load(api, { force: false });
   },
 
   startFromExampleCar() {
@@ -524,6 +619,7 @@ export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
       updateCarState(nextCar, catalog, {
         partRowKeys: remainingRowKeys,
         selectedInstanceId: nextSelected,
+        focusedRowKey: null,
       }),
     );
   },
@@ -596,6 +692,7 @@ export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
           [trimmed]: preservedKey,
         },
         selectedInstanceId: selectedInstanceId === oldId ? trimmed : selectedInstanceId,
+        focusedRowKey: null,
       }),
     );
     return { ok: true };
@@ -662,7 +759,7 @@ export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
   },
 
   async saveCar() {
-    const { car, catalog, loaded, loadError } = get();
+    const { car, loaded, loadError } = get();
     if (!loaded || loadError !== null) {
       return false;
     }
@@ -696,20 +793,24 @@ export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
       return false;
     }
 
-    const serialized = `${JSON.stringify(parsed.data, null, 2)}\n`;
-    set({ saving: true, saveStatus: null, lastSavedCarJson: serialized });
+    const savedCar = parsed.data;
+    set({ saving: true, saveStatus: null });
     try {
-      const issues = checkWiring(parsed.data, catalog);
-      const errorCount = issues.filter((i) => i.severity === 'error').length;
-      await api.project.writeCar(parsed.data);
-      const message = canRun(issues)
+      await api.project.writeCar(savedCar);
+      const latest = get();
+      const editedDuringSave = latest.car !== car || !isSameCar(latest.car, savedCar);
+      const savedIssues = checkWiring(savedCar, latest.catalog);
+      const activeIssues = editedDuringSave ? checkWiring(latest.car, latest.catalog) : savedIssues;
+      const errorCount = savedIssues.filter((i) => i.severity === 'error').length;
+      const message = canRun(savedIssues)
         ? 'Saved car.json and regenerated include/car_config.h.'
         : `Saved car.json and include/car_config.h with ${errorCount} wiring error(s) (flagged: Run in Sim is blocked until resolved).`;
       set({
         saving: false,
-        dirty: false,
+        dirty: editedDuringSave ? latest.dirty : false,
+        lastSavedCarJson: canonicalCarJson(savedCar),
         externalChange: false,
-        issues,
+        issues: activeIssues,
         saveStatus: {
           ok: true,
           flaggedErrors: errorCount,
@@ -749,10 +850,26 @@ export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
       };
     }
 
-    if (defaultCatalog.has(parsed.data.id) || get().catalog.has(parsed.data.id)) {
+    const partId = parsed.data.id;
+    const partPath = `parts/${partId}.json`;
+    const hasProblemEntry = get().listing.problems.some(
+      (problem) =>
+        problem.source === partPath ||
+        problem.source.endsWith(`/${partPath}`) ||
+        problem.source === `${partId}.json`,
+    );
+
+    if (hasProblemEntry) {
       return {
         ok: false,
-        error: `part id "${parsed.data.id}" is already in the catalog`,
+        error: `part id "${partId}" conflicts with broken part file "${partPath}"`,
+      };
+    }
+
+    if (defaultCatalog.has(partId) || get().catalog.has(partId)) {
+      return {
+        ok: false,
+        error: `part id "${partId}" is already in the catalog`,
       };
     }
 
