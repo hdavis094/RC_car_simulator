@@ -14,7 +14,7 @@ BUILD_DIR ?= build/$(notdir $(firstword $(CXX)))
 
 CXXFLAGS ?= -O1 -g
 WARNINGS := -Wall -Wextra -Wpedantic -Werror
-CPPFLAGS += -Iinclude -isystem third_party
+CPPFLAGS += -Iinclude -isystem third_party -isystem libraries/ArduinoJson
 ALL_CXXFLAGS := -std=c++17 $(WARNINGS) $(CXXFLAGS) -MMD -MP
 
 LIB_SRCS := $(wildcard src/*.cpp)
@@ -32,7 +32,7 @@ LIB := $(BUILD_DIR)/libhal.a
 TEST_BIN := $(BUILD_DIR)/hal_tests
 
 CLANG_FORMAT ?= clang-format
-FORMAT_SRCS := $(wildcard include/*.h include/**/*.h src/*.cpp src/*.h test/*.cpp test/*.h)
+FORMAT_SRCS := $(wildcard include/*.h include/**/*.h src/*.cpp src/*.h test/*.cpp test/*.h test/fixtures/*/src/*.cpp)
 
 .PHONY: all lib test clean format format-check FORCE
 

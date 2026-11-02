@@ -1,0 +1,42 @@
+#!/usr/bin/env node
+import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { mkdirSync, readdirSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const hal = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const project = process.argv[2];
+if (!project || process.argv.length !== 3) {
+  console.error('usage: build-sim <project-dir>');
+  process.exit(2);
+}
+const cxx = process.env.CXX || 'c++';
+function run(command, args, cwd) {
+  const result = spawnSync(command, args, { cwd, stdio: 'inherit' });
+  if (result.error) console.error(`build-sim: ${result.error.message}`);
+  if (result.status !== 0) process.exit(result.status || 1);
+}
+try {
+  const root = path.resolve(project);
+  const output = path.join(root, '.rcsim', 'build');
+  const cacheDir = path.join('build', createHash('sha256').update(cxx).digest('hex').slice(0, 16));
+  const cache = path.join(hal, cacheDir);
+  const sources = readdirSync(path.join(root, 'src'), { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.cpp'))
+    .map((entry) => path.join(root, 'src', entry.name))
+    .sort();
+  if (!sources.length) throw new Error('project src/ contains no .cpp files');
+  mkdirSync(output, { recursive: true });
+  run('make', ['--no-print-directory', '-s', `CXX=${cxx}`, `BUILD_DIR=${cacheDir}`, 'lib'], hal);
+  run(cxx, [
+    '-std=c++17', '-O2', '-Wall', '-Wextra',
+    '-I', path.join(hal, 'include'),
+    '-isystem', path.join(hal, 'libraries', 'ArduinoJson'),
+    '-I', path.join(root, 'include'),
+    ...sources, path.join(cache, 'libhal.a'), '-o', path.join(output, 'firmware'),
+  ], root);
+} catch (error) {
+  console.error(`build-sim: ${error.message}`);
+  process.exit(1);
+}

@@ -1,0 +1,194 @@
+#include "WiFi.h"
+
+#include <arpa/inet.h>
+#include <poll.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+#include <cstring>
+
+#include "WiFiUdp.h"
+#include "fake_sim.h"
+
+using namespace rcsim::hal;
+using hal_test::FakeSim;
+namespace {
+struct Host {
+  int fd;
+  explicit Host(bool udp = false) : fd(::socket(AF_INET, udp ? SOCK_DGRAM : SOCK_STREAM, 0)) {
+    REQUIRE(fd >= 0);
+  }
+  ~Host() { ::close(fd); }
+  bool readable(int ms = 1000) {
+    pollfd p{fd, POLLIN, 0};
+    return ::poll(&p, 1, ms) == 1 && (p.revents & POLLIN);
+  }
+};
+sockaddr_in hostAddress(uint16_t port) {
+  sockaddr_in a{};
+  a.sin_family = AF_INET;
+  a.sin_port = htons(port);
+  inet_pton(AF_INET, "127.0.0.1", &a.sin_addr);
+  return a;
+}
+uint16_t reportedPort(const FakeSim& sim, const char* proto) {
+  for (const auto& d : sim.done)
+    for (auto e : d["message"]["netEvents"].as<JsonArrayConst>())
+      if (e["type"] == "listen" && e["proto"] == proto) return e["hostPort"].as<uint16_t>();
+  return 0;
+}
+}  // namespace
+TEST_CASE(
+    "WiFiServer accepts a real client on the reported port and supports shared client handles") {
+  FakeSim sim;
+  sim.start();
+  CHECK(WiFi.begin("sim", "password") == WL_CONNECTED);
+  CHECK(WiFi.status() == WL_CONNECTED);
+  CHECK(WiFi.localIP().toString() == "127.0.0.1");
+  WiFiServer server(3333);
+  server.begin();
+  delay(1);
+  auto port = reportedPort(sim, "tcp");
+  REQUIRE(port != 0);
+  CHECK(port == server.hostPort());
+  Host host;
+  auto addr = hostAddress(port);
+  REQUIRE(::connect(host.fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0);
+  auto client = server.available();
+  REQUIRE(static_cast<bool>(client));
+  auto copy = client;
+  CHECK(copy.connected());
+  REQUIRE(::send(host.fd, "hello", 5, 0) == 5);
+  CHECK(client.available() == 5);
+  CHECK(copy.peek() == 'h');
+  CHECK(client.read() == 'h');
+  CHECK(copy.read() == 'e');
+  REQUIRE(client.print("reply") == 5);
+  REQUIRE(host.readable());
+  char b[16];
+  CHECK(::recv(host.fd, b, sizeof(b), 0) == 5);
+  CHECK(std::string(b, 5) == "reply");
+  client.stop();
+  CHECK_FALSE(copy.connected());
+  server.end();
+  delay(1);
+  bool connect = false, disconnect = false, unlisten = false;
+  auto events = sim.done.back()["message"]["netEvents"].as<JsonArrayConst>();
+  for (auto e : events) {
+    connect |= e["type"] == "connect";
+    disconnect |= e["type"] == "disconnect";
+    unlisten |= e["type"] == "unlisten";
+  }
+  CHECK(connect);
+  CHECK(disconnect);
+  CHECK(unlisten);
+}
+TEST_CASE("WiFiClient opens a nonblocking outbound TCP connection") {
+  FakeSim sim;
+  sim.start();
+  Host server;
+  auto addr = hostAddress(0);
+  REQUIRE(::bind(server.fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0);
+  REQUIRE(::listen(server.fd, 1) == 0);
+  socklen_t size = sizeof(addr);
+  REQUIRE(getsockname(server.fd, reinterpret_cast<sockaddr*>(&addr), &size) == 0);
+  WiFiClient client;
+  REQUIRE(client.connect(IPAddress(127, 0, 0, 1), ntohs(addr.sin_port)) == 1);
+  REQUIRE(server.readable());
+  int peer = ::accept(server.fd, nullptr, nullptr);
+  REQUIRE(peer >= 0);
+  CHECK(client.connected());
+  CHECK(client.print("outbound") == 8);
+  pollfd p{peer, POLLIN, 0};
+  REQUIRE(::poll(&p, 1, 1000) == 1);
+  char b[16];
+  CHECK(::recv(peer, b, sizeof(b), 0) == 8);
+  ::close(peer);
+  client.stop();
+}
+TEST_CASE("UDP preserves packets and applies latency, total loss and dropout from STEP") {
+  FakeSim sim;
+  uint32_t latency = 2000, loss = 0;
+  bool dropout = false;
+  sim.prepare = [&](JsonDocument& d) {
+    auto f = d["message"]["netFaults"].to<JsonObject>();
+    f["latencyUs"] = latency;
+    f["lossPpm"] = loss;
+    f["dropout"] = dropout;
+  };
+  sim.start();
+  WiFiUDP udp;
+  CHECK(udp.begin(4210));
+  delay(1);
+  auto port = reportedPort(sim, "udp");
+  REQUIRE(port != 0);
+  Host host(true);
+  auto addr = hostAddress(port);
+  REQUIRE(sendto(host.fd, "packet", 6, 0, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 6);
+  CHECK(udp.parsePacket() == 0);
+  delay(1);
+  CHECK(udp.parsePacket() == 0);
+  delay(1);
+  CHECK(udp.parsePacket() == 6);
+  CHECK(udp.peek() == 'p');
+  CHECK(udp.read() == 'p');
+  CHECK(udp.available() == 5);
+  auto remoteIP = udp.remoteIP();
+  auto remotePort = udp.remotePort();
+  CHECK(udp.beginPacket(remoteIP, remotePort));
+  CHECK(udp.print("reply") == 5);
+  CHECK(udp.endPacket());
+  CHECK_FALSE(host.readable(0));
+  delay(1);
+  CHECK_FALSE(host.readable(0));
+  delay(1);
+  REQUIRE(host.readable());
+  char b[16];
+  CHECK(::recv(host.fd, b, sizeof(b), 0) == 5);
+  loss = 1000000;
+  latency = 0;
+  delay(1);
+  REQUIRE(sendto(host.fd, "lost", 4, 0, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 4);
+  delay(1);
+  CHECK(udp.parsePacket() == 0);
+  CHECK(udp.beginPacket(remoteIP, remotePort));
+  udp.print("lost");
+  CHECK(udp.endPacket());
+  CHECK_FALSE(host.readable(0));
+  loss = 0;
+  dropout = true;
+  delay(1);
+  REQUIRE(sendto(host.fd, "blocked", 7, 0, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 7);
+  delay(1);
+  CHECK(udp.parsePacket() == 0);
+  dropout = false;
+  delay(1);
+  REQUIRE(sendto(host.fd, "back", 4, 0, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 4);
+  CHECK(udp.parsePacket() == 4);
+  udp.stop();
+}
+
+TEST_CASE("releasing the final socket handle reports disconnect and unlisten events") {
+  FakeSim sim;
+  sim.start();
+  {
+    WiFiServer server(3333);
+    server.begin();
+    delay(1);
+    Host host;
+    auto addr = hostAddress(reportedPort(sim, "tcp"));
+    REQUIRE(::connect(host.fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0);
+    auto client = server.available();
+    REQUIRE(static_cast<bool>(client));
+    auto copy = client;
+    client = WiFiClient();
+    CHECK(copy.connected());
+    copy = WiFiClient();
+  }
+  delay(1);
+  auto events = sim.done.back()["message"]["netEvents"].as<JsonArrayConst>();
+  REQUIRE(events.size() == 3);
+  CHECK(events[0]["type"] == "connect");
+  CHECK(events[1]["type"] == "disconnect");
+  CHECK(events[2]["type"] == "unlisten");
+}

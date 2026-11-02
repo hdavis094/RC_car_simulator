@@ -1,6 +1,6 @@
 # P1-C — hal: Arduino/ESP32 layer for desktop builds
 
-Status: in-progress
+Status: in-review
 Agent: Codex (gpt-6.1-sol)
 Branch: ws/p1-c
 Depends on: P0 (all)
@@ -48,15 +48,15 @@ The starter firmware and similar sketches compile unchanged with the system C++ 
 
 ## Acceptance
 
-- [ ] `pnpm verify` passes
-- [ ] every `sim-protocol/vectors/` file decodes and re-encodes byte-identically in C++
-- [ ] `delay(100)` in `loop()` advances sim time by exactly 100 ms per iteration (plus the configured call cost)
-- [ ] a busy-wait `while (millis() - t < 50) {}` terminates
-- [ ] three VL53L0X instances brought up with the XSHUT sequence get distinct addresses, and read distinct fake-sim readings
-- [ ] a `WiFiServer` on port 3333 is reachable on the reported host port from a test client
-- [ ] a sketch with a compile error yields the compiler's `file:line:col: error:` output and a non-zero exit from `build-sim`
-- [ ] hal and its tests build warning-free at `-Wall -Wextra` with both GCC and Clang
-- [ ] socket paths stay under 100 bytes, checked by a test
+- [x] `pnpm verify` passes
+- [x] every `sim-protocol/vectors/` file decodes and re-encodes byte-identically in C++
+- [x] `delay(100)` in `loop()` advances sim time by exactly 100 ms per iteration (plus the configured call cost)
+- [x] a busy-wait `while (millis() - t < 50) {}` terminates
+- [x] three VL53L0X instances brought up with the XSHUT sequence get distinct addresses, and read distinct fake-sim readings
+- [x] a `WiFiServer` on port 3333 is reachable on the reported host port from a test client
+- [x] a sketch with a compile error yields the compiler's `file:line:col: error:` output and a non-zero exit from `build-sim`
+- [x] hal and its tests build warning-free at `-Wall -Wextra` with both GCC and Clang
+- [x] socket paths stay under 100 bytes, checked by a test
 
 ## Out of scope
 
@@ -65,6 +65,16 @@ FreeRTOS tasks, `attachInterrupt`, BLE, the sim-side bridge (P1-H), PlatformIO r
 ## Handoff
 
 - **Built**:
+  - Arduino/ESP32 core surface, serial/Print/Stream/String helpers, GPIO/ADC/LEDC, and Servo, Wire, VL53L0X and Electronic Cats MPU6050 shims.
+  - Nanosecond lockstep runtime with carried advances, boot-relative uptime, timestamped GPIO edges, CONFIG/STEP validation, framed Unix socket transport, clean BYE handling and socket-loss diagnostics.
+  - C++ sim-protocol codec: all 17 valid vectors match their JSON and round-trip byte-identically in both directions; all 16 malformed vectors are rejected.
+  - Nonblocking IPv4 TCP/UDP sockets with ephemeral host-port mappings, connection lifecycle events, bounded queues, sim-time latency, seeded loss and dropout.
+  - Vendored unmodified ArduinoJson 7.4.2 single header and MIT licence; Arduino String input/output/conversion compatibility is covered.
+  - Executable `packages/hal/bin/build-sim`, compiler-aware static-library cache, HAL-first includes, project paths containing spaces/quotes/metacharacters, and unchanged compiler diagnostics/exit status.
+  - 23 doctest cases / 1,707 assertions pass with GCC 16.2.1 and Clang 23.1.3 under `-Wall -Wextra -Wpedantic -Werror`. Includes a real built firmware process driven by a C++ fake sim for 400 ticks, TCP JSON exchange, precise delay/busy-wait/pulse tests, three-sensor XSHUT sequencing, network faults, compile errors, socket loss and socket-path limits.
+  - Final `pnpm verify` passed: formatting, lint, typecheck, 272 TypeScript tests, both HAL compiler runs, scenario command and Electron smoke test.
 - **Deviations from the brief**:
-- **Contract change requests**:
-- **Open questions**:
+  - The process integration fixture is under `packages/hal/test/fixtures/firmware/`; the starter firmware is still the P0 scaffold and belongs to P1-G. No files in that package were changed.
+  - ADC uses a linear 12-bit 0–3.3 V conversion, without hardware calibration/nonlinearity. Network destinations support numeric IPv4 and `localhost`; DNS, IPv6 and radio/authentication behaviour are not modelled. Injected TCP segment loss discards bytes at the HAL boundary without simulating TCP retransmission. These limits are documented in `packages/hal/README.md`.
+- **Contract change requests**: None.
+- **Open questions**: None blocking. Apple clang and macOS runtime portability still need macOS CI. The repository scenario command currently passes through its P0 placeholder; the complete v1 vehicle scenario remains P2-01 work.
