@@ -26,6 +26,19 @@ const isIntermediateNumericDraft = (raw: string): boolean => {
   );
 };
 
+const DECIMAL_NUMBER_RE = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i;
+
+/**
+ * Parses a finite base-10 number, rejecting `Infinity`, overflow (`1e999`),
+ * hex (`0x10`), binary (`0b10`), octal (`0o10`), and `NaN`.
+ */
+export function parseFiniteDecimal(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (!DECIMAL_NUMBER_RE.test(trimmed)) return null;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 /**
  * Controlled number input that keeps a string draft while typing so negative
  * signs (`-`), decimal points (`12.`), and clearing an optional field work
@@ -80,8 +93,8 @@ export function NumericInput({
         if (isIntermediateNumericDraft(trimmed)) {
           return;
         }
-        const parsed = Number(trimmed);
-        if (!Number.isNaN(parsed)) {
+        const parsed = parseFiniteDecimal(trimmed);
+        if (parsed !== null) {
           onChange(parsed);
         }
       }}
@@ -93,8 +106,8 @@ export function NumericInput({
           setDraft('');
           return;
         }
-        const parsed = Number(trimmed);
-        if (trimmed === '' || isIntermediateNumericDraft(trimmed) || Number.isNaN(parsed)) {
+        const parsed = parseFiniteDecimal(trimmed);
+        if (trimmed === '' || isIntermediateNumericDraft(trimmed) || parsed === null) {
           setDraft(externalStr);
         } else {
           onChange(parsed);

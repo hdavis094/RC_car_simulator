@@ -13,7 +13,7 @@ import {
   type ThrottleCurvePoint,
 } from '@rcsim/schema';
 import { useState, type FormEvent, type ReactNode } from 'react';
-import { NumericInput } from './NumericInput.tsx';
+import { NumericInput, parseFiniteDecimal } from './NumericInput.tsx';
 import { useWorkbenchStore } from './workbench-store.ts';
 
 interface SchemaFieldDescriptor {
@@ -195,6 +195,48 @@ export function defaultPinsForTemplate(template: BehaviorTemplate): PinDefinitio
   }
 }
 
+export function formatNumberArrayParam(rawVal: unknown): string {
+  return Array.isArray(rawVal) ? rawVal.join(', ') : '';
+}
+
+export function parseNumberArrayDraft(draft: string): number[] {
+  return draft
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s !== '')
+    .flatMap((s) => {
+      const parsed = parseFiniteDecimal(s);
+      return parsed !== null ? [parsed] : [];
+    });
+}
+
+export function formatThrottleCurveParam(rawVal: unknown): string {
+  const points = Array.isArray(rawVal)
+    ? (rawVal as ThrottleCurvePoint[])
+    : [
+        { input: 0, output: 0 },
+        { input: 1, output: 1 },
+      ];
+  return points.map((p) => `${p.input}:${p.output}`).join(', ');
+}
+
+export function parseThrottleCurveDraft(draft: string): ThrottleCurvePoint[] {
+  return draft
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s !== '')
+    .flatMap((pair) => {
+      const parts = pair.split(':').map((s) => s.trim());
+      if (parts.length !== 2) return [];
+      const [inStr, outStr] = parts;
+      if (!inStr || !outStr) return [];
+      const input = parseFiniteDecimal(inStr);
+      const output = parseFiniteDecimal(outStr);
+      if (input === null || output === null) return [];
+      return [{ input, output }];
+    });
+}
+
 type PinVoltageMode = 'none' | 'number' | 'supply' | 'range';
 
 function getPinVoltageMode(voltage: PinDefinition['voltage']): PinVoltageMode {
@@ -204,179 +246,236 @@ function getPinVoltageMode(voltage: PinDefinition['voltage']): PinVoltageMode {
   return 'range';
 }
 
+interface NewPartFormState {
+  category: PartCategory;
+  id: string;
+  name: string;
+  manufacturer: string;
+  description: string;
+  massG: number;
+  dimensionsMm: { width: number; height: number; length: number };
+  modelPath: string;
+  sourcesText: string;
+  notes: string;
+  hasElectrical: boolean;
+  supplyMinV: number;
+  supplyMaxV: number;
+  logicLevelMode: 'number' | 'supply';
+  logicLevelV: number;
+  currentTypicalMa: number;
+  currentPeakMa: number;
+  hasI2c: boolean;
+  i2cDefaultAddress: number;
+  i2cAddressingKind: 'fixed' | 'strap' | 'software';
+  i2cEnablePin: string;
+  i2cStrapPin: string;
+  i2cStrapHighAddress: number;
+  template: BehaviorTemplate;
+  behaviorParams: Record<string, unknown>;
+  paramDrafts: Readonly<Record<string, string>>;
+  pins: PinDefinition[];
+  gpioMaxInputV: number;
+  gpios: GpioDefinition[];
+  wheelbaseMm: number;
+  trackWidthMm: number;
+  wheelRadiusMm: number;
+  maxSteeringAngleDeg: number;
+  steeringLinkageRatio: number;
+  driveWheels: 'rear' | 'front' | 'all';
+  finalDriveRatio: number;
+  centreOfGravityMm: { x: number; y: number; z: number };
+  mountPoints: MountPoint[];
+}
+
+function createDefaultFormState(): NewPartFormState {
+  return {
+    category: 'sensor',
+    id: 'sensor.custom-ranger',
+    name: 'Custom Ranger Sensor',
+    manufacturer: 'Custom',
+    description: 'Custom distance sensor',
+    massG: 5,
+    dimensionsMm: { width: 20, height: 10, length: 15 },
+    modelPath: '',
+    sourcesText: '',
+    notes: '',
+    hasElectrical: true,
+    supplyMinV: 3.0,
+    supplyMaxV: 5.5,
+    logicLevelMode: 'number',
+    logicLevelV: 3.3,
+    currentTypicalMa: 15,
+    currentPeakMa: 30,
+    hasI2c: false,
+    i2cDefaultAddress: 41,
+    i2cAddressingKind: 'fixed',
+    i2cEnablePin: 'XSHUT',
+    i2cStrapPin: 'AD0',
+    i2cStrapHighAddress: 42,
+    template: 'distance-raycast',
+    behaviorParams: defaultBehaviorParams('distance-raycast'),
+    paramDrafts: {},
+    pins: defaultPinsForTemplate('distance-raycast'),
+    gpioMaxInputV: 3.6,
+    gpios: [{ gpio: 0, strapping: true }, { gpio: 21 }, { gpio: 22 }],
+    wheelbaseMm: 300,
+    trackWidthMm: 220,
+    wheelRadiusMm: 50,
+    maxSteeringAngleDeg: 28,
+    steeringLinkageRatio: 0.7,
+    driveWheels: 'rear',
+    finalDriveRatio: 12,
+    centreOfGravityMm: { x: 0, y: 80, z: 0 },
+    mountPoints: [
+      { id: 'front-centre', positionMm: { x: 0, y: 50, z: -200 }, yawDeg: 0, pitchDeg: 0 },
+    ],
+  };
+}
+
 export function NewPartForm(): ReactNode {
   const newPartOpen = useWorkbenchStore((s) => s.newPartOpen);
   const setNewPartOpen = useWorkbenchStore((s) => s.setNewPartOpen);
   const createCustomPart = useWorkbenchStore((s) => s.createCustomPart);
 
-  const [category, setCategory] = useState<PartCategory>('sensor');
-  const [id, setId] = useState('sensor.custom-ranger');
-  const [name, setName] = useState('Custom Ranger Sensor');
-  const [manufacturer, setManufacturer] = useState('Custom');
-  const [description, setDescription] = useState('Custom distance sensor');
-  const [massG, setMassG] = useState(5);
-  const [dimensionsMm, setDimensionsMm] = useState({ width: 20, height: 10, length: 15 });
-  const [modelPath, setModelPath] = useState('');
-  const [sourcesText, setSourcesText] = useState('https://example.com/datasheet.pdf');
-  const [notes, setNotes] = useState('');
-
-  // Electrical
-  const [hasElectrical, setHasElectrical] = useState(true);
-  const [supplyMinV, setSupplyMinV] = useState(3.0);
-  const [supplyMaxV, setSupplyMaxV] = useState(5.5);
-  const [logicLevelMode, setLogicLevelMode] = useState<'number' | 'supply'>('number');
-  const [logicLevelV, setLogicLevelV] = useState(3.3);
-  const [currentTypicalMa, setCurrentTypicalMa] = useState(15);
-  const [currentPeakMa, setCurrentPeakMa] = useState(30);
-
-  // I2C
-  const [hasI2c, setHasI2c] = useState(false);
-  const [i2cDefaultAddress, setI2cDefaultAddress] = useState(41);
-  const [i2cAddressingKind, setI2cAddressingKind] = useState<'fixed' | 'strap' | 'software'>(
-    'fixed',
-  );
-  const [i2cEnablePin, setI2cEnablePin] = useState('XSHUT');
-  const [i2cStrapPin, setI2cStrapPin] = useState('AD0');
-  const [i2cStrapHighAddress, setI2cStrapHighAddress] = useState(42);
-
-  // Behavior
-  const [template, setTemplate] = useState<BehaviorTemplate>('distance-raycast');
-  const [behaviorParams, setBehaviorParams] = useState<Record<string, unknown>>(() =>
-    defaultBehaviorParams('distance-raycast'),
-  );
-
-  // Pins
-  const [pins, setPins] = useState<PinDefinition[]>(() =>
-    defaultPinsForTemplate('distance-raycast'),
-  );
-
-  // Controller fields
-  const [gpioMaxInputV, setGpioMaxInputV] = useState(3.6);
-  const [gpios, setGpios] = useState<GpioDefinition[]>([
-    { gpio: 0, strapping: true },
-    { gpio: 21 },
-    { gpio: 22 },
-  ]);
-
-  // Chassis fields
-  const [wheelbaseMm, setWheelbaseMm] = useState(300);
-  const [trackWidthMm, setTrackWidthMm] = useState(220);
-  const [wheelRadiusMm, setWheelRadiusMm] = useState(50);
-  const [maxSteeringAngleDeg, setMaxSteeringAngleDeg] = useState(28);
-  const [steeringLinkageRatio, setSteeringLinkageRatio] = useState(0.7);
-  const [driveWheels, setDriveWheels] = useState<'rear' | 'front' | 'all'>('rear');
-  const [finalDriveRatio, setFinalDriveRatio] = useState(12);
-  const [centreOfGravityMm, setCentreOfGravityMm] = useState({ x: 0, y: 80, z: 0 });
-  const [mountPoints, setMountPoints] = useState<MountPoint[]>([
-    { id: 'front-centre', positionMm: { x: 0, y: 50, z: -200 }, yawDeg: 0, pitchDeg: 0 },
-  ]);
-
+  const [form, setForm] = useState<NewPartFormState>(createDefaultFormState);
   const [validationErrors, setValidationErrors] = useState<readonly string[]>([]);
   const [submitting, setSubmitting] = useState(false);
 
+  const {
+    category,
+    id,
+    name,
+    manufacturer,
+    description,
+    massG,
+    dimensionsMm,
+    modelPath,
+    sourcesText,
+    notes,
+    hasElectrical,
+    supplyMinV,
+    supplyMaxV,
+    logicLevelMode,
+    logicLevelV,
+    currentTypicalMa,
+    currentPeakMa,
+    hasI2c,
+    i2cDefaultAddress,
+    i2cAddressingKind,
+    i2cEnablePin,
+    i2cStrapPin,
+    i2cStrapHighAddress,
+    template,
+    behaviorParams,
+    paramDrafts,
+    pins,
+    gpioMaxInputV,
+    gpios,
+    wheelbaseMm,
+    trackWidthMm,
+    wheelRadiusMm,
+    maxSteeringAngleDeg,
+    steeringLinkageRatio,
+    driveWheels,
+    finalDriveRatio,
+    centreOfGravityMm,
+    mountPoints,
+  } = form;
+
+  const patchForm = (patch: Partial<NewPartFormState>) => {
+    setForm((prev) => ({ ...prev, ...patch }));
+  };
+
   const resetForm = () => {
-    setCategory('sensor');
-    setId('sensor.custom-ranger');
-    setName('Custom Ranger Sensor');
-    setManufacturer('Custom');
-    setDescription('Custom distance sensor');
-    setMassG(5);
-    setDimensionsMm({ width: 20, height: 10, length: 15 });
-    setModelPath('');
-    setSourcesText('https://example.com/datasheet.pdf');
-    setNotes('');
-    setHasElectrical(true);
-    setSupplyMinV(3.0);
-    setSupplyMaxV(5.5);
-    setLogicLevelMode('number');
-    setLogicLevelV(3.3);
-    setCurrentTypicalMa(15);
-    setCurrentPeakMa(30);
-    setHasI2c(false);
-    setI2cDefaultAddress(41);
-    setI2cAddressingKind('fixed');
-    setI2cEnablePin('XSHUT');
-    setI2cStrapPin('AD0');
-    setI2cStrapHighAddress(42);
-    setTemplate('distance-raycast');
-    setBehaviorParams(defaultBehaviorParams('distance-raycast'));
-    setPins(defaultPinsForTemplate('distance-raycast'));
-    setGpioMaxInputV(3.6);
-    setGpios([{ gpio: 0, strapping: true }, { gpio: 21 }, { gpio: 22 }]);
-    setWheelbaseMm(300);
-    setTrackWidthMm(220);
-    setWheelRadiusMm(50);
-    setMaxSteeringAngleDeg(28);
-    setSteeringLinkageRatio(0.7);
-    setDriveWheels('rear');
-    setFinalDriveRatio(12);
-    setCentreOfGravityMm({ x: 0, y: 80, z: 0 });
-    setMountPoints([
-      { id: 'front-centre', positionMm: { x: 0, y: 50, z: -200 }, yawDeg: 0, pitchDeg: 0 },
-    ]);
+    setForm(createDefaultFormState());
     setValidationErrors([]);
   };
 
   if (!newPartOpen) return null;
 
   const handleCategoryChange = (nextCategory: PartCategory) => {
-    setCategory(nextCategory);
     if (nextCategory === 'sensor') {
-      setTemplate('distance-raycast');
-      setBehaviorParams(defaultBehaviorParams('distance-raycast'));
-      setPins(defaultPinsForTemplate('distance-raycast'));
-      setHasElectrical(true);
+      patchForm({
+        category: nextCategory,
+        template: 'distance-raycast',
+        behaviorParams: defaultBehaviorParams('distance-raycast'),
+        paramDrafts: {},
+        pins: defaultPinsForTemplate('distance-raycast'),
+        hasElectrical: true,
+      });
     } else if (nextCategory === 'actuator') {
-      setTemplate('servo');
-      setBehaviorParams(defaultBehaviorParams('servo'));
-      setPins(defaultPinsForTemplate('servo'));
-      setHasElectrical(true);
+      patchForm({
+        category: nextCategory,
+        template: 'servo',
+        behaviorParams: defaultBehaviorParams('servo'),
+        paramDrafts: {},
+        pins: defaultPinsForTemplate('servo'),
+        hasElectrical: true,
+      });
     } else if (nextCategory === 'power') {
-      setTemplate('regulator');
-      setBehaviorParams(defaultBehaviorParams('regulator'));
-      setPins(defaultPinsForTemplate('regulator'));
-      setHasElectrical(true);
+      patchForm({
+        category: nextCategory,
+        template: 'regulator',
+        behaviorParams: defaultBehaviorParams('regulator'),
+        paramDrafts: {},
+        pins: defaultPinsForTemplate('regulator'),
+        hasElectrical: true,
+      });
     } else if (nextCategory === 'passive') {
-      setTemplate('voltage-divider');
-      setBehaviorParams(defaultBehaviorParams('voltage-divider'));
-      setPins(defaultPinsForTemplate('voltage-divider'));
-      setHasElectrical(false);
+      patchForm({
+        category: nextCategory,
+        template: 'voltage-divider',
+        behaviorParams: defaultBehaviorParams('voltage-divider'),
+        paramDrafts: {},
+        pins: defaultPinsForTemplate('voltage-divider'),
+        hasElectrical: false,
+      });
     } else if (nextCategory === 'controller') {
-      setPins([
-        { name: '5V', kind: 'power-in' },
-        { name: '3V3', kind: 'power-out', voltage: 3.3, maxCurrentMa: 500 },
-        { name: 'GND', kind: 'gnd' },
-      ]);
-      setHasElectrical(true);
+      patchForm({
+        category: nextCategory,
+        paramDrafts: {},
+        pins: [
+          { name: '5V', kind: 'power-in' },
+          { name: '3V3', kind: 'power-out', voltage: 3.3, maxCurrentMa: 500 },
+          { name: 'GND', kind: 'gnd' },
+        ],
+        hasElectrical: true,
+      });
     } else if (nextCategory === 'chassis') {
-      setPins([]);
-      setHasElectrical(false);
+      patchForm({
+        category: nextCategory,
+        paramDrafts: {},
+        pins: [],
+        hasElectrical: false,
+      });
     }
   };
 
   const handleTemplateChange = (nextTemplate: BehaviorTemplate) => {
-    setTemplate(nextTemplate);
-    const defaults = defaultBehaviorParams(nextTemplate);
-    setBehaviorParams(defaults);
-    setPins(defaultPinsForTemplate(nextTemplate));
-    if (nextTemplate === 'battery') {
-      setHasElectrical(false);
-    }
-    if (nextTemplate === 'imu') {
-      setHasI2c(true);
-    }
+    patchForm({
+      template: nextTemplate,
+      behaviorParams: defaultBehaviorParams(nextTemplate),
+      paramDrafts: {},
+      pins: defaultPinsForTemplate(nextTemplate),
+      ...(nextTemplate === 'battery' ? { hasElectrical: false } : {}),
+      ...(nextTemplate === 'imu' ? { hasI2c: true } : {}),
+    });
   };
 
-  const updateBehaviorParam = (key: string, value: unknown) => {
+  const updateBehaviorParam = (
+    key: string,
+    value: unknown,
+    nextDrafts: Readonly<Record<string, string>> = paramDrafts,
+  ) => {
     const next = { ...behaviorParams, [key]: value };
-    setBehaviorParams(next);
+    let nextPins = pins;
 
     // Keep regulator / battery power-out pin values aligned if present
     if (template === 'regulator') {
       const outputV = Number(next['outputV'] ?? 5);
       const maxCurrentMa = Number(next['maxCurrentMa'] ?? 2000);
-      setPins((prev) =>
-        prev.map((p) => (p.kind === 'power-out' ? { ...p, voltage: outputV, maxCurrentMa } : p)),
+      nextPins = pins.map((p) =>
+        p.kind === 'power-out' ? { ...p, voltage: outputV, maxCurrentMa } : p,
       );
     } else if (template === 'battery') {
       const cells = Number(next['cells'] ?? 2);
@@ -384,24 +483,41 @@ export function NewPartForm(): ReactNode {
       const cellFullV = Number(next['cellFullV'] ?? 4.2);
       const capacityMah = Number(next['capacityMah'] ?? 5000);
       const maxContinuousC = Number(next['maxContinuousC'] ?? 50);
-      setPins((prev) =>
-        prev.map((p) =>
-          p.kind === 'power-out'
-            ? {
-                ...p,
-                voltage: {
-                  min: Number((cells * cellEmptyV).toFixed(6)),
-                  max: Number((cells * cellFullV).toFixed(6)),
-                },
-                maxCurrentMa: Number((capacityMah * maxContinuousC).toFixed(6)),
-              }
-            : p,
-        ),
+      nextPins = pins.map((p) =>
+        p.kind === 'power-out'
+          ? {
+              ...p,
+              voltage: {
+                min: Number((cells * cellEmptyV).toFixed(6)),
+                max: Number((cells * cellFullV).toFixed(6)),
+              },
+              maxCurrentMa: Number((capacityMah * maxContinuousC).toFixed(6)),
+            }
+          : p,
       );
     }
+
+    patchForm({
+      behaviorParams: next,
+      paramDrafts: nextDrafts,
+      pins: nextPins,
+    });
   };
 
+  const schemaDescriptors = describeBehaviorParamsSchema(template);
+
   const buildCandidatePart = (): unknown => {
+    const resolvedBehaviorParams = { ...behaviorParams };
+    for (const field of schemaDescriptors) {
+      const draft = paramDrafts[field.key];
+      if (draft === undefined) continue;
+      if (field.kind === 'number-array') {
+        resolvedBehaviorParams[field.key] = parseNumberArrayDraft(draft);
+      } else if (field.kind === 'throttle-curve') {
+        resolvedBehaviorParams[field.key] = parseThrottleCurveDraft(draft);
+      }
+    }
+
     const sources = sourcesText
       .split(/\r?\n/)
       .map((s) => s.trim())
@@ -473,7 +589,7 @@ export function NewPartForm(): ReactNode {
         ...base,
         behavior: {
           template,
-          params: behaviorParams,
+          params: resolvedBehaviorParams,
         },
       };
     }
@@ -484,7 +600,7 @@ export function NewPartForm(): ReactNode {
         ...(hasElectrical ? { electrical } : {}),
         behavior: {
           template,
-          params: behaviorParams,
+          params: resolvedBehaviorParams,
         },
       };
     }
@@ -496,7 +612,7 @@ export function NewPartForm(): ReactNode {
       ...(i2c ? { i2c } : {}),
       behavior: {
         template,
-        params: behaviorParams,
+        params: resolvedBehaviorParams,
       },
     };
   };
@@ -525,14 +641,13 @@ export function NewPartForm(): ReactNode {
   };
 
   const updateGpio = (idx: number, updater: (prev: GpioDefinition) => GpioDefinition) => {
-    setGpios((prev) => prev.map((item, i) => (i === idx ? updater(item) : item)));
+    patchForm({ gpios: gpios.map((item, i) => (i === idx ? updater(item) : item)) });
   };
 
   const updatePin = (idx: number, updater: (prev: PinDefinition) => PinDefinition) => {
-    setPins((prev) => prev.map((item, i) => (i === idx ? updater(item) : item)));
+    patchForm({ pins: pins.map((item, i) => (i === idx ? updater(item) : item)) });
   };
 
-  const schemaDescriptors = describeBehaviorParamsSchema(template);
   const supportsBehavior =
     category === 'sensor' ||
     category === 'actuator' ||
@@ -631,7 +746,7 @@ export function NewPartForm(): ReactNode {
               type="text"
               aria-label="Part definition id"
               value={id}
-              onChange={(e) => setId(e.target.value)}
+              onChange={(e) => patchForm({ id: e.target.value })}
               placeholder="sensor.my-part"
             />
           </label>
@@ -642,7 +757,7 @@ export function NewPartForm(): ReactNode {
               type="text"
               aria-label="Part name"
               value={name}
-              onChange={(e) => setName(e.target.value)}
+              onChange={(e) => patchForm({ name: e.target.value })}
             />
           </label>
 
@@ -652,7 +767,7 @@ export function NewPartForm(): ReactNode {
               type="text"
               aria-label="Part manufacturer"
               value={manufacturer}
-              onChange={(e) => setManufacturer(e.target.value)}
+              onChange={(e) => patchForm({ manufacturer: e.target.value })}
             />
           </label>
 
@@ -662,7 +777,7 @@ export function NewPartForm(): ReactNode {
               step="any"
               aria-label="Part mass (g)"
               value={massG}
-              onChange={(n) => setMassG(n)}
+              onChange={(n) => patchForm({ massG: n })}
             />
           </label>
 
@@ -672,7 +787,7 @@ export function NewPartForm(): ReactNode {
               step="any"
               aria-label="Part width (mm)"
               value={dimensionsMm.width}
-              onChange={(n) => setDimensionsMm({ ...dimensionsMm, width: n })}
+              onChange={(n) => patchForm({ dimensionsMm: { ...dimensionsMm, width: n } })}
             />
           </label>
 
@@ -682,7 +797,7 @@ export function NewPartForm(): ReactNode {
               step="any"
               aria-label="Part height (mm)"
               value={dimensionsMm.height}
-              onChange={(n) => setDimensionsMm({ ...dimensionsMm, height: n })}
+              onChange={(n) => patchForm({ dimensionsMm: { ...dimensionsMm, height: n } })}
             />
           </label>
 
@@ -692,7 +807,7 @@ export function NewPartForm(): ReactNode {
               step="any"
               aria-label="Part length (mm)"
               value={dimensionsMm.length}
-              onChange={(n) => setDimensionsMm({ ...dimensionsMm, length: n })}
+              onChange={(n) => patchForm({ dimensionsMm: { ...dimensionsMm, length: n } })}
             />
           </label>
 
@@ -702,7 +817,7 @@ export function NewPartForm(): ReactNode {
               type="text"
               aria-label="Part model path"
               value={modelPath}
-              onChange={(e) => setModelPath(e.target.value)}
+              onChange={(e) => patchForm({ modelPath: e.target.value })}
             />
           </label>
         </div>
@@ -714,7 +829,7 @@ export function NewPartForm(): ReactNode {
               type="text"
               aria-label="Part description"
               value={description}
-              onChange={(e) => setDescription(e.target.value)}
+              onChange={(e) => patchForm({ description: e.target.value })}
             />
           </label>
 
@@ -724,7 +839,7 @@ export function NewPartForm(): ReactNode {
               type="text"
               aria-label="Part notes"
               value={notes}
-              onChange={(e) => setNotes(e.target.value)}
+              onChange={(e) => patchForm({ notes: e.target.value })}
             />
           </label>
         </div>
@@ -735,7 +850,7 @@ export function NewPartForm(): ReactNode {
             aria-label="Datasheet sources"
             rows={2}
             value={sourcesText}
-            onChange={(e) => setSourcesText(e.target.value)}
+            onChange={(e) => patchForm({ sourcesText: e.target.value })}
           />
         </label>
 
@@ -749,7 +864,7 @@ export function NewPartForm(): ReactNode {
                   <input
                     type="checkbox"
                     checked={hasElectrical}
-                    onChange={(e) => setHasElectrical(e.target.checked)}
+                    onChange={(e) => patchForm({ hasElectrical: e.target.checked })}
                   />{' '}
                   Has supply input
                 </label>
@@ -769,7 +884,7 @@ export function NewPartForm(): ReactNode {
                     step="any"
                     aria-label="Supply min V"
                     value={supplyMinV}
-                    onChange={(n) => setSupplyMinV(n)}
+                    onChange={(n) => patchForm({ supplyMinV: n })}
                   />
                 </label>
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -778,7 +893,7 @@ export function NewPartForm(): ReactNode {
                     step="any"
                     aria-label="Supply max V"
                     value={supplyMaxV}
-                    onChange={(n) => setSupplyMaxV(n)}
+                    onChange={(n) => patchForm({ supplyMaxV: n })}
                   />
                 </label>
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -786,7 +901,9 @@ export function NewPartForm(): ReactNode {
                   <select
                     aria-label="Logic level mode"
                     value={logicLevelMode}
-                    onChange={(e) => setLogicLevelMode(e.target.value as 'number' | 'supply')}
+                    onChange={(e) =>
+                      patchForm({ logicLevelMode: e.target.value as 'number' | 'supply' })
+                    }
                   >
                     <option value="number">Fixed voltage</option>
                     <option value="supply">Follows supply</option>
@@ -799,7 +916,7 @@ export function NewPartForm(): ReactNode {
                       step="any"
                       aria-label="Logic level V"
                       value={logicLevelV}
-                      onChange={(n) => setLogicLevelV(n)}
+                      onChange={(n) => patchForm({ logicLevelV: n })}
                     />
                   </label>
                 )}
@@ -809,7 +926,7 @@ export function NewPartForm(): ReactNode {
                     step="any"
                     aria-label="Typical current mA"
                     value={currentTypicalMa}
-                    onChange={(n) => setCurrentTypicalMa(n)}
+                    onChange={(n) => patchForm({ currentTypicalMa: n })}
                   />
                 </label>
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -818,7 +935,7 @@ export function NewPartForm(): ReactNode {
                     step="any"
                     aria-label="Peak current mA"
                     value={currentPeakMa}
-                    onChange={(n) => setCurrentPeakMa(n)}
+                    onChange={(n) => patchForm({ currentPeakMa: n })}
                   />
                 </label>
               </div>
@@ -835,7 +952,7 @@ export function NewPartForm(): ReactNode {
                   type="checkbox"
                   aria-label="Has I2C interface"
                   checked={hasI2c}
-                  onChange={(e) => setHasI2c(e.target.checked)}
+                  onChange={(e) => patchForm({ hasI2c: e.target.checked })}
                 />{' '}
                 I²C Interface
               </label>
@@ -855,7 +972,7 @@ export function NewPartForm(): ReactNode {
                     max={119}
                     aria-label="I2C default address"
                     value={i2cDefaultAddress}
-                    onChange={(n) => setI2cDefaultAddress(n)}
+                    onChange={(n) => patchForm({ i2cDefaultAddress: n })}
                   />
                 </label>
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -864,7 +981,9 @@ export function NewPartForm(): ReactNode {
                     aria-label="I2C addressing kind"
                     value={i2cAddressingKind}
                     onChange={(e) =>
-                      setI2cAddressingKind(e.target.value as 'fixed' | 'strap' | 'software')
+                      patchForm({
+                        i2cAddressingKind: e.target.value as 'fixed' | 'strap' | 'software',
+                      })
                     }
                   >
                     <option value="fixed">fixed</option>
@@ -879,7 +998,7 @@ export function NewPartForm(): ReactNode {
                       type="text"
                       aria-label="I2C enable pin"
                       value={i2cEnablePin}
-                      onChange={(e) => setI2cEnablePin(e.target.value)}
+                      onChange={(e) => patchForm({ i2cEnablePin: e.target.value })}
                     />
                   </label>
                 )}
@@ -891,7 +1010,7 @@ export function NewPartForm(): ReactNode {
                         type="text"
                         aria-label="I2C strap pin"
                         value={i2cStrapPin}
-                        onChange={(e) => setI2cStrapPin(e.target.value)}
+                        onChange={(e) => patchForm({ i2cStrapPin: e.target.value })}
                       />
                     </label>
                     <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -901,7 +1020,7 @@ export function NewPartForm(): ReactNode {
                         max={119}
                         aria-label="I2C strap high address"
                         value={i2cStrapHighAddress}
-                        onChange={(n) => setI2cStrapHighAddress(n)}
+                        onChange={(n) => patchForm({ i2cStrapHighAddress: n })}
                       />
                     </label>
                   </>
@@ -984,7 +1103,7 @@ export function NewPartForm(): ReactNode {
                   );
                 }
                 if (field.kind === 'number-array') {
-                  const listStr = Array.isArray(rawVal) ? rawVal.join(', ') : '';
+                  const listStr = paramDrafts[field.key] ?? formatNumberArrayParam(rawVal);
                   return (
                     <label
                       key={field.key}
@@ -997,22 +1116,23 @@ export function NewPartForm(): ReactNode {
                         aria-label={`Param ${field.key}`}
                         value={listStr}
                         onChange={(e) => {
-                          const nums = e.target.value
-                            .split(',')
-                            .map((s) => Number(s.trim()))
-                            .filter((n) => !Number.isNaN(n));
-                          updateBehaviorParam(field.key, nums);
+                          patchForm({
+                            paramDrafts: { ...paramDrafts, [field.key]: e.target.value },
+                          });
+                        }}
+                        onBlur={() => {
+                          const draft = paramDrafts[field.key];
+                          if (draft === undefined) return;
+                          const nums = parseNumberArrayDraft(draft);
+                          const { [field.key]: _removed, ...restDrafts } = paramDrafts;
+                          updateBehaviorParam(field.key, nums, restDrafts);
                         }}
                       />
                     </label>
                   );
                 }
                 if (field.kind === 'throttle-curve') {
-                  const points = (rawVal as ThrottleCurvePoint[] | undefined) ?? [
-                    { input: 0, output: 0 },
-                    { input: 1, output: 1 },
-                  ];
-                  const curveStr = points.map((p) => `${p.input}:${p.output}`).join(', ');
+                  const curveStr = paramDrafts[field.key] ?? formatThrottleCurveParam(rawVal);
                   return (
                     <label
                       key={field.key}
@@ -1025,13 +1145,16 @@ export function NewPartForm(): ReactNode {
                         aria-label={`Param ${field.key}`}
                         value={curveStr}
                         onChange={(e) => {
-                          const parsedPoints: ThrottleCurvePoint[] = e.target.value
-                            .split(',')
-                            .map((pair) => {
-                              const [inp, out] = pair.split(':').map((s) => Number(s.trim()));
-                              return { input: inp ?? 0, output: out ?? 0 };
-                            });
-                          updateBehaviorParam(field.key, parsedPoints);
+                          patchForm({
+                            paramDrafts: { ...paramDrafts, [field.key]: e.target.value },
+                          });
+                        }}
+                        onBlur={() => {
+                          const draft = paramDrafts[field.key];
+                          if (draft === undefined) return;
+                          const parsedPoints = parseThrottleCurveDraft(draft);
+                          const { [field.key]: _removed, ...restDrafts } = paramDrafts;
+                          updateBehaviorParam(field.key, parsedPoints, restDrafts);
                         }}
                       />
                     </label>
@@ -1075,7 +1198,7 @@ export function NewPartForm(): ReactNode {
                 step="any"
                 aria-label="Max GPIO input V"
                 value={gpioMaxInputV}
-                onChange={(n) => setGpioMaxInputV(n)}
+                onChange={(n) => patchForm({ gpioMaxInputV: n })}
               />
             </label>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -1212,7 +1335,7 @@ export function NewPartForm(): ReactNode {
                   <button
                     type="button"
                     aria-label={`Remove controller GPIO ${idx}`}
-                    onClick={() => setGpios(gpios.filter((_, i) => i !== idx))}
+                    onClick={() => patchForm({ gpios: gpios.filter((_, i) => i !== idx) })}
                   >
                     Remove GPIO
                   </button>
@@ -1220,7 +1343,7 @@ export function NewPartForm(): ReactNode {
               ))}
               <button
                 type="button"
-                onClick={() => setGpios([...gpios, { gpio: gpios.length }])}
+                onClick={() => patchForm({ gpios: [...gpios, { gpio: gpios.length }] })}
                 style={{ alignSelf: 'flex-start' }}
               >
                 Add GPIO
@@ -1246,7 +1369,7 @@ export function NewPartForm(): ReactNode {
                   step="any"
                   aria-label="Wheelbase mm"
                   value={wheelbaseMm}
-                  onChange={(n) => setWheelbaseMm(n)}
+                  onChange={(n) => patchForm({ wheelbaseMm: n })}
                 />
               </label>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -1255,7 +1378,7 @@ export function NewPartForm(): ReactNode {
                   step="any"
                   aria-label="Track width mm"
                   value={trackWidthMm}
-                  onChange={(n) => setTrackWidthMm(n)}
+                  onChange={(n) => patchForm({ trackWidthMm: n })}
                 />
               </label>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -1264,7 +1387,7 @@ export function NewPartForm(): ReactNode {
                   step="any"
                   aria-label="Wheel radius mm"
                   value={wheelRadiusMm}
-                  onChange={(n) => setWheelRadiusMm(n)}
+                  onChange={(n) => patchForm({ wheelRadiusMm: n })}
                 />
               </label>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -1273,7 +1396,7 @@ export function NewPartForm(): ReactNode {
                   step="any"
                   aria-label="Max steering deg"
                   value={maxSteeringAngleDeg}
-                  onChange={(n) => setMaxSteeringAngleDeg(n)}
+                  onChange={(n) => patchForm({ maxSteeringAngleDeg: n })}
                 />
               </label>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -1282,7 +1405,7 @@ export function NewPartForm(): ReactNode {
                   step="any"
                   aria-label="Steering linkage ratio"
                   value={steeringLinkageRatio}
-                  onChange={(n) => setSteeringLinkageRatio(n)}
+                  onChange={(n) => patchForm({ steeringLinkageRatio: n })}
                 />
               </label>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -1290,7 +1413,9 @@ export function NewPartForm(): ReactNode {
                 <select
                   aria-label="Drive wheels"
                   value={driveWheels}
-                  onChange={(e) => setDriveWheels(e.target.value as 'rear' | 'front' | 'all')}
+                  onChange={(e) =>
+                    patchForm({ driveWheels: e.target.value as 'rear' | 'front' | 'all' })
+                  }
                 >
                   <option value="rear">rear</option>
                   <option value="front">front</option>
@@ -1303,7 +1428,7 @@ export function NewPartForm(): ReactNode {
                   step="any"
                   aria-label="Final drive ratio"
                   value={finalDriveRatio}
-                  onChange={(n) => setFinalDriveRatio(n)}
+                  onChange={(n) => patchForm({ finalDriveRatio: n })}
                 />
               </label>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -1312,7 +1437,7 @@ export function NewPartForm(): ReactNode {
                   step="any"
                   aria-label="CoG X mm"
                   value={centreOfGravityMm.x}
-                  onChange={(n) => setCentreOfGravityMm({ ...centreOfGravityMm, x: n })}
+                  onChange={(n) => patchForm({ centreOfGravityMm: { ...centreOfGravityMm, x: n } })}
                 />
               </label>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -1321,7 +1446,7 @@ export function NewPartForm(): ReactNode {
                   step="any"
                   aria-label="CoG Y mm"
                   value={centreOfGravityMm.y}
-                  onChange={(n) => setCentreOfGravityMm({ ...centreOfGravityMm, y: n })}
+                  onChange={(n) => patchForm({ centreOfGravityMm: { ...centreOfGravityMm, y: n } })}
                 />
               </label>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -1330,7 +1455,7 @@ export function NewPartForm(): ReactNode {
                   step="any"
                   aria-label="CoG Z mm"
                   value={centreOfGravityMm.z}
-                  onChange={(n) => setCentreOfGravityMm({ ...centreOfGravityMm, z: n })}
+                  onChange={(n) => patchForm({ centreOfGravityMm: { ...centreOfGravityMm, z: n } })}
                 />
               </label>
             </div>
@@ -1356,9 +1481,11 @@ export function NewPartForm(): ReactNode {
                     placeholder="Mount id"
                     value={mp.id}
                     onChange={(e) =>
-                      setMountPoints(
-                        mountPoints.map((m, i) => (i === idx ? { ...m, id: e.target.value } : m)),
-                      )
+                      patchForm({
+                        mountPoints: mountPoints.map((m, i) =>
+                          i === idx ? { ...m, id: e.target.value } : m,
+                        ),
+                      })
                     }
                     style={{ width: 110 }}
                   />
@@ -1368,11 +1495,11 @@ export function NewPartForm(): ReactNode {
                     placeholder="X (mm)"
                     value={mp.positionMm.x}
                     onChange={(n) =>
-                      setMountPoints(
-                        mountPoints.map((m, i) =>
+                      patchForm({
+                        mountPoints: mountPoints.map((m, i) =>
                           i === idx ? { ...m, positionMm: { ...m.positionMm, x: n } } : m,
                         ),
-                      )
+                      })
                     }
                     style={{ width: 70 }}
                   />
@@ -1382,11 +1509,11 @@ export function NewPartForm(): ReactNode {
                     placeholder="Y (mm)"
                     value={mp.positionMm.y}
                     onChange={(n) =>
-                      setMountPoints(
-                        mountPoints.map((m, i) =>
+                      patchForm({
+                        mountPoints: mountPoints.map((m, i) =>
                           i === idx ? { ...m, positionMm: { ...m.positionMm, y: n } } : m,
                         ),
-                      )
+                      })
                     }
                     style={{ width: 70 }}
                   />
@@ -1396,11 +1523,11 @@ export function NewPartForm(): ReactNode {
                     placeholder="Z (mm)"
                     value={mp.positionMm.z}
                     onChange={(n) =>
-                      setMountPoints(
-                        mountPoints.map((m, i) =>
+                      patchForm({
+                        mountPoints: mountPoints.map((m, i) =>
                           i === idx ? { ...m, positionMm: { ...m.positionMm, z: n } } : m,
                         ),
-                      )
+                      })
                     }
                     style={{ width: 70 }}
                   />
@@ -1410,9 +1537,11 @@ export function NewPartForm(): ReactNode {
                     placeholder="Yaw (deg)"
                     value={mp.yawDeg}
                     onChange={(n) =>
-                      setMountPoints(
-                        mountPoints.map((m, i) => (i === idx ? { ...m, yawDeg: n } : m)),
-                      )
+                      patchForm({
+                        mountPoints: mountPoints.map((m, i) =>
+                          i === idx ? { ...m, yawDeg: n } : m,
+                        ),
+                      })
                     }
                     style={{ width: 70 }}
                   />
@@ -1422,16 +1551,20 @@ export function NewPartForm(): ReactNode {
                     placeholder="Pitch (deg)"
                     value={mp.pitchDeg}
                     onChange={(n) =>
-                      setMountPoints(
-                        mountPoints.map((m, i) => (i === idx ? { ...m, pitchDeg: n } : m)),
-                      )
+                      patchForm({
+                        mountPoints: mountPoints.map((m, i) =>
+                          i === idx ? { ...m, pitchDeg: n } : m,
+                        ),
+                      })
                     }
                     style={{ width: 70 }}
                   />
                   <button
                     type="button"
                     aria-label={`Remove mount point ${idx}`}
-                    onClick={() => setMountPoints(mountPoints.filter((_, i) => i !== idx))}
+                    onClick={() =>
+                      patchForm({ mountPoints: mountPoints.filter((_, i) => i !== idx) })
+                    }
                   >
                     Remove Mount Point
                   </button>
@@ -1440,15 +1573,17 @@ export function NewPartForm(): ReactNode {
               <button
                 type="button"
                 onClick={() =>
-                  setMountPoints([
-                    ...mountPoints,
-                    {
-                      id: `mount-${mountPoints.length + 1}`,
-                      positionMm: { x: 0, y: 50, z: 0 },
-                      yawDeg: 0,
-                      pitchDeg: 0,
-                    },
-                  ])
+                  patchForm({
+                    mountPoints: [
+                      ...mountPoints,
+                      {
+                        id: `mount-${mountPoints.length + 1}`,
+                        positionMm: { x: 0, y: 50, z: 0 },
+                        yawDeg: 0,
+                        pitchDeg: 0,
+                      },
+                    ],
+                  })
                 }
                 style={{ alignSelf: 'flex-start' }}
               >
@@ -1634,7 +1769,7 @@ export function NewPartForm(): ReactNode {
                   <button
                     type="button"
                     aria-label={`Remove pin ${idx}`}
-                    onClick={() => setPins(pins.filter((_, i) => i !== idx))}
+                    onClick={() => patchForm({ pins: pins.filter((_, i) => i !== idx) })}
                   >
                     Remove
                   </button>
@@ -1644,7 +1779,9 @@ export function NewPartForm(): ReactNode {
             <button
               type="button"
               onClick={() =>
-                setPins([...pins, { name: `PIN_${pins.length + 1}`, kind: 'digital-in' }])
+                patchForm({
+                  pins: [...pins, { name: `PIN_${pins.length + 1}`, kind: 'digital-in' }],
+                })
               }
               style={{ alignSelf: 'flex-start' }}
             >
