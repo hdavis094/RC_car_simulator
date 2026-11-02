@@ -13,7 +13,7 @@ For the Claude session that runs the build from T3 Code. You dispatch task brief
 | Agent | Model | Tasks |
 |---|---|---|
 | Claude (Opus): you | — | P0-01 … P0-05, P2-01, all merges and contract changes |
-| Claude sub-agent | Sonnet | P1-A, P1-H |
+| Claude worker (T3 thread) | Sonnet | P1-A, P1-H |
 | Codex | gpt-6.1-sol | P1-C, P1-D, P1-G |
 | Antigravity (`agy`) | default | P1-E, P1-F |
 | OpenCode | freebeam | P1-B; spare for a stalled or reassigned task |
@@ -124,6 +124,6 @@ Read every Handoff's **Contract change requests**. To accept one, make the small
 
 ## One-time setup the user does
 
-- `gh auth login`, then create the private GitHub repo and push, so CI runs. **Required before Phase 1:** the macOS CI job is the only way this Linux machine can verify macOS support. If it's missing at the end of Phase 0, ask the user.
+- `gh auth login`, then create the GitHub repo (public for now, by the user's choice) and push, so CI runs. **Required before Phase 1:** the macOS CI job is the only way this Linux machine can verify macOS support. If it's missing at the end of Phase 0, ask the user.
 - In Claude Code: `/plugin marketplace add openai/codex-plugin-cc`, then `/plugin install codex@openai-codex`, then `/codex:setup`.
 - In T3 Code: grant this session's MCP connection Full access (during P0-01).
