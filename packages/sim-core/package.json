@@ -5,7 +5,9 @@
   "description": "Headless simulation: clock, world, physics, actuators, sensors, firmware bridge, scenario runner",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./api": "./src/api/index.ts",
+    "./stubs": "./src/api/stubs/index.ts"
   },
   "scripts": {
     "test": "vitest run",
@@ -15,5 +17,8 @@
   "dependencies": {
     "@rcsim/schema": "workspace:*",
     "@rcsim/sim-protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "vitest": "^5.0.5"
   }
 }

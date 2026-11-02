@@ -16,7 +16,7 @@ The 3D World shows a run as it happens, lets the user lay out obstacles, and hos
 
 ## Read first
 
-`apps/desktop/src/shared/ipc.ts` (run, world-edit, control), `packages/sim-core/src/api/` (`StateSnapshot`), track data in `packages/sim-core/assets/tracks/`, PRD → 3D World, ADR 0004.
+`apps/desktop/src/shared/ipc.ts` (run, world-edit, control), `packages/sim-core/src/api/` (`StateSnapshot`), track data via `worldEdit.listTracks`/`loadTrack` (P1-A's `assets/tracks/`), PRD → 3D World, ADR 0004.
 
 ## Requirements
 

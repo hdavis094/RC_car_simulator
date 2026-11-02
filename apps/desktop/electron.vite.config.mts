@@ -3,7 +3,12 @@ import { defineConfig } from 'electron-vite';
 
 // Workspace packages export TypeScript source, so main and preload must bundle
 // them instead of leaving them as runtime requires.
-const workspacePackages = ['@rcsim/control-protocol', '@rcsim/schema', '@rcsim/sim-core'];
+const workspacePackages = [
+  '@rcsim/control-protocol',
+  '@rcsim/schema',
+  '@rcsim/sim-core',
+  '@rcsim/sim-protocol',
+];
 
 export default defineConfig({
   main: {

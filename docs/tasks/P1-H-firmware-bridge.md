@@ -12,7 +12,7 @@ sim-core runs a real firmware process in lockstep. It serves sim-protocol, deliv
 
 ## Owned paths
 
-`packages/sim-core/src/bridge/`
+`packages/sim-core/src/bridge/`, and the `--firmware` and `--control` options of the scenario CLI in `packages/sim-core/src/scenario/` (P1-A has merged by then). Implement `CreateFirmwareSource` and `ActuatorSource.restart`.
 
 ## Read first
 

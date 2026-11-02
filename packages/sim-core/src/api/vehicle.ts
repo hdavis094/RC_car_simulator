@@ -1,0 +1,77 @@
+import type { Car, Catalog } from '@rcsim/schema';
+import type { Pose, Quat, Vec3 } from './math.ts';
+
+/** What the vehicle is built from. */
+export interface VehicleSpec {
+  readonly car: Car;
+  readonly catalog: Catalog;
+}
+
+/**
+ * The physical command after the actuator models: what the steering linkage
+ * and the motor actually do this tick.
+ */
+export interface VehicleCommand {
+  /**
+   * Front-wheel steering angle, radians, positive turning left (like yaw).
+   * Ackermann: this is the angle of a virtual centre wheel; the inner and
+   * outer wheels follow from the chassis geometry.
+   */
+  readonly steerAngleRad: number;
+  /** Motor drive, −1..1: fraction of battery voltage, negative for reverse/brake. */
+  readonly motorDuty: number;
+}
+
+/** Wheels in a fixed order: front-left, front-right, rear-left, rear-right. */
+export const WHEEL_ORDER = ['front-left', 'front-right', 'rear-left', 'rear-right'] as const;
+
+/**
+ * One wheel. `position` and `rotation` are the wheel's complete pose in the
+ * **world frame**: `rotation` already includes the chassis orientation, this
+ * wheel's steering and its spin. A renderer poses a wheel from these two
+ * fields alone, not nested under the car. `steerRad` and `spinRad` repeat the
+ * angles for readouts; don't apply them again.
+ */
+export interface WheelState {
+  /** Wheel centre, world frame, metres. */
+  readonly position: Vec3;
+  /** World-frame orientation: chassis × steer (about the chassis Y axis) × spin (about the axle). */
+  readonly rotation: Quat;
+  /** Steering angle of this wheel relative to the chassis, radians, positive left. */
+  readonly steerRad: number;
+  /** Accumulated spin about the axle, radians, positive rolling forward. */
+  readonly spinRad: number;
+  readonly inContact: boolean;
+}
+
+export interface VehicleState {
+  /** Chassis-frame origin in the world: on the ground, midway between the axles. */
+  readonly pose: Pose;
+  /** World-frame linear velocity, m/s. */
+  readonly velocity: Vec3;
+  /** World-frame angular velocity, rad/s. */
+  readonly angularVelocity: Vec3;
+  /** Signed speed along the car's forward axis, m/s. */
+  readonly forwardSpeedMps: number;
+  /** World-frame linear acceleration, m/s², over the last step (for the IMU). */
+  readonly acceleration: Vec3;
+  /** The command applied in the last step. */
+  readonly command: VehicleCommand;
+  /** In WHEEL_ORDER. */
+  readonly wheels: readonly [WheelState, WheelState, WheelState, WheelState];
+}
+
+/** The car's body in the world. Created by `World.createVehicle`. */
+export interface Vehicle {
+  /** Sets the command used by the next `World.step`. */
+  applyCommand(command: VehicleCommand): void;
+  /** State after the last `World.step`. */
+  state(): VehicleState;
+  /**
+   * World pose of a frame fixed to the chassis: `offsetM` in the chassis
+   * frame, then `yawRad` about the chassis Y axis (positive left) and
+   * `pitchRad` about the resulting X axis (positive up). SI: convert a mount
+   * point plus placement (mm, degrees in car.json) before calling.
+   */
+  chassisToWorld(offsetM: Vec3, yawRad: number, pitchRad: number): Pose;
+}
