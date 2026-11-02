@@ -106,3 +106,7 @@ Implementations.
 - **Contract change requests**: none.
 - **Open questions**:
   - `deviceKindOf` in the stubs follows SPEC.md's table by part id. P1-H owns the real mapping, and may want a field on part definitions later.
+
+- **Review round 2 (Codex).** Two P2s in the reference loop, both fixed with tests:
+  - **Unwired sensors:** the wiring check covered only dividers, so an unwired ToF produced readings with no device to map to. It now covers every sensor.
+  - **Errors outside `source.step`:** a throw from `world.step` or a sensor rejected `step` and left the run `running`. A failure anywhere in a tick now ends the run once with `{kind:'error'}`. `Run` documents that the caller still calls `stop()` to release the source.

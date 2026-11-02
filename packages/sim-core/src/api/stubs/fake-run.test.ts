@@ -223,6 +223,65 @@ describe('the Run lifecycle', () => {
     expect(run.end).toEqual({ kind: 'stopped' });
   });
 
+  it('ends once with "error" when a part of the tick throws, and still stops cleanly', async () => {
+    const source = new FakeActuatorSource();
+    let stopped = 0;
+    const stop = source.stop.bind(source);
+    source.stop = async () => {
+      stopped += 1;
+      await stop();
+    };
+    const run = await createFakeRun({
+      car: exampleCar,
+      catalog: defaultCatalog,
+      world: world(),
+      track,
+      seed: 1,
+      source,
+      createSensorModel: (part): SensorModel => ({
+        ...createFakeSensorModel(part),
+        update: () => {
+          throw new Error('sensor broke');
+        },
+      }),
+    });
+    const ends: unknown[] = [];
+    run.on('end', (end) => ends.push(end));
+    const result = await run.step(10);
+    expect(result).toEqual({
+      ticks: 0,
+      status: 'ended',
+      end: { kind: 'error', message: 'sensor broke' },
+    });
+    expect(ends).toEqual([{ kind: 'error', message: 'sensor broke' }]);
+    await run.stop();
+    expect(stopped).toBe(1);
+    expect(ends).toHaveLength(1);
+  });
+
+  it('gives no model to a sensor wired to no GPIO, so every reading maps to a device', async () => {
+    const car = structuredClone(exampleCar);
+    const tof = car.parts.find((p) => p.instanceId === 'tof_left');
+    if (!tof) throw new Error('example car has no tof_left');
+    tof.pins = {};
+    const source = new FakeActuatorSource();
+    const run = await createFakeRun({
+      car,
+      catalog: defaultCatalog,
+      world: world(),
+      track,
+      seed: 1,
+      source,
+    });
+    await run.step(40);
+    const devices = new Set(source.setup?.devices.map((d) => d.instanceId));
+    expect(devices.has('tof_left')).toBe(false);
+    const readers = source.inputs.flatMap((i) => i.readings).map((r) => r.instanceId);
+    expect(readers.length).toBeGreaterThan(0);
+    expect(readers.every((id) => devices.has(id))).toBe(true);
+    expect(run.snapshot().sensors.map((s) => s.instanceId)).not.toContain('tof_left');
+  });
+
   it('rejects a second step while one is pending', async () => {
     const run = await fakeRun(new FakeActuatorSource());
     const first = run.step(5);

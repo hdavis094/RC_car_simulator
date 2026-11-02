@@ -95,10 +95,11 @@ export async function createFakeRun(
   const actuators: ActuatorModel[] = contexts
     .filter((p) => ACTUATOR_TEMPLATES.has(template(p)) && Object.keys(p.gpioPins).length > 0)
     .map(createActuator);
+  // Only wired parts get models (README), so every reading maps to a device.
   const sensorParts = contexts.filter(
     (p) =>
-      SENSOR_TEMPLATES.has(template(p)) ||
-      (template(p) === 'voltage-divider' && Object.keys(p.gpioPins).length > 0),
+      (SENSOR_TEMPLATES.has(template(p)) || template(p) === 'voltage-divider') &&
+      Object.keys(p.gpioPins).length > 0,
   );
   const sensors: SensorModel[] = sensorParts.map(createSensor);
   const devices: Device[] = contexts
@@ -148,7 +149,7 @@ export async function createFakeRun(
   };
   let stepping = false;
 
-  const tick = async (): Promise<boolean> => {
+  const runTick = async (): Promise<boolean> => {
     const t0Us = clock.nowUs;
     const t1Us = t0Us + clock.tickUs;
     // 1. the source runs the tick. Take this tick's inputs first, so serial or
@@ -169,17 +170,7 @@ export async function createFakeRun(
     };
     serialRx = new Uint8Array(0);
     netFaults = undefined;
-    let output;
-    try {
-      output = await source.step(input);
-    } catch (error) {
-      finish(
-        error instanceof ActuatorSourceEnded
-          ? error.end
-          : { kind: 'error', message: error instanceof Error ? error.message : String(error) },
-      );
-      return false;
-    }
+    const output = await source.step(input);
     // stop() may have run while the source was busy: do nothing more.
     if (status === 'ended') return false;
     if (output.serialTx.length > 0) for (const l of listeners.serial) l(output.serialTx, t0Us);
@@ -226,6 +217,20 @@ export async function createFakeRun(
     // 6. time
     clock.advance();
     return true;
+  };
+
+  /** One tick; a failure anywhere in it ends the run rather than rejecting `step`. */
+  const tick = async (): Promise<boolean> => {
+    try {
+      return await runTick();
+    } catch (error) {
+      finish(
+        error instanceof ActuatorSourceEnded
+          ? error.end
+          : { kind: 'error', message: error instanceof Error ? error.message : String(error) },
+      );
+      return false;
+    }
   };
 
   return {

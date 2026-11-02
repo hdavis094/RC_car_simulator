@@ -65,7 +65,8 @@ export type Unsubscribe = () => void;
  * resolves with status `ended` and runs no further ticks. A run ends exactly
  * once: `end` is set and the `end` event fires once, with the first reason
  * (`stopped` wins over a failure the stop itself causes). An unexpected error
- * from a part of the loop ends the run with `{kind: 'error'}`.
+ * from a part of the loop ends the run with `{kind: 'error'}`, rather than
+ * rejecting `step`. However a run ended, call `stop()` to release the source.
  */
 export interface Run {
   readonly clock: SimClock;
