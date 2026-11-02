@@ -1,6 +1,6 @@
 # P1-A — sim-core: clock, world, vehicle physics, actuators
 
-Status: todo
+Status: in-progress
 Agent: Claude (Sonnet sub-agent)
 Branch: ws/p1-a
 Depends on: P0 (all)

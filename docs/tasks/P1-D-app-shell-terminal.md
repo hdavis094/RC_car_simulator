@@ -1,6 +1,6 @@
 # P1-D — app: main process services, shell, Terminal environment
 
-Status: todo
+Status: in-progress
 Agent: Codex (gpt-6.1-sol)
 Branch: ws/p1-d
 Depends on: P0 (all)

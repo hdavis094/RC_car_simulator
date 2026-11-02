@@ -1,6 +1,6 @@
 # P1-C — hal: Arduino/ESP32 layer for desktop builds
 
-Status: todo
+Status: in-progress
 Agent: Codex (gpt-6.1-sol)
 Branch: ws/p1-c
 Depends on: P0 (all)

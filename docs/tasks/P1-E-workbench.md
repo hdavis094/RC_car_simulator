@@ -1,6 +1,6 @@
 # P1-E — app: Workbench environment
 
-Status: todo
+Status: in-progress
 Agent: Antigravity
 Branch: ws/p1-e
 Depends on: P0 (all)
