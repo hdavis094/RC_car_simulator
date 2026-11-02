@@ -9,12 +9,16 @@
     "./api": "./src/api/index.ts",
     "./stubs": "./src/api/stubs/index.ts"
   },
+  "bin": {
+    "rcsim": "./src/scenario/bin.ts"
+  },
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc -p .",
     "test:scenarios": "node scripts/scenarios-placeholder.ts"
   },
   "dependencies": {
+    "@dimforge/rapier3d-deterministic-compat": "^0.21.0",
     "@rcsim/schema": "workspace:*",
     "@rcsim/sim-protocol": "workspace:*"
   },
