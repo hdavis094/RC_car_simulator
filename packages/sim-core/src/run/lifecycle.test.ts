@@ -109,6 +109,123 @@ describe('Run lifecycle', () => {
   });
 });
 
+describe('listeners', () => {
+  it('keeps the end reason, and tells everyone, when an end listener throws', async () => {
+    const source: ActuatorSource = {
+      async start() {},
+      async stop() {},
+      async step() {
+        throw new Error('source broke');
+      },
+    };
+    const run = await testRun({ source });
+    const ends: RunEnd[] = [];
+    run.on('end', () => {
+      throw new Error('listener broke');
+    });
+    run.on('end', (e) => ends.push(e));
+    const expected = { kind: 'error', message: 'source broke' };
+    await expect(run.step()).resolves.toMatchObject({ status: 'ended', end: expected });
+    expect(ends).toEqual([expected]);
+    await run.stop();
+  });
+
+  it('keeps stopping when an end listener throws', async () => {
+    const run = await testRun();
+    run.on('end', () => {
+      throw new Error('listener broke');
+    });
+    await run.step(2);
+    await expect(run.stop()).resolves.toBeUndefined();
+    expect(run.end).toEqual({ kind: 'stopped' });
+  });
+
+  it('isolates serial and log listeners too', async () => {
+    const inner = createScriptedSource([]);
+    const source: ActuatorSource = {
+      start: (s) => inner.start(s),
+      stop: () => inner.stop(),
+      async step(input) {
+        const out = await inner.step(input);
+        return { ...out, serialTx: new Uint8Array([65]), logs: [{ level: 'info', text: 'hi' }] };
+      },
+    };
+    const run = await testRun({ source });
+    const seen: number[] = [];
+    run.on('serial', () => {
+      throw new Error('boom');
+    });
+    run.on('serial', (bytes) => seen.push(bytes.length));
+    expect(await run.step(3)).toMatchObject({ ticks: 3, status: 'running' });
+    expect(seen).toEqual([1, 1, 1]);
+    await run.stop();
+  });
+});
+
+describe('stop', () => {
+  it('frees the physics world once, keeps the final snapshot and metrics, and may be called again', async () => {
+    const run = await testRun({
+      timeline: [...NEUTRAL, { tUs: ARMED_BY_US, gpio: ESC_GPIO, pulseUs: throttlePulse(0.3) }],
+    });
+    await runSeconds(run, 4);
+    const before = run.snapshot();
+    const metrics = run.metrics();
+    await run.stop();
+    await run.stop();
+    await Promise.all([run.stop(), run.stop()]);
+    expect(run.snapshot()).toEqual({ ...before, status: 'ended' });
+    expect(run.metrics()).toEqual(metrics);
+    expect(run.snapshot().car.pose.position[2]).toBeLessThan(-0.1);
+    // the world is gone: it reports nothing and refuses to step, rather than crashing
+    expect(run.world.raycast([0, 1, 0], [0, -1, 0], 5)).toBeNull();
+    expect(() => run.world.step(0.001, 0)).toThrow(/disposed/);
+    expect(await run.step(5)).toMatchObject({ ticks: 0, status: 'ended' });
+  });
+
+  it('waits for the tick in progress, and the step that was running resolves cleanly', async () => {
+    const inner = createScriptedSource([]);
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let calls = 0;
+    const source: ActuatorSource = {
+      start: (s) => inner.start(s),
+      stop: async () => {},
+      async step(input) {
+        if (++calls === 5) await gate; // a tick that takes a while
+        return inner.step(input);
+      },
+    };
+    const run = await testRun({ source });
+    const stepping = run.step(100);
+    await new Promise((r) => setTimeout(r, 20));
+    let stopped = false;
+    const stopping = run.stop().then(() => {
+      stopped = true;
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(stopped).toBe(false); // the tick has not settled
+    release?.();
+    await stopping;
+    expect(await stepping).toMatchObject({ ticks: 4, status: 'ended', end: { kind: 'stopped' } });
+    expect(run.snapshot().tick).toBe(4);
+  });
+
+  it('frees the world when the run cannot be assembled', async () => {
+    const source: ActuatorSource = {
+      async start() {
+        throw new Error('no source');
+      },
+      async stop() {},
+      async step() {
+        throw new Error('unreachable');
+      },
+    };
+    await expect(testRun({ source })).rejects.toThrow(/no source/);
+  });
+});
+
 describe('snapshot', () => {
   it('describes the car, obstacles, laps and collisions as plain data', async () => {
     const run = await testRun({
@@ -169,6 +286,66 @@ describe('obstacle types', () => {
     }
     expect(peak).toBeGreaterThan(0.03);
     expect(run.snapshot().car.pose.position[2]).toBeLessThan(-1.9); // over it and beyond
+    await run.stop();
+  });
+});
+
+describe('moved obstacles', () => {
+  const drive: ScriptedPwm[] = [
+    ...NEUTRAL,
+    { tUs: ARMED_BY_US, gpio: ESC_GPIO, pulseUs: throttlePulse(0.3) },
+  ];
+  const start = { x: 2.4, z: 0, yawDeg: 0 };
+  const cone = { id: 'c', type: 'cone' as const, positionM: { x: 2.4, z: -2 }, yawDeg: 0 };
+
+  it('no longer block the car where they were', async () => {
+    const run = await testRun({ start, obstacles: [cone], timeline: drive });
+    await runSeconds(run, 3.6); // paused just after the car starts to roll
+    run.world.moveObstacle('c', { x: 2.4, z: 3 }, 0); // behind the car
+    await runSeconds(run, 1.5);
+    expect(run.metrics().collisions).toBe(0);
+    expect(run.snapshot().car.pose.position[2]).toBeLessThan(-2.3); // drove through the old spot
+    await run.stop();
+  });
+
+  it('block the car where they are now, and removed ones do not', async () => {
+    const run = await testRun({ start, timeline: drive });
+    await runSeconds(run, 3.6);
+    run.world.moveObstacle(run.world.addObstacle({ ...cone, id: 'late' }), { x: 2.4, z: -1.5 }, 0);
+    await runSeconds(run, 4);
+    expect(run.snapshot().collisions).toEqual({ count: 1, last: 'late' });
+    run.world.removeObstacle('late');
+    await runSeconds(run, 1.2);
+    expect(run.snapshot().car.pose.position[2]).toBeLessThan(-2); // free to go on
+    expect(run.metrics().collisions).toBe(1);
+    await run.stop();
+  });
+
+  it('count a new collision when the car is still against an obstacle that is moved and hit again', async () => {
+    const run = await testRun({ start, obstacles: [cone], timeline: drive });
+    await runSeconds(run, 6); // pushing against the cone
+    expect(run.metrics().collisions).toBe(1);
+    run.world.moveObstacle('c', { x: 2.4, z: -3 }, 0); // a little further on
+    await runSeconds(run, 2);
+    expect(run.metrics().collisions).toBe(2);
+    await run.stop();
+  });
+});
+
+describe('one hit, one collision', () => {
+  it('counts a glancing, bouncing wall impact once', async () => {
+    // Coast into the infield wall at 40° to its face after full throttle: the suspension
+    // bounces the body off and back within a few ms.
+    const run = await testRun({
+      start: { x: 2.65, z: 0, yawDeg: 50 },
+      timeline: [
+        ...NEUTRAL,
+        { tUs: ARMED_BY_US, gpio: ESC_GPIO, pulseUs: throttlePulse(1) },
+        { tUs: ARMED_BY_US + 800_000, gpio: ESC_GPIO, pulseUs: 1500 },
+      ],
+    });
+    await runSeconds(run, 8);
+    expect(run.snapshot().collisions).toEqual({ count: 1, last: 'wall' });
     await run.stop();
   });
 });

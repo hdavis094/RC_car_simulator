@@ -84,6 +84,53 @@ describe('raycasts', () => {
   });
 });
 
+describe('raycasts on a world that has not stepped, and after edits', () => {
+  it('see the walls, ground and obstacles from the start, with no step', async () => {
+    const world = await createWorld(
+      testWorldFile({ obstacles: [cone('a', 2.4, -1)] }),
+      trackLibrary.load('oval'),
+    );
+    expect(world.raycast([2.4, 0.1, 0], [0, 0, -1], 5)?.target).toEqual({
+      kind: 'obstacle',
+      id: 'a',
+    });
+    expect(world.raycast([2.4, 0.05, 0], [1, 0, 0], 3)?.target).toEqual({ kind: 'wall' });
+    expect(world.raycast([0, 0.5, 0], [0, -1, 0], 2)?.target).toEqual({ kind: 'ground' });
+  });
+
+  it('see a paused edit at once: add, move and remove, with no step in between', async () => {
+    const world = await createWorld(testWorldFile(), trackLibrary.load('oval'));
+    settle(world);
+    const cast = (x: number) => world.raycast([x, 0.1, 0], [0, 0, -1], 5)?.target;
+    const id = world.addObstacle({ type: 'box', positionM: { x: 2.4, z: -2 }, yawDeg: 0 });
+    expect(cast(2.4)).toEqual({ kind: 'obstacle', id });
+    world.moveObstacle(id, { x: 2.0, z: -2 }, 0);
+    expect(cast(2.4)?.kind).not.toBe('obstacle');
+    expect(cast(2.0)).toEqual({ kind: 'obstacle', id });
+    // the same after more steps, and a step does not change the answer
+    settle(world);
+    expect(cast(2.0)).toEqual({ kind: 'obstacle', id });
+    world.removeObstacle(id);
+    expect(cast(2.0)?.kind).not.toBe('obstacle');
+  });
+
+  it('see the car where the last step left it, including after an edit', async () => {
+    const world = await createWorld(
+      testWorldFile({ start: { x: 0, z: 0, yawDeg: 0 } }),
+      trackLibrary.load('oval'),
+    );
+    const car = world.createVehicle({ car: exampleCar, catalog: defaultCatalog });
+    for (let i = 0; i < 300; i++) {
+      car.applyCommand({ steerAngleRad: 0, motorDuty: 0 });
+      world.step(0.001, i * 1000);
+    }
+    world.addObstacle(cone('x', 1, 1));
+    const seen = world.raycast([0, 0.5, 0], [0, -1, 0], 2, { excludeVehicle: false });
+    expect(seen?.target).toEqual({ kind: 'vehicle' });
+    expect(world.raycast([0, 0.5, 0], [0, -1, 0], 2)?.target).toEqual({ kind: 'ground' });
+  });
+});
+
 describe('obstacle editing', () => {
   it('adds, moves and removes obstacles while the world exists', async () => {
     const world = await createWorld(testWorldFile(), trackLibrary.load('oval'));

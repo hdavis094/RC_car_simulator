@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { ScenarioResult } from '../api/scenario.ts';
 import { ARMED_BY_US, ESC_GPIO, NEUTRAL, throttlePulse } from '../run/test-support.ts';
 import { main } from './cli.ts';
+import { ScenarioInputError, runScenario } from './runner.ts';
 
 let dir: string;
 beforeAll(() => {
@@ -113,6 +114,13 @@ describe('rcsim run', () => {
     const cases: [string[], RegExp][] = [
       [['run', '--world', 'world.json', '--seconds', '1'], /--car is required/],
       [[...base, '--seconds', 'soon', '--script', 'idle.json'], /--seconds must be/],
+      [
+        [...base, '--seconds', '1', '--script', 'idle.json', '--tick-us', '0'],
+        /--tick-us must be a positive integer/,
+      ],
+      [[...base, '--seconds', '1', '--script', 'idle.json', '--tick-us', '-5'], /--tick-us/],
+      [[...base, '--seconds', '1', '--script', 'idle.json', '--tick-us', '2.5'], /--tick-us/],
+      [[...base, '--seconds', '1', '--script', 'idle.json', '--tick-us', ''], /--tick-us/],
       [[...base, '--seconds', '1'], /--script/],
       [
         [...base, '--seconds', '1', '--script', 'idle.json', '--assert', 'speeding == 1'],
@@ -151,6 +159,27 @@ describe('rcsim run', () => {
     expect((await rcsim('--help')).code).toBe(0);
     expect((await rcsim('--help')).out).toMatch(/usage: rcsim run/);
     expect((await rcsim()).code).toBe(2);
+  });
+});
+
+describe('runScenario', () => {
+  it('rejects a tick length that is not a positive whole number of microseconds', async () => {
+    for (const tickUs of [0, -1, 1.5, Number.NaN]) {
+      await expect(
+        runScenario(
+          {
+            car: 'car.json',
+            world: 'world.json',
+            seconds: 1,
+            seed: 1,
+            tickUs,
+            script: 'idle.json',
+            assertions: [],
+          },
+          { cwd: dir },
+        ),
+      ).rejects.toBeInstanceOf(ScenarioInputError);
+    }
   });
 });
 

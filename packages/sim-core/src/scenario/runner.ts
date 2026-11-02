@@ -99,6 +99,12 @@ export async function runScenario(
   spec: ScenarioSpec,
   io: ScenarioIo = {},
 ): Promise<ScenarioResult> {
+  if (spec.tickUs !== undefined && (!Number.isInteger(spec.tickUs) || spec.tickUs <= 0)) {
+    throw new ScenarioInputError(`tickUs must be a positive integer, got ${spec.tickUs}`);
+  }
+  if (!Number.isFinite(spec.seconds) || spec.seconds < 0) {
+    throw new ScenarioInputError(`seconds must be a non-negative number, got ${spec.seconds}`);
+  }
   const at = (file: string): string => path.resolve(io.cwd ?? process.cwd(), file);
   const car = parseWith(Car, await readJson(at(spec.car), 'car'), `car "${spec.car}"`);
   const world = await readWorld(spec.world, io);

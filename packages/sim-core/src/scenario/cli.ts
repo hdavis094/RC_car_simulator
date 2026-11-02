@@ -52,11 +52,21 @@ export async function main(argv: readonly string[], io: CliIo = {}): Promise<num
       if (value === undefined) throw new ScenarioInputError(`--${name} is required`);
       return value;
     };
-    const number = (name: string, text: string, integer = false): number => {
+    const number = (
+      name: string,
+      text: string,
+      { integer = false, positive = false } = {},
+    ): number => {
       const value = Number(text);
-      if (!Number.isFinite(value) || value < 0 || (integer && !Number.isInteger(value))) {
+      if (
+        text.trim() === '' ||
+        !Number.isFinite(value) ||
+        value < 0 ||
+        (positive && value === 0) ||
+        (integer && !Number.isInteger(value))
+      ) {
         throw new ScenarioInputError(
-          `--${name} must be a non-negative ${integer ? 'integer' : 'number'}, got "${text}"`,
+          `--${name} must be a ${positive ? 'positive' : 'non-negative'} ${integer ? 'integer' : 'number'}, got "${text}"`,
         );
       }
       return value;
@@ -68,10 +78,10 @@ export async function main(argv: readonly string[], io: CliIo = {}): Promise<num
       seconds: number('seconds', need('seconds')),
       seed:
         values.seed !== undefined
-          ? number('seed', values.seed, true)
+          ? number('seed', values.seed, { integer: true })
           : (await readWorld(need('world'), io)).seed,
       ...(values['tick-us'] !== undefined
-        ? { tickUs: number('tick-us', values['tick-us'], true) }
+        ? { tickUs: number('tick-us', values['tick-us'], { integer: true, positive: true }) }
         : {}),
       ...(values.script !== undefined ? { script: values.script } : {}),
       ...(values.firmware !== undefined ? { firmware: values.firmware } : {}),
