@@ -1,3 +1,7 @@
 packages:
   - packages/*
   - apps/*
+
+# Packages allowed to run install scripts. P1-D's node-pty compiles a native addon on Linux.
+allowBuilds:
+  node-pty: true
