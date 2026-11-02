@@ -64,6 +64,8 @@ test.afterAll(async () => {
 });
 
 test('creates from starter firmware, saves a typo, builds, and jumps to its exact diagnostic', async () => {
+  // A cold build with the real driver compiles all of hal first.
+  test.setTimeout(180_000);
   const page = await app.firstWindow();
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
@@ -84,7 +86,7 @@ test('creates from starter firmware, saves a typo, builds, and jumps to its exac
   await expect(page.getByRole('tab', { name: 'main.cpp ●' })).toBeVisible();
   await page.getByRole('button', { name: 'Build for Sim', exact: true }).click();
   await expect(page.getByRole('status').filter({ hasText: 'Build failed' })).toBeVisible({
-    timeout: 60_000,
+    timeout: 150_000,
   });
   const diagnostic = page
     .getByRole('button')

@@ -1,5 +1,5 @@
 import { pathToFileURL } from 'node:url';
-import { app, BrowserWindow, dialog, Menu, session } from 'electron';
+import { app, BrowserWindow, dialog, Menu, session, shell } from 'electron';
 import { join, resolve } from 'node:path';
 import { registerIpc } from './ipc.ts';
 import { disposeRendererResources } from './renderer-lifecycle.ts';
@@ -45,7 +45,11 @@ function createWindow(): BrowserWindow {
     // In Electron this allows the unload that the renderer prevented.
     if (discard === 1) event.preventDefault();
   });
-  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  // Part datasheet links open in the system browser; nothing opens in the app.
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) void shell.openExternal(url);
+    return { action: 'deny' };
+  });
   window.webContents.on('will-navigate', (event) => event.preventDefault());
   const project = new ProjectService({
     templateDir: join(root, 'packages/firmware-template'),

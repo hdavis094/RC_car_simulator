@@ -1,6 +1,6 @@
 # P1-D — app: main process services, shell, Terminal environment
 
-Status: in-review
+Status: done
 Agent: Codex (gpt-6.1-sol)
 Branch: ws/p1-d
 Depends on: P0 (all)
@@ -84,3 +84,16 @@ Workbench (P1-E), 3D World (P1-F), run wiring (P2-01), PlatformIO flashing (Phas
 - **Additional macOS blocking finding:** The installed node-pty 1.1 Darwin helpers are mode 0644, consistent with upstream microsoft/node-pty#850/#919 and the CI `posix_spawnp failed` symptom. PtyService resolves the helper from node-pty's actual selected native directory, maps ASAR paths to `.asar.unpacked`, and repairs missing execute bits before a macOS spawn. It validates `$SHELL` and falls back to executable `/bin/zsh` on macOS or `/bin/sh` elsewhere. Spawn failures report the shell, canonical cwd, selected helper path and original error. Tests exercise 0644 repair, native helper discovery, ASAR mapping, a real fallback shell, disposal during a pending spawn, and native-spawn error context. No shell tests are skipped.
 - **Validation:** `pnpm verify` passes locally: 311 Vitest tests, GCC/Clang HAL checks, and all seven root Playwright tests; the six app tests also pass with `CXX=clang++`. Regression tests first reproduced the dangling-link write, recents failure, wrong missing-file error code, untrusted-origin acceptance, path/locale/linker gaps, and stale build output before their fixes. No findings declined. macOS CI must still confirm the helper fix; it cannot be executed on this Linux host. HAL linking remains untested while P1-C's real driver is absent; the existing compiler fixture fallback remains explicit.
 - **Status:** in-review. No rebase or push performed in this round.
+
+### Review round 2 (non-blocking, not fixed in this task)
+
+Claude review approved the branch. Left for later:
+
+- **P2-01 / packaging:** `pty-support.ts` repairs node-pty's `spawn-helper` at spawn time. That fails on a read-only or translocated macOS bundle and mutates a signed one, so packaging must set the mode at pack time (`afterPack` chmod plus `asarUnpack` for node-pty) and keep the runtime repair as a fallback.
+- **P2-01:** relative compiler paths are resolved against the project directory, the spawn cwd. Re-check this against P1-C's real `build-sim`: if it changes directory, `../src/main.cpp` diagnostics won't navigate.
+- **Small fixes, any later task:**
+  - `BuildOutput.tsx` leaves diagnostics with absolute paths clickable, and clicking one shows an error alert.
+  - `pty.ts` passes no `LANG` to a shell launched from Finder or Dock.
+  - Overlapping `project.ts` `open()` calls can leak a chokidar watcher.
+  - `setPermissionCheckHandler` is unset.
+  - A stale `reload` in `editor-state.ts` can overwrite a later save.
