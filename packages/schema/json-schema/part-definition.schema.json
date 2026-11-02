@@ -430,7 +430,7 @@
           "type": "number",
           "exclusiveMinimum": 0,
           "exclusiveMaximum": 90,
-          "description": "Inner front wheel at full lock."
+          "description": "Virtual centre wheel (Ackermann) at full lock. The inner wheel turns further."
         },
         "steeringLinkageRatio": {
           "type": "number",

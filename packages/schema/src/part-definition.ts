@@ -176,7 +176,11 @@ export const ChassisDefinition = z.strictObject({
   wheelbaseMm: z.number().positive(),
   trackWidthMm: z.number().positive().describe('Between the tyre centres.'),
   wheelRadiusMm: z.number().positive(),
-  maxSteeringAngleDeg: z.number().gt(0).lt(90).describe('Inner front wheel at full lock.'),
+  maxSteeringAngleDeg: z
+    .number()
+    .gt(0)
+    .lt(90)
+    .describe('Virtual centre wheel (Ackermann) at full lock. The inner wheel turns further.'),
   steeringLinkageRatio: z
     .number()
     .refine((v) => v !== 0, 'steeringLinkageRatio must not be 0')
