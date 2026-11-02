@@ -30,6 +30,7 @@ function InstanceIdEditor({ instanceId, onRename }: InstanceIdEditorProps): Reac
   const commit = (value: string) => {
     const trimmed = value.trim();
     if (trimmed === instanceId) {
+      setDraft(instanceId);
       setError(null);
       return;
     }
@@ -47,16 +48,23 @@ function InstanceIdEditor({ instanceId, onRename }: InstanceIdEditorProps): Reac
         type="text"
         aria-label={`Instance id for ${instanceId}`}
         value={draft}
+        onClick={(e) => e.stopPropagation()}
         onChange={(e) => {
-          const val = e.target.value;
-          setDraft(val);
-          commit(val);
+          setDraft(e.target.value);
+          if (error) setError(null);
         }}
-        onBlur={() => {
-          if (error) {
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            commit(draft);
+          } else if (e.key === 'Escape') {
+            e.preventDefault();
             setDraft(instanceId);
             setError(null);
           }
+        }}
+        onBlur={() => {
+          commit(draft);
         }}
         style={{
           fontFamily: 'monospace',
@@ -67,13 +75,21 @@ function InstanceIdEditor({ instanceId, onRename }: InstanceIdEditorProps): Reac
           width: 130,
         }}
       />
-      {error && <span style={{ color: '#d32f2f', fontSize: 11 }}>{error}</span>}
+      {error && (
+        <span
+          data-testid={`instance-id-error-${instanceId}`}
+          style={{ color: '#d32f2f', fontSize: 11 }}
+        >
+          {error}
+        </span>
+      )}
     </div>
   );
 }
 
 export function PartsPanel(): ReactNode {
   const car = useWorkbenchStore((s) => s.car);
+  const partRowKeys = useWorkbenchStore((s) => s.partRowKeys);
   const listing = useWorkbenchStore((s) => s.listing);
   const catalog = useWorkbenchStore((s) => s.catalog);
   const searchQuery = useWorkbenchStore((s) => s.searchQuery);
@@ -91,10 +107,7 @@ export function PartsPanel(): ReactNode {
   const [addError, setAddError] = useState<string | null>(null);
 
   const customIds = new Set(listing.custom.map((c) => c.definition.id));
-  const allDefinitions: PartDefinition[] = [
-    ...listing.builtIn,
-    ...listing.custom.map((c) => c.definition),
-  ];
+  const allDefinitions: PartDefinition[] = [...catalog.values()];
 
   const normalizedQuery = searchQuery.trim().toLowerCase();
   const filteredDefinitions = allDefinitions.filter((def) => {
@@ -165,9 +178,10 @@ export function PartsPanel(): ReactNode {
         {carEntries.map((entry) => {
           const def = catalog.get(entry.partId);
           const isSelected = selectedInstanceId === entry.instanceId;
+          const stableKey = partRowKeys[entry.instanceId] ?? `${entry.role}:${entry.instanceId}`;
           return (
             <div
-              key={entry.instanceId}
+              key={stableKey}
               data-testid={`car-part-${entry.instanceId}`}
               onClick={() => selectInstance(entry.instanceId)}
               style={{

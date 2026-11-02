@@ -6,7 +6,7 @@ import { PartInspector } from './PartInspector.tsx';
 import { PartsPanel } from './PartsPanel.tsx';
 import { PinAssignmentTable } from './PinAssignmentTable.tsx';
 import { PlacementPanel } from './PlacementPanel.tsx';
-import { catalogFromListing, resolveRcsimApi, useWorkbenchStore } from './workbench-store.ts';
+import { resolveRcsimApi, useWorkbenchStore } from './workbench-store.ts';
 
 export interface WorkbenchRootProps {
   readonly api?: RcsimApi;
@@ -17,32 +17,43 @@ export function WorkbenchRoot({ api }: WorkbenchRootProps = {}): ReactNode {
   const car = useWorkbenchStore((s) => s.car);
   const catalog = useWorkbenchStore((s) => s.catalog);
   const issues = useWorkbenchStore((s) => s.issues);
+  const loaded = useWorkbenchStore((s) => s.loaded);
   const dirty = useWorkbenchStore((s) => s.dirty);
   const saving = useWorkbenchStore((s) => s.saving);
   const saveStatus = useWorkbenchStore((s) => s.saveStatus);
   const loadError = useWorkbenchStore((s) => s.loadError);
+  const loadErrorRaw = useWorkbenchStore((s) => s.loadErrorRaw);
+  const externalChange = useWorkbenchStore((s) => s.externalChange);
   const load = useWorkbenchStore((s) => s.load);
+  const startFromExampleCar = useWorkbenchStore((s) => s.startFromExampleCar);
+  const reloadFromDisk = useWorkbenchStore((s) => s.reloadFromDisk);
+  const dismissExternalChange = useWorkbenchStore((s) => s.dismissExternalChange);
   const setCarName = useWorkbenchStore((s) => s.setCarName);
   const setCarWifi = useWorkbenchStore((s) => s.setCarWifi);
   const saveCar = useWorkbenchStore((s) => s.saveCar);
 
   useEffect(() => {
-    const resolved = resolveRcsimApi(api);
-    void load(resolved);
+    void load(api);
+
+    let resolved: RcsimApi | undefined;
+    try {
+      resolved = resolveRcsimApi(api);
+    } catch {
+      resolved = undefined;
+    }
 
     const unsubCatalog =
-      typeof resolved.catalog?.onChange === 'function'
+      resolved && typeof resolved.catalog?.onChange === 'function'
         ? resolved.catalog.onChange((listing) => {
-            const nextCatalog = catalogFromListing(listing);
-            useWorkbenchStore.setState({ listing, catalog: nextCatalog });
+            useWorkbenchStore.getState().updateCatalogListing(listing);
           })
         : undefined;
 
     const unsubFiles =
-      typeof resolved.project?.onFileChange === 'function'
+      resolved && typeof resolved.project?.onFileChange === 'function'
         ? resolved.project.onFileChange((change) => {
-            if (change.path === 'car.json' && !useWorkbenchStore.getState().saving) {
-              void load(resolved);
+            if (change.path === 'car.json') {
+              void useWorkbenchStore.getState().handleExternalCarFileChange();
             }
           })
         : undefined;
@@ -57,6 +68,7 @@ export function WorkbenchRoot({ api }: WorkbenchRootProps = {}): ReactNode {
   const warningCount = issues.filter((i) => i.severity === 'warning').length;
   const runnable = canRun(issues);
   const headerPreview = generateCarConfigHeader(car, catalog);
+  const saveDisabled = saving || !loaded || loadError !== null;
 
   return (
     <div
@@ -129,16 +141,16 @@ export function WorkbenchRoot({ api }: WorkbenchRootProps = {}): ReactNode {
           <button
             type="button"
             onClick={() => void saveCar()}
-            disabled={saving}
+            disabled={saveDisabled}
             style={{
               fontSize: 13,
               fontWeight: 600,
               padding: '5px 14px',
-              background: '#2563eb',
+              background: saveDisabled ? '#94a3b8' : '#2563eb',
               color: '#ffffff',
               border: 'none',
               borderRadius: 4,
-              cursor: 'pointer',
+              cursor: saveDisabled ? 'not-allowed' : 'pointer',
             }}
           >
             {saving ? 'Saving...' : dirty ? 'Save *' : 'Save'}
@@ -151,7 +163,10 @@ export function WorkbenchRoot({ api }: WorkbenchRootProps = {}): ReactNode {
           role="alert"
           data-testid="workbench-load-error"
           style={{
-            padding: '8px 12px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 8,
+            padding: '10px 12px',
             borderRadius: 4,
             background: '#fef2f2',
             border: '1px solid #fca5a5',
@@ -159,7 +174,104 @@ export function WorkbenchRoot({ api }: WorkbenchRootProps = {}): ReactNode {
             fontSize: 12,
           }}
         >
-          Failed to read car.json: {loadError}
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              gap: 12,
+            }}
+          >
+            <span>Failed to read car.json: {loadError}</span>
+            <button
+              type="button"
+              onClick={startFromExampleCar}
+              style={{
+                fontSize: 12,
+                fontWeight: 600,
+                padding: '4px 10px',
+                background: '#ffffff',
+                color: '#b91c1c',
+                border: '1px solid #fca5a5',
+                borderRadius: 4,
+                cursor: 'pointer',
+              }}
+            >
+              Start from the example car
+            </button>
+          </div>
+          {loadErrorRaw && (
+            <pre
+              data-testid="workbench-load-error-raw"
+              style={{
+                margin: 0,
+                padding: 8,
+                background: '#0f172a',
+                color: '#e2e8f0',
+                borderRadius: 4,
+                overflowX: 'auto',
+                fontSize: 11,
+                maxHeight: 160,
+              }}
+            >
+              {loadErrorRaw}
+            </pre>
+          )}
+        </div>
+      )}
+
+      {externalChange && (
+        <div
+          role="alert"
+          data-testid="workbench-external-change"
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: 12,
+            padding: '8px 12px',
+            borderRadius: 4,
+            background: '#fffbeb',
+            border: '1px solid #fcd34d',
+            color: '#b45309',
+            fontSize: 12,
+          }}
+        >
+          <span>car.json changed on disk while you have unsaved edits.</span>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              type="button"
+              onClick={() => void reloadFromDisk()}
+              style={{
+                fontSize: 12,
+                fontWeight: 600,
+                padding: '4px 10px',
+                background: '#d97706',
+                color: '#ffffff',
+                border: 'none',
+                borderRadius: 4,
+                cursor: 'pointer',
+              }}
+            >
+              Reload from disk
+            </button>
+            <button
+              type="button"
+              onClick={dismissExternalChange}
+              style={{
+                fontSize: 12,
+                fontWeight: 600,
+                padding: '4px 10px',
+                background: '#ffffff',
+                color: '#b45309',
+                border: '1px solid #fcd34d',
+                borderRadius: 4,
+                cursor: 'pointer',
+              }}
+            >
+              Keep mine
+            </button>
+          </div>
         </div>
       )}
 

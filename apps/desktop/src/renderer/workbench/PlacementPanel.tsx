@@ -1,6 +1,7 @@
 import type { ChassisDefinition, Part, Placement } from '@rcsim/schema';
 import type { ReactNode } from 'react';
 import { CarPreview3D } from './CarPreview3D.tsx';
+import { NumericInput } from './NumericInput.tsx';
 import { useWorkbenchStore } from './workbench-store.ts';
 
 export function PlacementPanel(): ReactNode {
@@ -13,7 +14,7 @@ export function PlacementPanel(): ReactNode {
   const mountPoints = chassisDef?.category === 'chassis' ? chassisDef.mountPoints : [];
   const defaultMount = mountPoints[0]?.id ?? 'front-centre';
 
-  // Sensors and actuators (plus controller if placed)
+  // Sensors and actuators
   const placeableParts: Part[] = car.parts.filter((part) => {
     const def = catalog.get(part.partId);
     return def?.category === 'sensor' || def?.category === 'actuator';
@@ -136,52 +137,47 @@ export function PlacementPanel(): ReactNode {
                     </select>
                   </td>
                   <td style={{ padding: '6px 8px' }}>
-                    <input
-                      type="number"
-                      aria-label={`Offset X for ${part.instanceId}`}
+                    <NumericInput
+                      ariaLabel={`Offset X for ${part.instanceId}`}
                       value={offset.x}
                       disabled={!placement}
-                      onChange={(e) => updateOffset(part, 'x', Number(e.target.value))}
+                      onChange={(val) => updateOffset(part, 'x', val)}
                       style={{ width: 64, fontSize: 12, padding: '2px 4px' }}
                     />
                   </td>
                   <td style={{ padding: '6px 8px' }}>
-                    <input
-                      type="number"
-                      aria-label={`Offset Y for ${part.instanceId}`}
+                    <NumericInput
+                      ariaLabel={`Offset Y for ${part.instanceId}`}
                       value={offset.y}
                       disabled={!placement}
-                      onChange={(e) => updateOffset(part, 'y', Number(e.target.value))}
+                      onChange={(val) => updateOffset(part, 'y', val)}
                       style={{ width: 64, fontSize: 12, padding: '2px 4px' }}
                     />
                   </td>
                   <td style={{ padding: '6px 8px' }}>
-                    <input
-                      type="number"
-                      aria-label={`Offset Z for ${part.instanceId}`}
+                    <NumericInput
+                      ariaLabel={`Offset Z for ${part.instanceId}`}
                       value={offset.z}
                       disabled={!placement}
-                      onChange={(e) => updateOffset(part, 'z', Number(e.target.value))}
+                      onChange={(val) => updateOffset(part, 'z', val)}
                       style={{ width: 64, fontSize: 12, padding: '2px 4px' }}
                     />
                   </td>
                   <td style={{ padding: '6px 8px' }}>
-                    <input
-                      type="number"
-                      aria-label={`Yaw for ${part.instanceId}`}
+                    <NumericInput
+                      ariaLabel={`Yaw for ${part.instanceId}`}
                       value={yaw}
                       disabled={!placement}
-                      onChange={(e) => updateAngle(part, 'yawDeg', Number(e.target.value))}
+                      onChange={(val) => updateAngle(part, 'yawDeg', val)}
                       style={{ width: 64, fontSize: 12, padding: '2px 4px' }}
                     />
                   </td>
                   <td style={{ padding: '6px 8px' }}>
-                    <input
-                      type="number"
-                      aria-label={`Pitch for ${part.instanceId}`}
+                    <NumericInput
+                      ariaLabel={`Pitch for ${part.instanceId}`}
                       value={pitch}
                       disabled={!placement}
-                      onChange={(e) => updateAngle(part, 'pitchDeg', Number(e.target.value))}
+                      onChange={(val) => updateAngle(part, 'pitchDeg', val)}
                       style={{ width: 64, fontSize: 12, padding: '2px 4px' }}
                     />
                   </td>
