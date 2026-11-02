@@ -1,6 +1,6 @@
 # P1-E — app: Workbench environment
 
-Status: in-progress
+Status: in-review
 Agent: Antigravity
 Branch: ws/p1-e
 Depends on: P0 (all)
@@ -38,13 +38,13 @@ In the Workbench the user designs the car. They pick parts, assign pins with liv
 
 ## Acceptance
 
-- [ ] `pnpm verify` passes
-- [ ] component tests (Vitest + Testing Library, fake IPC from the `shared/` stubs):
-  - [ ] loading the example car from `packages/schema` shows zero errors
-  - [ ] assigning two parts to the same GPIO shows the conflict on both rows
-  - [ ] moving the battery divider to an ADC2 pin shows the Wi-Fi/ADC2 error
-  - [ ] a custom part created in the form round-trips through save and reload
-- [ ] saving writes a header byte-identical to `generateCarConfigHeader` for the same car
+- [x] `pnpm verify` passes
+- [x] component tests (Vitest + Testing Library, fake IPC from the `shared/` stubs):
+  - [x] loading the example car from `packages/schema` shows zero errors
+  - [x] assigning two parts to the same GPIO shows the conflict on both rows
+  - [x] moving the battery divider to an ADC2 pin shows the Wi-Fi/ADC2 error
+  - [x] a custom part created in the form round-trips through save and reload
+- [x] saving writes a header byte-identical to `generateCarConfigHeader` for the same car
 
 ## Out of scope
 
@@ -53,6 +53,15 @@ Main-process services (P1-D), the world viewer (P1-F), visual wiring diagrams, d
 ## Handoff
 
 - **Built**:
+  - **Zustand store (`workbench-store.ts`)**: holds the active `Car`, `CatalogListing`, resolved `Catalog`, live `checkWiring` `Issue[]`, selection state, focused row key, and dirty/save status. All project and catalog I/O flows through `ipc.ts` (`project.readCar`, `project.writeCar`, `project.onFileChange`, `catalog.list`, `catalog.saveCustomPart`, `catalog.onChange`), falling back to `createFakeRcsimApi()` only when `window.rcsim.project` is not yet wired in the P0-02 preload stub.
+  - **Parts panel (`PartsPanel.tsx`)**: displays the catalog grouped by `PART_CATEGORIES` with search filtering, custom part badges, and catalog file problem alerts. Supports adding parts with C-identifier-safe unique instance IDs, inline editing/renaming of instance IDs (rewriting any part-to-part pin references), and removing parts while enforcing exactly one controller and one chassis.
+  - **Pin assignment table (`PinAssignmentTable.tsx`)**: renders one row per part pin across `carParts(car)`, with a controller GPIO dropdown showing each pin's capabilities (`ADC1`, `ADC2`, `input-only`, `strapping`, `flash`, `UART0 TX/RX`, `touch`, label), a power-source selector for `power-in` pins, I²C address input for I²C parts, inline error/warning display per row, and a clickable wiring issues summary list that focuses and scrolls to the corresponding row.
+  - **Placement & 3D preview (`PlacementPanel.tsx`, `CarPreview3D.tsx`)**: mount-point picker and numeric `offsetMm` (`x`, `y`, `z`) + `yawDeg` / `pitchDeg` inputs for sensors and actuators, paired with a Three.js / `@react-three/fiber` preview (`CarPreviewScene` & `buildPreviewSceneData`) rendering the chassis box at its defined dimensions, placed part boxes, and distance-sensor beam cones computed from `maxRangeMm` and `beamAngleDeg`.
+  - **Part inspector (`PartInspector.tsx`)**: displays physical dimensions and mass, electrical values (`supplyV`, `logicLevelV`, `currentMa`, `gpioMaxInputV`), I²C bus addressing, chassis geometry, behavior template parameters, and clickable datasheet `sources` links and `notes`.
+  - **New Part form (`NewPartForm.tsx`)**: covers all `PartDefinition` fields across all categories, dynamically generates the behavior parameter inputs by introspecting `@rcsim/schema`'s `Behavior` Zod discriminated union (`describeBehaviorParamsSchema`), validates with `PartDefinition.safeParse`, and saves custom parts to `parts/<id>.json` via `catalog.saveCustomPart`.
+  - **Save & header generation (`WorkbenchRoot.tsx`)**: saves `car.json` and regenerates `include/car_config.h` via `project.writeCar`, flagging saves when wiring errors are present and providing a collapsible `include/car_config.h` preview.
+  - **Component tests (`WorkbenchRoot.test.tsx`)**: Vitest + Testing Library + `jsdom` suite covering all acceptance scenarios against `createFakeRcsimApi()`.
 - **Deviations from the brief**:
-- **Contract change requests**:
-- **Open questions**:
+  - Added `three`, `@react-three/fiber`, `@types/three`, `@testing-library/react`, `@testing-library/dom`, `@testing-library/user-event`, and `jsdom` to `apps/desktop/package.json` (and updated `pnpm-lock.yaml`) as permitted by `AGENTS.md` ("If you need a dependency, add it to your own package's `package.json`"), and used `// @vitest-environment jsdom` in `WorkbenchRoot.test.tsx` so `apps/desktop/vitest.config.mts` remained untouched.
+- **Contract change requests**: none.
+- **Open questions**: none.
