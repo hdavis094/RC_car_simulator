@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { ScriptedPwm } from '../api/actuator-source.ts';
 import { snapshotHash } from '../scenario/hash.ts';
+import { yawOf } from '../world/quat.ts';
+import type { MeasuredRun } from './run.ts';
 import {
   ARMED_BY_US,
   ESC_GPIO,
@@ -18,28 +20,69 @@ const drive = (duty: number, fromUs = ARMED_BY_US): ScriptedPwm[] => [
   { tUs: fromUs, gpio: ESC_GPIO, pulseUs: throttlePulse(duty) },
 ];
 
+/**
+ * A drive that matters: neutral through arming, then throttle, then a gentle
+ * left turn that follows the oval's end. Everything is applied after the ESC
+ * has armed (3 s), so the car really moves.
+ */
+const DRIVEN: ScriptedPwm[] = [
+  ...NEUTRAL,
+  { tUs: ARMED_BY_US, gpio: ESC_GPIO, pulseUs: throttlePulse(0.25) },
+  { tUs: 5_700_000, gpio: STEERING_GPIO, pulseUs: steeringPulse(0.14) },
+];
+
+/**
+ * The snapshot hash of `DRIVEN` after 10 000 ticks on the oval, seed 7. A
+ * golden value: `pnpm verify` runs this on Linux x86-64 and on macOS arm64
+ * (CI), so it checks the physics, Rapier's WebAssembly and V8's Math give
+ * bit-identical runs across them. It covers Node's V8, not Electron's.
+ * If you change the physics on purpose, run the test, check the car still
+ * moves sensibly, and paste the new hash from the failure message.
+ */
+const DRIVEN_GOLDEN_HASH = '3dbab6470d45dfe28f0d6a3f9c69d2ed88a2a38d30f55b5ac35e84625f4fe1e8';
+
 describe('determinism', () => {
+  async function drivenRun(): Promise<MeasuredRun> {
+    const run = await testRun({ timeline: DRIVEN, seed: 7 });
+    await run.step(10_000);
+    return run;
+  }
+
+  it('drives the car, so the hash means something', async () => {
+    const run = await drivenRun();
+    const m = run.metrics();
+    expect(m.distanceM).toBeGreaterThan(8);
+    expect(m.maxSpeedMps).toBeGreaterThan(1.5);
+    expect(m.collisions).toBe(0);
+    const { pose } = run.snapshot().car;
+    expect(pose.position[0]).toBeLessThan(2); // it left the straight and is round the bend
+    expect(Math.abs(yawOf(pose.rotation))).toBeGreaterThan(1); // it turned
+    await run.stop();
+  }, 30_000);
+
   it('gives bit-identical snapshot hashes for the same inputs and seed', async () => {
-    const timeline: ScriptedPwm[] = [
-      ...NEUTRAL,
-      { tUs: 500_000, gpio: ESC_GPIO, pulseUs: 1600 },
-      { tUs: 4_000_000, gpio: STEERING_GPIO, pulseUs: steeringPulse(0.3) },
-    ];
     const hashes: string[] = [];
     for (let i = 0; i < 2; i++) {
-      const run = await testRun({ timeline, seed: 7 });
-      await run.step(10_000);
+      const run = await drivenRun();
       hashes.push(snapshotHash(run.snapshot()));
       await run.stop();
     }
     expect(hashes[0]).toBe(hashes[1]);
   }, 30_000);
 
-  it('moves the car, so the hash is a meaningful check', async () => {
-    const run = await testRun({ timeline: drive(0.3, 0) });
-    const before = snapshotHash(run.snapshot());
+  it('gives a different hash for a different drive', async () => {
+    const run = await testRun({
+      timeline: [...DRIVEN, { tUs: 6_000_000, gpio: ESC_GPIO, pulseUs: 1500 }],
+      seed: 7,
+    });
     await run.step(10_000);
-    expect(snapshotHash(run.snapshot())).not.toBe(before);
+    expect(snapshotHash(run.snapshot())).not.toBe(DRIVEN_GOLDEN_HASH);
+    await run.stop();
+  }, 30_000);
+
+  it('matches the golden hash, on every platform CI runs', async () => {
+    const run = await drivenRun();
+    expect(snapshotHash(run.snapshot())).toBe(DRIVEN_GOLDEN_HASH);
     await run.stop();
   }, 30_000);
 });

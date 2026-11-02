@@ -37,8 +37,6 @@ const TUNING = {
   bodyFriction: 0.2,
 } as const;
 
-const tuple = (v: { x: number; y: number; z: number }): Vec3 => [v.x, v.y, v.z];
-
 export interface VehicleStart {
   readonly x: number;
   readonly z: number;
@@ -63,6 +61,8 @@ export class RapierVehicle implements Vehicle {
   #applied: VehicleCommand = this.#command;
   #steerRad: [number, number, number, number] = [0, 0, 0, 0];
   #velocity: Vec3 = [0, 0, 0];
+  #angularVelocity: Vec3 = [0, 0, 0];
+  #forwardSpeed = 0;
   #acceleration: Vec3 = [0, 0, 0];
   #cache: VehicleState | undefined;
 
@@ -165,13 +165,6 @@ export class RapierVehicle implements Vehicle {
     return { position: [t.x - offset[0], t.y - offset[1], t.z - offset[2]], rotation };
   }
 
-  #forwardSpeed(): number {
-    const v = this.body.linvel();
-    const r = this.body.rotation();
-    const f = rotate([r.x, r.y, r.z, r.w], [0, 0, -1]);
-    return v.x * f[0] + v.y * f[1] + v.z * f[2];
-  }
-
   /** Front wheel angles for a virtual centre-wheel angle (Ackermann), positive left. */
   #ackermann(centreRad: number): [number, number] {
     const { wheelbaseM: L, trackWidthM: W, maxSteerRad } = this.params;
@@ -185,8 +178,33 @@ export class RapierVehicle implements Vehicle {
     return delta > 0 ? [inner, outer] : [-outer, -inner];
   }
 
-  /** Applies steering, drive and rolling resistance. Called by the world before it steps. */
-  preStep(dtS: number): void {
+  /**
+   * Called by the world right after each physics step: records the car's
+   * motion, then applies steering, drive and rolling resistance for the
+   * next step. Querying the suspension here, after the step, means the
+   * rays see the scene as the step just left it, with every obstacle edit
+   * made since the last tick already in Rapier's spatial index (it is only
+   * refreshed inside a step). A command takes effect one step after it is
+   * applied.
+   */
+  afterStep(dtS: number): void {
+    const v = this.body.linvel();
+    this.#acceleration = [
+      (v.x - this.#velocity[0]) / dtS,
+      (v.y - this.#velocity[1]) / dtS,
+      (v.z - this.#velocity[2]) / dtS,
+    ];
+    this.#velocity = [v.x, v.y, v.z];
+    const av = this.body.angvel();
+    this.#angularVelocity = [av.x, av.y, av.z];
+    const r = this.body.rotation();
+    const f = rotate([r.x, r.y, r.z, r.w], [0, 0, -1]);
+    this.#forwardSpeed = v.x * f[0] + v.y * f[1] + v.z * f[2];
+    this.#drive(dtS);
+    this.#cache = undefined;
+  }
+
+  #drive(dtS: number): void {
     const command = this.#clamped(this.#command);
     this.#applied = command;
     const c = this.#controller;
@@ -203,7 +221,7 @@ export class RapierVehicle implements Vehicle {
     let forcePerWheel = 0;
     const duty = command.motorDuty;
     if (p.motor && duty !== 0 && this.#driven.length > 0) {
-      const motorSpeed = (this.#forwardSpeed() / p.wheelRadiusM) * p.finalDriveRatio;
+      const motorSpeed = (this.#forwardSpeed / p.wheelRadiusM) * p.finalDriveRatio;
       const noLoad = p.motor.kvRadPerSV * p.batteryV;
       const torque = p.motor.stallTorqueNm * (duty - motorSpeed / noLoad);
       forcePerWheel = (torque * p.finalDriveRatio) / p.wheelRadiusM / this.#driven.length;
@@ -222,18 +240,6 @@ export class RapierVehicle implements Vehicle {
       steerAngleRad: Math.max(-max, Math.min(max, command.steerAngleRad)),
       motorDuty: Math.max(-1, Math.min(1, command.motorDuty)),
     };
-  }
-
-  /** Records velocity and acceleration after the world stepped. */
-  postStep(dtS: number): void {
-    const v = this.body.linvel();
-    this.#acceleration = [
-      (v.x - this.#velocity[0]) / dtS,
-      (v.y - this.#velocity[1]) / dtS,
-      (v.z - this.#velocity[2]) / dtS,
-    ];
-    this.#velocity = [v.x, v.y, v.z];
-    this.#cache = undefined;
   }
 
   state(): VehicleState {
@@ -260,12 +266,11 @@ export class RapierVehicle implements Vehicle {
         inContact: c.wheelIsInContact(i),
       };
     });
-    const av = this.body.angvel();
     return {
       pose: { position: origin.position, rotation },
       velocity: this.#velocity,
-      angularVelocity: tuple(av),
-      forwardSpeedMps: this.#forwardSpeed(),
+      angularVelocity: this.#angularVelocity,
+      forwardSpeedMps: this.#forwardSpeed,
       acceleration: this.#acceleration,
       command: this.#applied,
       wheels: wheels as unknown as VehicleState['wheels'],

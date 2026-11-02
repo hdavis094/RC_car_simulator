@@ -14,9 +14,10 @@ import type {
 import type { SensorModel } from '../api/sensors.ts';
 import type { StateSnapshot } from '../api/snapshot.ts';
 import { deviceKindOf, partContexts } from '../api/stubs/fake-run.ts';
+import type { RngStreams } from '../api/clock.ts';
 import { TickClock, createRngStreams } from '../clock/index.ts';
 import { LapCounter } from '../world/lap-counter.ts';
-import { createWorld } from '../world/world.ts';
+import { createPhysicsWorld, type PhysicsWorld } from '../world/world.ts';
 import { defaultActuatorModel, defaultSensorModel } from './default-models.ts';
 
 const ACTUATOR_TEMPLATES = new Set(['servo', 'esc-motor']);
@@ -66,7 +67,21 @@ function deviceTable(contexts: readonly PartContext[]): Device[] {
 export async function createRun(options: RunOptions): Promise<MeasuredRun> {
   const clock = new TickClock(options.tickUs ?? 1000);
   const rng = createRngStreams(options.seed);
-  const world = await createWorld(options.world, options.track);
+  const world = await createPhysicsWorld(options.world, options.track);
+  try {
+    return await assemble(options, clock, rng, world);
+  } catch (error) {
+    world.dispose();
+    throw error;
+  }
+}
+
+async function assemble(
+  options: RunOptions,
+  clock: TickClock,
+  rng: RngStreams,
+  world: PhysicsWorld,
+): Promise<MeasuredRun> {
   const vehicle = world.createVehicle({ car: options.car, catalog: options.catalog });
   const createActuator = options.createActuatorModel ?? defaultActuatorModel;
   const createSensor = options.createSensorModel ?? defaultSensorModel;
@@ -110,13 +125,49 @@ export async function createRun(options: RunOptions): Promise<MeasuredRun> {
   let distanceM = 0;
   let lastPosition = vehicle.state().pose.position;
   let stepping = false;
+  /** The `step()` call in progress, so `stop()` can wait for its tick to settle. */
+  let activeStep: Promise<unknown> | undefined;
+  let stopping: Promise<void> | undefined;
+  /** The last snapshot, kept when the physics world is freed. */
+  let finalSnapshot: StateSnapshot | undefined;
+
+  /** Calls every listener of an event; one that throws affects neither the run nor the others. */
+  const emit = <E extends keyof RunEvents>(event: E, ...args: Parameters<RunEvents[E]>): void => {
+    for (const listener of listeners[event] as Set<(...a: Parameters<RunEvents[E]>) => void>) {
+      try {
+        listener(...args);
+      } catch {
+        // A listener's failure must not change how the run went, or skip the others.
+      }
+    }
+  };
 
   /** Ends the run once; later reasons are ignored (a stop beats the failure it causes). */
   const finish = (why: RunEnd): void => {
     if (status === 'ended') return;
     status = 'ended';
     end = why;
-    for (const listener of listeners.end) listener(why);
+    emit('end', why);
+  };
+
+  const buildSnapshot = (): StateSnapshot => {
+    const state = vehicle.state();
+    return {
+      tick: clock.tick,
+      timeUs: clock.nowUs,
+      status,
+      car: {
+        pose: state.pose,
+        velocity: state.velocity,
+        forwardSpeedMps: state.forwardSpeedMps,
+        command: state.command,
+        wheels: state.wheels,
+      },
+      sensors: sensors.map((s) => ({ instanceId: s.instanceId, beams: s.beams() })),
+      obstacles: world.obstacles(),
+      laps: { count: laps.count, lapTimesUs: [...laps.lapTimesUs] },
+      collisions: { count: collisions, last: lastCollision },
+    };
   };
 
   const runTick = async (): Promise<boolean> => {
@@ -143,9 +194,9 @@ export async function createRun(options: RunOptions): Promise<MeasuredRun> {
     const output = await source.step(input);
     // stop() may have run while the source was busy: do nothing more.
     if (status === 'ended') return false;
-    if (output.serialTx.length > 0) for (const l of listeners.serial) l(output.serialTx, t0Us);
-    for (const line of output.logs) for (const l of listeners.log) l(line, t0Us);
-    for (const event of output.netEvents) for (const l of listeners.net) l(event, t0Us);
+    if (output.serialTx.length > 0) emit('serial', output.serialTx, t0Us);
+    for (const line of output.logs) emit('log', line, t0Us);
+    for (const event of output.netEvents) emit('net', event, t0Us);
     // 2. PWM into actuators; GPIO writes to the sensors that own the pins
     for (const pwm of output.pwm) {
       for (const actuator of actuators) if (actuator.gpio === pwm.gpio) actuator.setPwm(pwm, t0Us);
@@ -215,39 +266,28 @@ export async function createRun(options: RunOptions): Promise<MeasuredRun> {
     get end() {
       return end;
     },
-    async step(ticks = 1): Promise<RunStepResult> {
-      if (stepping) throw new Error('Run.step called while a previous step is pending');
+    step(ticks = 1): Promise<RunStepResult> {
+      if (stepping)
+        return Promise.reject(new Error('Run.step called while a previous step is pending'));
       stepping = true;
-      let done = 0;
-      try {
-        while (done < ticks && status !== 'ended') {
-          status = 'running';
-          if (!(await tick())) break;
-          done += 1;
+      const pending = (async (): Promise<RunStepResult> => {
+        let done = 0;
+        try {
+          while (done < ticks && status !== 'ended') {
+            status = 'running';
+            if (!(await tick())) break;
+            done += 1;
+          }
+        } finally {
+          stepping = false;
         }
-      } finally {
-        stepping = false;
-      }
-      return { ticks: done, status, end };
+        return { ticks: done, status, end };
+      })();
+      activeStep = pending;
+      return pending;
     },
     snapshot(): StateSnapshot {
-      const state = vehicle.state();
-      return {
-        tick: clock.tick,
-        timeUs: clock.nowUs,
-        status,
-        car: {
-          pose: state.pose,
-          velocity: state.velocity,
-          forwardSpeedMps: state.forwardSpeedMps,
-          command: state.command,
-          wheels: state.wheels,
-        },
-        sensors: sensors.map((s) => ({ instanceId: s.instanceId, beams: s.beams() })),
-        obstacles: world.obstacles(),
-        laps: { count: laps.count, lapTimesUs: [...laps.lapTimesUs] },
-        collisions: { count: collisions, last: lastCollision },
-      };
+      return finalSnapshot ?? buildSnapshot();
     },
     metrics(): RunMetrics {
       return {
@@ -276,9 +316,20 @@ export async function createRun(options: RunOptions): Promise<MeasuredRun> {
       if (!source.restart) throw new Error('this actuator source cannot restart');
       await source.restart();
     },
-    async stop(): Promise<void> {
-      finish({ kind: 'stopped' });
-      await source.stop();
+    stop(): Promise<void> {
+      // Once: ends the run, releases the source, waits for a tick in progress to
+      // settle, then frees the physics world (keeping the last snapshot).
+      stopping ??= (async () => {
+        finish({ kind: 'stopped' });
+        try {
+          await source.stop();
+        } finally {
+          await activeStep?.catch(() => undefined);
+          finalSnapshot = buildSnapshot();
+          world.dispose();
+        }
+      })();
+      return stopping;
     },
   };
 }

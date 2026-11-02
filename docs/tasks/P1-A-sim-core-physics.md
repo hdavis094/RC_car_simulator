@@ -100,3 +100,24 @@ Sensors (P1-B), the firmware bridge (P1-H), rendering, stage 2 physics (tyre sli
   - **`--firmware`.** `rcsim` accepts it but needs a source factory: `main(argv, { createFirmwareSource })`, or `ScenarioIo.createFirmwareSource` for `runScenario`. `src/scenario/bin.ts` passes none, and `scenario/` is not P1-H-owned. Who wires the bridge in: P1-H via a contract note, or P2-01?
   - **Cross-platform determinism.** Bit-identical hashes are proven across two processes on Linux only. macOS (Apple Silicon and Intel) is covered by CI alone.
   - **Tuning.** Suspension, tyre grip (μ 1.5), rolling resistance and the motor model (no efficiency loss, nominal battery voltage) are stage 1 values chosen to look right, not measured. Top speed is about 7.5 m/s (no-load), and walking pace (about 1.4 m/s) is motor duty 0.2.
+
+### Review round 1
+
+All seven items are fixed. Status stays `in-review`.
+
+- **Determinism tests drive (1).** The old tests applied throttle at 0.5 s, inside the ESC's 3 s arming, so the car barely moved. `DRIVEN` in `run/run.test.ts` now throttles after arming and steers round the oval's end. The test asserts more than 8 m travelled, speed above 1.5 m/s, a turn of more than 1 rad and no collisions, then compares two runs' hashes.
+- **Golden hash (2).** `matches the golden hash` pins the snapshot hash of `DRIVEN` after 10 000 ticks. It runs in `pnpm verify` on both CI OSes (ubuntu x86-64, macos-latest arm64). I added no math library: only a macOS CI mismatch would justify one. I could only run Linux here, so macOS is unconfirmed until CI. This covers Node's V8, not Electron's. If the physics changes on purpose, paste the new hash from the failure message (the comment above the constant says so).
+- **Stale queries (3).** Your `updateSceneQueries` does not exist in Rapier 0.21. Only `propagateModifiedBodyPositionsToColliders` does, and the spatial index refreshes only inside a step (I re-checked every exported call). No zero-length step is used. What I did instead:
+  - **Raycasts** are always current: until the first step and after any obstacle add, move or remove, `raycast` poses the colliders (`propagateModifiedBodyPositionsToColliders`, which advances nothing) and tests each collider; after a step it uses the index.
+  - **Suspension queries** now run after the physics step, in `RapierVehicle.afterStep`, not before it. The rays therefore see the index the step just refreshed, including edits made while paused. The cost is that a command takes effect one step (1 ms) later, which is in the golden hash and documented on `afterStep`.
+  - Moved obstacles do block and unblock correctly (tests in `run/lifecycle.test.ts`). The car's `velocity`, `acceleration` and `angularVelocity` are now read after the step and before the drive impulses.
+- **End listeners (4).** `emit` isolates every listener; `serial`, `log` and `net` get the same protection as `end`. Tests cover a throwing `end` listener during a failed run and during `stop()`.
+- **Collisions (5).**
+  - Each track edge is its own target (`wall:left` and `wall:right`); the public `RaycastHit`/`CollisionEvent` still say `wall`.
+  - `moveObstacle` and `removeObstacle` `forget` the obstacle's key.
+  - **Bounce gap:** swept 270 coast-in impacts (walls, cones, boxes, barriers, 0–85°, three throttle levels) against gaps of 20, 15, 10, 7, 5, 3 and 0 ms. 7 ms and above give identical counts; 5 ms and below leave one hit counted twice. I set `BOUNCE_GAP_US` to 10 ms (down from 250 ms) and `lifecycle.test.ts` has a case that gives 2 events at 0 ms and 1 at 10 ms.
+  - Remaining multi-event cases are real re-hits seconds apart.
+- **Rapier resources (6).** `PhysicsWorld.dispose()` frees the world and event queue, idempotently. `Run.stop()` is one shared promise: it ends the run, stops the source, waits for the active `step()` to settle, snapshots, then disposes. `snapshot()` returns that final snapshot afterwards and `metrics()` still works. A disposed world's `raycast` returns null and `step` and edits throw. `createRun` also frees the world if assembly fails.
+- **`--tick-us` (7).** 0, negative, fractional and empty values give `ScenarioInputError` and exit 2. `runScenario` validates `tickUs` and `seconds` too.
+- **Rulings noted.** Steering stays as implemented. `--firmware` wiring is P1-H's.
+
