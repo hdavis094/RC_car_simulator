@@ -31,6 +31,7 @@ export {
   canonicalCarJson,
   catalogFromListing,
   formatHex,
+  hasUnsavedWorkbenchChanges,
   isSameCar,
   parseCanonicalCarFromRaw,
   partsWithPins,

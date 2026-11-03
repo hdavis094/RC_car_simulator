@@ -16,7 +16,7 @@ import { buildPreviewSceneData } from './CarPreview3D.tsx';
 import { defaultPinsForTemplate, describeBehaviorParamsSchema } from './NewPartForm.tsx';
 import { NumericInput, parseFiniteDecimal } from './NumericInput.tsx';
 import { WorkbenchRoot } from './WorkbenchRoot.tsx';
-import { resetWorkbenchStore, useWorkbenchStore } from './workbench-store.ts';
+import { hasUnsavedWorkbenchChanges, resetWorkbenchStore, useWorkbenchStore } from './index.ts';
 
 beforeEach(() => {
   resetWorkbenchStore();
@@ -271,7 +271,7 @@ describe('Workbench environment (P1-E)', () => {
     expect(within(inspector).getByText('12')).toBeTruthy();
   });
 
-  it('keeps drafts while typing in number-list (accelRangesG, gyroRangesDps) and throttle-curve inputs and parses on blur', async () => {
+  it('keeps drafts while typing in number-list and throttle-curve inputs, rejects bad tokens with a validation message, and parses both blurred and unblurred drafts on submit (Items 3 & 4)', async () => {
     const user = userEvent.setup();
     const fake = createFakeRcsimApi();
     render(<WorkbenchRoot api={fake.api} />);
@@ -280,11 +280,19 @@ describe('Workbench environment (P1-E)', () => {
       expect(screen.getByTestId('catalog-groups')).toBeTruthy();
     });
 
+    // 1. Sensor IMU template: accelRangesG and gyroRangesDps
     fireEvent.click(screen.getByRole('button', { name: 'New Part' }));
-
-    // Switch behavior template to 'imu' to test accelRangesG and gyroRangesDps
     fireEvent.change(screen.getByLabelText('Behavior template'), {
       target: { value: 'imu' },
+    });
+    fireEvent.change(screen.getByLabelText('Part definition id'), {
+      target: { value: 'sensor.custom-imu' },
+    });
+    fireEvent.change(screen.getByLabelText('Part name'), {
+      target: { value: 'Custom IMU' },
+    });
+    fireEvent.change(screen.getByLabelText('Datasheet sources'), {
+      target: { value: 'https://imu.example.org/spec.pdf' },
     });
 
     const accelInput = screen.getByLabelText('Param accelRangesG') as HTMLInputElement;
@@ -297,23 +305,68 @@ describe('Workbench environment (P1-E)', () => {
     await user.type(accelInput, '2,');
     expect(accelInput.value).toBe('2,');
 
-    // Continue typing negative and positive numbers, then blur
+    // Item 4: Bad list token '2, abc, 4' is NOT dropped silently; keeps draft and shows validation message
+    await user.clear(accelInput);
+    await user.type(accelInput, '2, abc, 4');
+    fireEvent.blur(accelInput);
+    expect(accelInput.value).toBe('2, abc, 4');
+    expect(screen.getByTestId('new-part-errors').textContent).toMatch(
+      /accelRangesG.*invalid number "abc"/i,
+    );
+
+    // Typing negative numbers works in the input, and schema validation flags negative accelRangesG on submit
     await user.clear(accelInput);
     await user.type(accelInput, '-2, 4, 8');
-    expect(accelInput.value).toBe('-2, 4, 8');
     fireEvent.blur(accelInput);
     expect(accelInput.value).toBe('-2, 4, 8');
+    fireEvent.click(screen.getByRole('button', { name: 'Save Custom Part' }));
+    expect(screen.getByTestId('new-part-errors').textContent).toMatch(/accelRangesG/i);
 
-    // Clear gyroInput to a single value and blur
+    // Fix accelRangesG to valid positive numbers and blur
+    await user.clear(accelInput);
+    await user.type(accelInput, '2, 4, 8');
+    fireEvent.blur(accelInput);
+    expect(accelInput.value).toBe('2, 4, 8');
+
+    // Type gyroRangesDps WITHOUT blurring to test on-submit parsing of unblurred number-array drafts
     await user.clear(gyroInput);
     await user.type(gyroInput, '250, 500');
-    fireEvent.blur(gyroInput);
     expect(gyroInput.value).toBe('250, 500');
 
-    // Switch behavior template to 'esc' to test throttleCurve
+    fireEvent.click(screen.getByRole('button', { name: 'Save Custom Part' }));
+    await waitFor(() => {
+      expect(fake.files.has('parts/sensor.custom-imu.json')).toBe(true);
+    });
+    const savedImu = JSON.parse(fake.files.get('parts/sensor.custom-imu.json')!) as PartDefinition;
+    expect(savedImu).toMatchObject({
+      category: 'sensor',
+      behavior: {
+        template: 'imu',
+        params: {
+          accelRangesG: [2, 4, 8],
+          gyroRangesDps: [250, 500],
+        },
+      },
+    });
+
+    // 2. Actuator ESC-motor template: select category 'actuator' FIRST, then template 'esc-motor'
+    fireEvent.click(screen.getByRole('button', { name: 'New Part' }));
+    fireEvent.change(screen.getByLabelText('Part category'), {
+      target: { value: 'actuator' },
+    });
     fireEvent.change(screen.getByLabelText('Behavior template'), {
       target: { value: 'esc-motor' },
     });
+    fireEvent.change(screen.getByLabelText('Part definition id'), {
+      target: { value: 'actuator.custom-esc' },
+    });
+    fireEvent.change(screen.getByLabelText('Part name'), {
+      target: { value: 'Custom ESC' },
+    });
+    fireEvent.change(screen.getByLabelText('Datasheet sources'), {
+      target: { value: 'https://esc.example.org/spec.pdf' },
+    });
+
     const curveInput = screen.getByLabelText('Param throttleCurve') as HTMLInputElement;
     expect(curveInput.value).toBe('0:0, 1:1');
 
@@ -328,20 +381,20 @@ describe('Workbench environment (P1-E)', () => {
     fireEvent.blur(curveInput);
     expect(curveInput.value).toBe('0:0, 0.5:0.4, 1:1');
 
-    // Save the ESC custom part and verify the parsed throttleCurve array
-    fireEvent.change(screen.getByLabelText('Part category'), {
-      target: { value: 'actuator' },
-    });
-    fireEvent.change(screen.getByLabelText('Part definition id'), {
-      target: { value: 'actuator.custom-esc' },
-    });
-    fireEvent.change(screen.getByLabelText('Part name'), {
-      target: { value: 'Custom ESC' },
-    });
-    fireEvent.change(screen.getByLabelText('Datasheet sources'), {
-      target: { value: 'https://esc.example.org/spec.pdf' },
-    });
-    // Set pins to ESC pins (BATT+, GND, BEC+, SIGNAL)
+    // Item 4: Bad token in throttleCurve keeps the draft and shows a validation error
+    await user.clear(curveInput);
+    await user.type(curveInput, '0:0, bad, 1:1');
+    fireEvent.blur(curveInput);
+    expect(curveInput.value).toBe('0:0, bad, 1:1');
+    expect(screen.getByTestId('new-part-errors').textContent).toMatch(
+      /throttleCurve.*invalid throttle curve point "bad"/i,
+    );
+
+    // Edit throttleCurve WITHOUT blurring to cover on-submit parsing of unblurred throttle-curve drafts
+    await user.clear(curveInput);
+    await user.type(curveInput, '0:0, 0.5:0.4, 1:1');
+    expect(curveInput.value).toBe('0:0, 0.5:0.4, 1:1');
+
     fireEvent.click(screen.getByRole('button', { name: 'Save Custom Part' }));
     await waitFor(() => {
       expect(fake.files.has('parts/actuator.custom-esc.json')).toBe(true);
@@ -349,14 +402,19 @@ describe('Workbench environment (P1-E)', () => {
     const savedEsc = JSON.parse(
       fake.files.get('parts/actuator.custom-esc.json')!,
     ) as PartDefinition;
-    expect(savedEsc.category).toBe('actuator');
-    if (savedEsc.category === 'actuator' && savedEsc.behavior.template === 'esc-motor') {
-      expect(savedEsc.behavior.params.throttleCurve).toEqual([
-        [0, 0],
-        [0.5, 0.4],
-        [1, 1],
-      ]);
-    }
+    expect(savedEsc).toMatchObject({
+      category: 'actuator',
+      behavior: {
+        template: 'esc-motor',
+        params: {
+          throttleCurve: [
+            { input: 0, output: 0 },
+            { input: 0.5, output: 0.4 },
+            { input: 1, output: 1 },
+          ],
+        },
+      },
+    });
   });
 
   it('New Part form covers all controller GPIO fields, chassis mount points and CoG, pin fields, and IMU defaults', async () => {
@@ -783,7 +841,7 @@ describe('Workbench environment (P1-E)', () => {
     fake.files.set('car.json', JSON.stringify(codeEditedCar, null, 2));
 
     // Remount Workbench
-    render(<WorkbenchRoot api={apiWithWatcherHook} />);
+    const { unmount: unmountAfterRemount } = render(<WorkbenchRoot api={apiWithWatcherHook} />);
 
     await waitFor(() => {
       expect(screen.getByTestId('workbench-external-change')).toBeTruthy();
@@ -794,9 +852,17 @@ describe('Workbench environment (P1-E)', () => {
     );
     expect(useWorkbenchStore.getState().dirty).toBe(true);
 
-    // Clicking "Keep mine" dismisses the banner; clicking "Reload from disk" after another change loads disk
+    // Clicking "Keep mine" dismisses the banner AND advances lastSavedCarJson so remounting does not raise the banner again
     fireEvent.click(screen.getByRole('button', { name: 'Keep mine' }));
     expect(screen.queryByTestId('workbench-external-change')).toBeNull();
+
+    unmountAfterRemount();
+    render(<WorkbenchRoot api={apiWithWatcherHook} />);
+    await waitFor(() => {
+      expect(useWorkbenchStore.getState().loaded).toBe(true);
+    });
+    expect(screen.queryByTestId('workbench-external-change')).toBeNull();
+    expect(useWorkbenchStore.getState().car.name).toBe('Dirty Before Tab Switch');
 
     await act(async () => {
       await fake.api.project.writeCar({ ...exampleCar, name: 'Second External Car' });
@@ -985,15 +1051,17 @@ describe('Workbench environment (P1-E)', () => {
     expect(useWorkbenchStore.getState().dirty).toBe(false);
 
     // 1. Trigger a non-forced load() while clean, then edit while readCar is awaiting
+    fake.files.set(
+      'car.json',
+      JSON.stringify({ ...exampleCar, name: 'Disk Car During Load' }, null, 2),
+    );
     interceptReadCar = true;
-    await fake.api.project.writeCar({ ...exampleCar, name: 'Disk Car During Load' });
-    // Reset dirty/externalChange so we can start a non-forced load() while clean
-    act(() => {
-      useWorkbenchStore.setState({ dirty: false, externalChange: false });
-    });
     let loadPromise!: Promise<void>;
     act(() => {
       loadPromise = useWorkbenchStore.getState().load(apiWithDeferredReads);
+    });
+    await waitFor(() => {
+      expect(typeof resolveReadCar).toBe('function');
     });
     // User edits while load() is awaiting readCar()
     fireEvent.change(screen.getByLabelText('Car name'), {
@@ -1224,5 +1292,100 @@ describe('Workbench environment (P1-E)', () => {
     ]);
     expect(within(datasheets).getByText('javascript:alert(1)').tagName).toBe('SPAN');
     expect(within(datasheets).getByText('file:///etc/passwd').tagName).toBe('SPAN');
+  });
+  it('resets unsaved edits and loads fresh when switching from project A to project B, and tracks hasUnsavedWorkbenchChanges (Item 1)', async () => {
+    const projectA = createFakeRcsimApi({ dir: '/projects/car-a' });
+    const projectB = createFakeRcsimApi({ dir: '/projects/car-b' });
+    await projectB.api.project.writeCar({ ...exampleCar, name: 'Project B Car' });
+
+    const { unmount } = render(<WorkbenchRoot api={projectA.api} />);
+
+    await waitFor(() => {
+      expect(useWorkbenchStore.getState().loaded).toBe(true);
+    });
+    expect(useWorkbenchStore.getState().projectDir).toBe('/projects/car-a');
+    expect(hasUnsavedWorkbenchChanges()).toBe(false);
+
+    // Make an unsaved edit in project A
+    fireEvent.change(screen.getByLabelText('Car name'), {
+      target: { value: 'Unsaved Project A Car' },
+    });
+    expect(hasUnsavedWorkbenchChanges()).toBe(true);
+
+    // Switch to project B (shell unmounts and remounts WorkbenchRoot with project B)
+    unmount();
+    render(<WorkbenchRoot api={projectB.api} />);
+
+    await waitFor(() => {
+      expect(useWorkbenchStore.getState().projectDir).toBe('/projects/car-b');
+      expect(useWorkbenchStore.getState().car.name).toBe('Project B Car');
+    });
+
+    expect(hasUnsavedWorkbenchChanges()).toBe(false);
+    expect(useWorkbenchStore.getState().dirty).toBe(false);
+    expect(useWorkbenchStore.getState().externalChange).toBe(false);
+    expect(screen.queryByTestId('workbench-external-change')).toBeNull();
+
+    // Saving in project B writes project B's car, never project A's car
+    fireEvent.click(screen.getByRole('button', { name: /^Save/ }));
+    await waitFor(() => {
+      expect(screen.getByTestId('workbench-save-status')).toBeTruthy();
+    });
+    expect(projectB.files.get('car.json')).toContain('"Project B Car"');
+    expect(projectB.files.get('car.json')).not.toContain('"Unsaved Project A Car"');
+  });
+
+  it('renders a plain no-project state without an example-car button, and reports a failed read while dirty as a read error rather than an external change (Items 5 & 6)', async () => {
+    // Item 5: Mounted when no project is open
+    const baseFake = createFakeRcsimApi();
+    const noProjApi: RcsimApi = {
+      ...baseFake.api,
+      project: {
+        ...baseFake.api.project,
+        current: () => Promise.resolve(null),
+        readCar: () => Promise.reject(new Error('[rcsim:no-project] Open a car project first.')),
+      },
+    };
+    const { unmount: unmountNoProj } = render(<WorkbenchRoot api={noProjApi} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workbench-no-project')).toBeTruthy();
+    });
+    expect(screen.getByTestId('workbench-no-project').textContent).toMatch(/open a project/i);
+    expect(screen.queryByTestId('workbench-load-error')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Start from the example car' })).toBeNull();
+    unmountNoProj();
+
+    // Item 6: Failed read while dirty reports a load error, not an external change banner
+    resetWorkbenchStore();
+    const fake = createFakeRcsimApi();
+    const { unmount } = render(<WorkbenchRoot api={fake.api} />);
+
+    await waitFor(() => {
+      expect(useWorkbenchStore.getState().loaded).toBe(true);
+    });
+
+    fireEvent.change(screen.getByLabelText('Car name'), {
+      target: { value: 'Dirty Car Before Read Failure' },
+    });
+    expect(useWorkbenchStore.getState().dirty).toBe(true);
+
+    // Corrupt car.json on disk while unmounted, then remount
+    unmount();
+    const brokenRaw = '{ "name": "Corrupted", bad json';
+    fake.files.set('car.json', brokenRaw);
+
+    render(<WorkbenchRoot api={fake.api} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workbench-load-error')).toBeTruthy();
+    });
+    expect(screen.getByTestId('workbench-load-error').textContent).toMatch(
+      /Failed to read car\.json/i,
+    );
+    expect(screen.getByTestId('workbench-load-error-raw').textContent).toBe(brokenRaw);
+    expect(screen.queryByTestId('workbench-external-change')).toBeNull();
+    expect(useWorkbenchStore.getState().externalChange).toBe(false);
+    expect(useWorkbenchStore.getState().car.name).toBe('Dirty Car Before Read Failure');
   });
 });

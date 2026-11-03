@@ -17,6 +17,7 @@ export function WorkbenchRoot({ api }: WorkbenchRootProps = {}): ReactNode {
   const car = useWorkbenchStore((s) => s.car);
   const catalog = useWorkbenchStore((s) => s.catalog);
   const issues = useWorkbenchStore((s) => s.issues);
+  const noProject = useWorkbenchStore((s) => s.noProject);
   const loaded = useWorkbenchStore((s) => s.loaded);
   const dirty = useWorkbenchStore((s) => s.dirty);
   const saving = useWorkbenchStore((s) => s.saving);
@@ -63,6 +64,47 @@ export function WorkbenchRoot({ api }: WorkbenchRootProps = {}): ReactNode {
       unsubFiles?.();
     };
   }, [api, load]);
+
+  if (noProject) {
+    return (
+      <div
+        data-testid="workbench-no-project"
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 12,
+          height: '100%',
+          color: '#0f172a',
+        }}
+      >
+        <header
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            padding: '8px 12px',
+            background: '#f8fafc',
+            border: '1px solid #cbd5e1',
+            borderRadius: 6,
+          }}
+        >
+          <h1 style={{ margin: 0, fontSize: 20 }}>Workbench</h1>
+        </header>
+        <div
+          style={{
+            padding: '12px 14px',
+            borderRadius: 6,
+            background: '#f8fafc',
+            border: '1px solid #cbd5e1',
+            color: '#475569',
+            fontSize: 13,
+          }}
+        >
+          Open a project to configure the car in the Workbench.
+        </div>
+      </div>
+    );
+  }
 
   const errorCount = issues.filter((i) => i.severity === 'error').length;
   const warningCount = issues.filter((i) => i.severity === 'warning').length;

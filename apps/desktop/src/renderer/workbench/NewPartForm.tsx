@@ -199,15 +199,25 @@ export function formatNumberArrayParam(rawVal: unknown): string {
   return Array.isArray(rawVal) ? rawVal.join(', ') : '';
 }
 
-export function parseNumberArrayDraft(draft: string): number[] {
-  return draft
-    .split(',')
-    .map((s) => s.trim())
-    .filter((s) => s !== '')
-    .flatMap((s) => {
-      const parsed = parseFiniteDecimal(s);
-      return parsed !== null ? [parsed] : [];
-    });
+export function parseNumberArrayDraft(
+  draft: string,
+): { ok: true; value: number[] } | { ok: false; error: string } {
+  if (draft.trim() === '') {
+    return { ok: true, value: [] };
+  }
+  const tokens = draft.split(',').map((s) => s.trim());
+  const values: number[] = [];
+  for (const token of tokens) {
+    if (token === '') {
+      return { ok: false, error: 'contains an empty list item' };
+    }
+    const parsed = parseFiniteDecimal(token);
+    if (parsed === null) {
+      return { ok: false, error: `invalid number "${token}"` };
+    }
+    values.push(parsed);
+  }
+  return { ok: true, value: values };
 }
 
 export function formatThrottleCurveParam(rawVal: unknown): string {
@@ -220,21 +230,36 @@ export function formatThrottleCurveParam(rawVal: unknown): string {
   return points.map((p) => `${p.input}:${p.output}`).join(', ');
 }
 
-export function parseThrottleCurveDraft(draft: string): ThrottleCurvePoint[] {
-  return draft
-    .split(',')
-    .map((s) => s.trim())
-    .filter((s) => s !== '')
-    .flatMap((pair) => {
-      const parts = pair.split(':').map((s) => s.trim());
-      if (parts.length !== 2) return [];
-      const [inStr, outStr] = parts;
-      if (!inStr || !outStr) return [];
-      const input = parseFiniteDecimal(inStr);
-      const output = parseFiniteDecimal(outStr);
-      if (input === null || output === null) return [];
-      return [{ input, output }];
-    });
+export function parseThrottleCurveDraft(
+  draft: string,
+): { ok: true; value: ThrottleCurvePoint[] } | { ok: false; error: string } {
+  if (draft.trim() === '') {
+    return { ok: true, value: [] };
+  }
+  const pairs = draft.split(',').map((s) => s.trim());
+  const points: ThrottleCurvePoint[] = [];
+  for (const pair of pairs) {
+    if (pair === '') {
+      return { ok: false, error: 'contains an empty throttle curve point' };
+    }
+    const parts = pair.split(':').map((s) => s.trim());
+    if (parts.length !== 2 || !parts[0] || !parts[1]) {
+      return {
+        ok: false,
+        error: `invalid throttle curve point "${pair}" (expected input:output)`,
+      };
+    }
+    const input = parseFiniteDecimal(parts[0]);
+    const output = parseFiniteDecimal(parts[1]);
+    if (input === null || output === null) {
+      return {
+        ok: false,
+        error: `invalid throttle curve point "${pair}" (expected finite numbers)`,
+      };
+    }
+    points.push({ input, output });
+  }
+  return { ok: true, value: points };
 }
 
 type PinVoltageMode = 'none' | 'number' | 'supply' | 'range';
@@ -338,6 +363,7 @@ export function NewPartForm(): ReactNode {
   const createCustomPart = useWorkbenchStore((s) => s.createCustomPart);
 
   const [form, setForm] = useState<NewPartFormState>(createDefaultFormState);
+  const [draftErrors, setDraftErrors] = useState<Readonly<Record<string, string>>>({});
   const [validationErrors, setValidationErrors] = useState<readonly string[]>([]);
   const [submitting, setSubmitting] = useState(false);
 
@@ -388,12 +414,14 @@ export function NewPartForm(): ReactNode {
 
   const resetForm = () => {
     setForm(createDefaultFormState());
+    setDraftErrors({});
     setValidationErrors([]);
   };
 
   if (!newPartOpen) return null;
 
   const handleCategoryChange = (nextCategory: PartCategory) => {
+    setDraftErrors({});
     if (nextCategory === 'sensor') {
       patchForm({
         category: nextCategory,
@@ -452,6 +480,7 @@ export function NewPartForm(): ReactNode {
   };
 
   const handleTemplateChange = (nextTemplate: BehaviorTemplate) => {
+    setDraftErrors({});
     patchForm({
       template: nextTemplate,
       behaviorParams: defaultBehaviorParams(nextTemplate),
@@ -506,15 +535,29 @@ export function NewPartForm(): ReactNode {
 
   const schemaDescriptors = describeBehaviorParamsSchema(template);
 
-  const buildCandidatePart = (): unknown => {
+  const buildCandidatePart = (): {
+    candidate: unknown;
+    submitDraftErrors: Record<string, string>;
+  } => {
     const resolvedBehaviorParams = { ...behaviorParams };
+    const submitDraftErrors: Record<string, string> = {};
     for (const field of schemaDescriptors) {
       const draft = paramDrafts[field.key];
       if (draft === undefined) continue;
       if (field.kind === 'number-array') {
-        resolvedBehaviorParams[field.key] = parseNumberArrayDraft(draft);
+        const parsed = parseNumberArrayDraft(draft);
+        if (!parsed.ok) {
+          submitDraftErrors[field.key] = `${field.key}: ${parsed.error}`;
+        } else {
+          resolvedBehaviorParams[field.key] = parsed.value;
+        }
       } else if (field.kind === 'throttle-curve') {
-        resolvedBehaviorParams[field.key] = parseThrottleCurveDraft(draft);
+        const parsed = parseThrottleCurveDraft(draft);
+        if (!parsed.ok) {
+          submitDraftErrors[field.key] = `${field.key}: ${parsed.error}`;
+        } else {
+          resolvedBehaviorParams[field.key] = parsed.value;
+        }
       }
     }
 
@@ -562,70 +605,89 @@ export function NewPartForm(): ReactNode {
 
     if (category === 'controller') {
       return {
-        ...base,
-        electrical,
-        gpios,
-        gpioMaxInputV,
+        candidate: {
+          ...base,
+          electrical,
+          gpios,
+          gpioMaxInputV,
+        },
+        submitDraftErrors: {},
       };
     }
 
     if (category === 'chassis') {
       return {
-        ...base,
-        wheelbaseMm,
-        trackWidthMm,
-        wheelRadiusMm,
-        maxSteeringAngleDeg,
-        steeringLinkageRatio,
-        driveWheels,
-        finalDriveRatio,
-        centreOfGravityMm,
-        mountPoints,
+        candidate: {
+          ...base,
+          wheelbaseMm,
+          trackWidthMm,
+          wheelRadiusMm,
+          maxSteeringAngleDeg,
+          steeringLinkageRatio,
+          driveWheels,
+          finalDriveRatio,
+          centreOfGravityMm,
+          mountPoints,
+        },
+        submitDraftErrors: {},
       };
     }
 
     if (category === 'passive') {
       return {
-        ...base,
-        behavior: {
-          template,
-          params: resolvedBehaviorParams,
+        candidate: {
+          ...base,
+          behavior: {
+            template,
+            params: resolvedBehaviorParams,
+          },
         },
+        submitDraftErrors,
       };
     }
 
     if (category === 'power') {
       return {
-        ...base,
-        ...(hasElectrical ? { electrical } : {}),
-        behavior: {
-          template,
-          params: resolvedBehaviorParams,
+        candidate: {
+          ...base,
+          ...(hasElectrical ? { electrical } : {}),
+          behavior: {
+            template,
+            params: resolvedBehaviorParams,
+          },
         },
+        submitDraftErrors,
       };
     }
 
     // sensor or actuator
     return {
-      ...base,
-      electrical,
-      ...(i2c ? { i2c } : {}),
-      behavior: {
-        template,
-        params: resolvedBehaviorParams,
+      candidate: {
+        ...base,
+        electrical,
+        ...(i2c ? { i2c } : {}),
+        behavior: {
+          template,
+          params: resolvedBehaviorParams,
+        },
       },
+      submitDraftErrors,
     };
   };
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    const candidate = buildCandidatePart();
+    const { candidate, submitDraftErrors } = buildCandidatePart();
+    setDraftErrors(submitDraftErrors);
     const parsed = PartDefinition.safeParse(candidate);
-    if (!parsed.success) {
+    if (Object.keys(submitDraftErrors).length > 0 || !parsed.success) {
       setValidationErrors(
-        parsed.error.issues.map(
-          (issue) => `${issue.path.length > 0 ? `${issue.path.join('.')}: ` : ''}${issue.message}`,
-        ),
+        parsed.success
+          ? []
+          : parsed.error.issues.map(
+              (issue) =>
+                `${issue.path.length > 0 ? `${issue.path.join('.')}: ` : ''}${issue.message}`,
+            ),
       );
       return;
     }
@@ -693,7 +755,7 @@ export function NewPartForm(): ReactNode {
         </button>
       </div>
 
-      {validationErrors.length > 0 && (
+      {(Object.keys(draftErrors).length > 0 || validationErrors.length > 0) && (
         <div
           role="alert"
           data-testid="new-part-errors"
@@ -707,7 +769,7 @@ export function NewPartForm(): ReactNode {
         >
           <strong>Validation errors:</strong>
           <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
-            {validationErrors.map((err, idx) => (
+            {[...Object.values(draftErrors), ...validationErrors].map((err, idx) => (
               <li key={idx}>{err}</li>
             ))}
           </ul>
@@ -1123,9 +1185,20 @@ export function NewPartForm(): ReactNode {
                         onBlur={() => {
                           const draft = paramDrafts[field.key];
                           if (draft === undefined) return;
-                          const nums = parseNumberArrayDraft(draft);
+                          const parsed = parseNumberArrayDraft(draft);
+                          if (!parsed.ok) {
+                            setDraftErrors((prev) => ({
+                              ...prev,
+                              [field.key]: `${field.key}: ${parsed.error}`,
+                            }));
+                            return;
+                          }
+                          setDraftErrors((prev) => {
+                            const { [field.key]: _removedErr, ...rest } = prev;
+                            return rest;
+                          });
                           const { [field.key]: _removed, ...restDrafts } = paramDrafts;
-                          updateBehaviorParam(field.key, nums, restDrafts);
+                          updateBehaviorParam(field.key, parsed.value, restDrafts);
                         }}
                       />
                     </label>
@@ -1153,8 +1226,19 @@ export function NewPartForm(): ReactNode {
                           const draft = paramDrafts[field.key];
                           if (draft === undefined) return;
                           const parsedPoints = parseThrottleCurveDraft(draft);
+                          if (!parsedPoints.ok) {
+                            setDraftErrors((prev) => ({
+                              ...prev,
+                              [field.key]: `${field.key}: ${parsedPoints.error}`,
+                            }));
+                            return;
+                          }
+                          setDraftErrors((prev) => {
+                            const { [field.key]: _removedErr, ...rest } = prev;
+                            return rest;
+                          });
                           const { [field.key]: _removed, ...restDrafts } = paramDrafts;
-                          updateBehaviorParam(field.key, parsedPoints, restDrafts);
+                          updateBehaviorParam(field.key, parsedPoints.value, restDrafts);
                         }}
                       />
                     </label>
