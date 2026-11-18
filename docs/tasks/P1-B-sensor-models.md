@@ -1,6 +1,6 @@
 # P1-B — sim-core: sensor models
 
-Status: in-review
+Status: done
 Agent: OpenCode (freebeam)
 Branch: ws/p1-b
 Depends on: P1-A
@@ -51,3 +51,12 @@ Delivering readings to firmware (P1-H), the camera.
 - **Contract change requests**: None.
 - **Open questions**: HC-SR04 start delay assumed 200 µs (8 cycles at 40 kHz); battery pack voltage uses cell nominal (stage 1).
 - **Review round 1**: Addressed all blocking items: IMU chip-axis mapping (gravity on chip Z, yaw on chip gyro Z) including rotated placement; HC-SR04 echo anchored on TRIG falling edge with tick-straddle and stale-edge purge, plus ~38 ms timeout pulse; detection by TRIG/ECHO pins; rejection of sub-10 µs TRIG; exact update-rate accumulator (30 Hz -> 30 readings/s); ToF test strengthened (count, ±3σ, sample std); out-of-range wall just past max range with mm 8190; seed-independence also checks extra sensor produced readings; voltage divider uses `dividerRatio()`, per-reading `packVoltage()`, throws on missing battery, rate from part if defined; IMU bias constants named/commented, gravity constant, noise bandwidth comment; shared `test-helpers.ts` without `as never`. Full `pnpm verify` passes.
+
+- **Merged** (orchestrator, 2026-11-18): review round 2 approved `1cafd0c`; CI green on Linux and macOS. Accepted edits outside the owned path: the `index.ts` export, the `run/default-models.ts` wiring and the `run.test.ts` golden hash (the reviewer reproduced the old hash by emptying `sensors[].beams`, so the hash change is beams-only). Non-blocking follow-ups, not fixed:
+  - `imu.test.ts`: the rotated-placement test checks only `|gyro[2]|`, which no placement yaw changes. Add accel assertions on chip X/Y for a yawed and a pitched placement so an axis or rotation-order regression fails.
+  - `distance.test.ts`: the σ check uses 30 samples (±20% band, about 13% standard error); no multi-second accumulator test.
+  - `voltage.ts`: a divider on a car with no battery throws on the first reading rather than at `createRun`, and it uses the first battery regardless of what `IN` is wired to. The `updateHz ?? 10` cast is dead code because `VoltageDividerParams` has no `updateHz`, so every divider reads at 10 Hz. Either add the field to the part schema (contract) or make the constant explicit.
+  - `GRAVITY_MS2` is a fourth local 9.81 (`world.ts`, `vehicle.ts`, `imu.ts`). A shared constant needs an `api` addition.
+  - `voltage.test.ts` still has its own `makeSource` and `as never`.
+  - `distance.ts`: an HC-SR04 with only TRIG or only ECHO wired falls back to ToF; noise can report `valid` just past `maxRangeM`; a TRIG during a pending echo isn't suppressed.
+  - No test for stale-edge purging or pin-based HC-SR04 detection.
