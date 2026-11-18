@@ -5,6 +5,7 @@ import {
   LIMITS,
   PROTOCOL_VERSION,
   ProtocolError,
+  encodeFrame,
   type Message,
   type NetFaults,
   type Reading,
@@ -164,7 +165,8 @@ export class FirmwareSource implements ActuatorSource {
       // A rebooted board finds the same network conditions as before it went down...
       this.#resendFaults = this.#lastFaults !== undefined;
       // ...but its pins are no longer driven: whatever PWM the old firmware held is gone.
-      this.#lostPwm = [...this.#activePwm];
+      // (A reset still waiting to be reported stays: restarts may come back to back.)
+      this.#lostPwm = [...new Set([...this.#lostPwm, ...this.#activePwm])];
       this.#activePwm.clear();
       await this.#launch();
     });
@@ -280,22 +282,26 @@ export class FirmwareSource implements ActuatorSource {
     }
     if (hello.message.protocolVersion !== PROTOCOL_VERSION) {
       const message = `firmware speaks sim-protocol ${hello.message.protocolVersion}; this sim speaks ${PROTOCOL_VERSION}`;
-      await channel.send({ type: 'BYE', reason: 'version-mismatch', message });
+      // Never wait on a write to a firmware that may not be reading.
+      void channel.send({ type: 'BYE', reason: 'version-mismatch', message });
       await this.#terminateProcess();
       this.#state = 'ended';
       throw new ActuatorSourceEnded({ kind: 'error', message });
     }
     this.#checkNotStopped();
-    await channel.send({
-      type: 'CONFIG',
-      protocolVersion: PROTOCOL_VERSION,
-      tickUs: setup.tickUs,
-      seed: setup.seed,
-      halCallCostNs: HAL_CALL_COST_NS,
-      loopCostNs: LOOP_COST_NS,
-      net: { bindAddress: this.#bindAddress },
-      devices: setup.devices,
-    });
+    const sent = await this.#wait(
+      channel.send({
+        type: 'CONFIG',
+        protocolVersion: PROTOCOL_VERSION,
+        tickUs: setup.tickUs,
+        seed: setup.seed,
+        halCallCostNs: HAL_CALL_COST_NS,
+        loopCostNs: LOOP_COST_NS,
+        net: { bindAddress: this.#bindAddress },
+        devices: setup.devices,
+      }),
+    );
+    if (sent.kind !== 'value') throw await this.#endOf(sent);
     this.#expect = { kind: 'none' };
   }
 
@@ -346,11 +352,9 @@ export class FirmwareSource implements ActuatorSource {
       throw new ActuatorSourceEnded({ kind: 'error', message: 'the firmware has already ended' });
     }
 
-    let step: Step;
+    let frame: Uint8Array;
     try {
-      step = this.#buildStep(input);
-      this.#expect = { kind: 'step-done', tick: input.tick };
-      await channel.send(step); // a dead connection shows up as `closed` below
+      frame = encodeFrame(this.#buildStep(input));
     } catch (error) {
       if (error instanceof ProtocolError) {
         throw await this.#fail(proc, {
@@ -360,11 +364,24 @@ export class FirmwareSource implements ActuatorSource {
       }
       throw error;
     }
+    this.#expect = { kind: 'step-done', tick: input.tick };
 
-    const event = await this.#receive();
+    // Sending the STEP and waiting for its STEP_DONE are one wait under one stall
+    // timer: a firmware that isn't reading (its socket full) stalls the tick like
+    // one that never answers. A dead connection shows up as `closed`.
+    const answered = await this.#wait(
+      (async () => {
+        await channel.sendFrame(frame);
+        return this.#nextEvent();
+      })(),
+    );
+    const event = answered.kind === 'value' ? answered.value : answered;
     if (event.kind !== 'message' || event.message.type !== 'STEP_DONE') {
       throw await this.#unexpected(event);
     }
+    // A frame that went wrong right behind the answer ends the run at this tick.
+    const behind = channel.peek();
+    if (behind?.kind === 'malformed') throw await this.#endOf(behind);
     const done = event.message; // `#accept` has checked that it answers this tick
     // A rebooted firmware starts with nothing driving its pins: say so first, so
     // anything it sets up in this very tick still wins.
@@ -416,7 +433,8 @@ export class FirmwareSource implements ActuatorSource {
   // ---- waiting, and what the ways of not getting an answer mean ----
 
   #nextEvent(): Promise<ChannelEvent> {
-    const channel = this.#channel as Channel;
+    const channel = this.#channel;
+    if (!channel) return Promise.resolve({ kind: 'closed' });
     this.#nextPromise ??= channel.next().finally(() => {
       this.#nextPromise = undefined;
     });
@@ -483,7 +501,7 @@ export class FirmwareSource implements ActuatorSource {
       return new ActuatorSourceEnded({ kind: 'finished' });
     }
     if (what.kind === 'timeout') {
-      await this.#channel?.send({ type: 'BYE', reason: 'stalled', message: 'no STEP_DONE' });
+      void this.#channel?.send({ type: 'BYE', reason: 'stalled', message: 'no STEP_DONE' });
       this.#state = 'ended';
       proc.kill('SIGKILL');
       await proc.exit.catch(() => undefined);
@@ -565,15 +583,13 @@ export class FirmwareSource implements ActuatorSource {
     this.#channel = undefined;
     this.#nextPromise = undefined;
     if (!proc) return;
+    // The deadline starts first, and nothing below waits on the socket: a firmware
+    // that isn't reading leaves a write pending for good.
+    const handle = setTimeout(() => proc.kill('SIGKILL'), EXIT_GRACE_MS);
     if (channel && !channel.closed) {
-      try {
-        await channel.send({ type: 'BYE', reason: 'shutdown', message: 'the sim is stopping' });
-      } catch {
-        // the peer is gone already
-      }
+      void channel.send({ type: 'BYE', reason: 'shutdown', message: 'the sim is stopping' });
       channel.end();
     }
-    const handle = setTimeout(() => proc.kill('SIGKILL'), EXIT_GRACE_MS);
     try {
       await proc.exit.catch(() => undefined);
     } finally {

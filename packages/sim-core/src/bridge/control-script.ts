@@ -122,12 +122,23 @@ export interface UndeliveredEntry extends ControlEntry {
   readonly reason: 'port-never-listened' | 'run-ended-first';
 }
 
+type Target = { readonly hostPort: number; readonly bindAddress: string };
+
 interface Client {
   readonly socket: net.Socket;
   /** Settles when connected; rejects with the connect error. */
   readonly connected: Promise<void>;
   isConnected: boolean;
 }
+
+/**
+ * The most control-line bytes one tick may deliver. The firmware reads its
+ * sockets only while it runs a tick, so what is written before the tick has to
+ * fit in the kernel's buffers (send queue plus the peer's receive queue,
+ * 128 KiB or more on Linux and macOS loopback by default) without anyone
+ * reading it. 32 KiB leaves room for the previous ticks' unread input.
+ */
+export const MAX_CONTROL_BYTES_PER_TICK = 32 * 1024;
 
 /**
  * An `ActuatorSource` that plays a control timeline into the firmware it
@@ -140,13 +151,28 @@ interface Client {
  * the host port hal chose doesn't matter. An entry whose port isn't listening
  * yet waits, and so does everything after it.
  *
- * **Never blocking.** A write is queued on the socket and not waited for: the
- * firmware reads its sockets only while it runs a tick, so a step that waited
- * for the firmware to drain what it was sent could never finish. The only
- * wait here is the first connection, which the kernel completes without the
- * firmware (and which counts against the stall timeout like any other wait).
- * Lines too many to fit the socket's buffers reach the firmware over the
- * following ticks, as they would reach a real car over a real network.
+ * **Determinism.** The same firmware, world, seed and timeline must give a
+ * bit-identical run, faults included, so every byte due for a tick has to be
+ * in the firmware's receive buffer before that tick's STEP is sent: hal's
+ * loss, latency and receive times depend on what is readable when it polls.
+ * The step therefore writes the due lines, waits for the writes to complete
+ * (the bytes are the kernel's), and only then sends STEP. What this relies on:
+ * on loopback TCP the kernel queues a segment on the peer's socket as part
+ * of the sender's `write` (Linux: the loopback device delivers through the
+ * sending CPU's softirq, run as the sender leaves its syscall; macOS: the
+ * loopback interface processes input in the sender's context). POSIX doesn't
+ * promise this, and delivery deferred to a kernel thread (Linux's ksoftirqd
+ * under extreme load) could still land late; macOS is not verified here. The
+ * guarantee that needs no kernel cooperation is a STEP field carrying scripted
+ * TCP payloads to hal (a sim-protocol change, proposed in the P1-H handoff).
+ *
+ * **Bounded.** The wait must end even though the firmware drains its socket
+ * only while stepping, so one tick delivers at most
+ * `MAX_CONTROL_BYTES_PER_TICK` bytes: more is an `error` end ("control input
+ * for tick N exceeds ..."), not a hang or a stall. A write that still doesn't
+ * complete within the stall timeout (the firmware's buffers are full because it
+ * isn't reading) is an `error` too. An entry counts as delivered only once its
+ * write has completed; the rest is reported by `undelivered()`.
  *
  * The car's replies (hello, telemetry) are read and kept in `received`.
  */
@@ -156,7 +182,10 @@ export class ControlledSource implements ActuatorSource {
   readonly #inner: ActuatorSource;
   readonly #entries: readonly ControlEntry[];
   readonly #stallMs: number;
-  #next = 0;
+  readonly #delivered: boolean[];
+  /** Everything before this index is delivered. */
+  #cursor = 0;
+  #count = 0;
   readonly #listening = new Map<number, { hostPort: number; bindAddress: string }>();
   readonly #everListened = new Set<number>();
   readonly #clients = new Map<number, Client>();
@@ -168,20 +197,29 @@ export class ControlledSource implements ActuatorSource {
   ) {
     this.#inner = inner;
     this.#entries = entries;
+    this.#delivered = new Array<boolean>(entries.length).fill(false);
     this.#stallMs = options.stallTimeoutMs ?? DEFAULT_STALL_TIMEOUT_MS;
   }
 
-  /** Lines not yet sent. */
+  /** Entries not yet delivered. */
   get pending(): number {
-    return this.#entries.length - this.#next;
+    return this.#entries.length - this.#count;
   }
 
   /** The entries the run has not delivered (so far), with why. */
   undelivered(): readonly UndeliveredEntry[] {
-    return this.#entries.slice(this.#next).map((entry) => ({
-      ...entry,
-      reason: this.#everListened.has(entry.port) ? 'run-ended-first' : 'port-never-listened',
-    }));
+    return this.#entries.flatMap((entry, i) =>
+      this.#delivered[i]
+        ? []
+        : [
+            {
+              ...entry,
+              reason: this.#everListened.has(entry.port)
+                ? ('run-ended-first' as const)
+                : ('port-never-listened' as const),
+            },
+          ],
+    );
   }
 
   /** A sentence naming the undelivered entries and their ports, or undefined when all went out. */
@@ -205,15 +243,7 @@ export class ControlledSource implements ActuatorSource {
   }
 
   async step(input: TickInput): Promise<TickOutput> {
-    while (this.#next < this.#entries.length) {
-      const entry = this.#entries[this.#next] as ControlEntry;
-      if (entry.tUs > input.t0Us) break; // not before its time
-      const target = this.#listening.get(entry.port);
-      if (!target) break;
-      const client = await this.#client(entry.port, target);
-      client.socket.write(`${entry.line}\n`);
-      this.#next += 1;
-    }
+    await this.#deliverDue(input);
     const output = await this.#inner.step(input);
     for (const event of output.netEvents) {
       if (event.type === 'listen' && event.proto === 'tcp') {
@@ -243,8 +273,77 @@ export class ControlledSource implements ActuatorSource {
     await this.#inner.stop();
   }
 
+  /** Writes the entries due at this tick and waits until they are the kernel's. */
+  async #deliverDue(input: TickInput): Promise<void> {
+    // Collect first, per port in time order, so an excess fails before anything is written.
+    const batches = new Map<number, { indices: number[]; text: string[] }>();
+    let bytes = 0;
+    let count = 0;
+    for (let i = this.#cursor; i < this.#entries.length; i += 1) {
+      if (this.#delivered[i]) continue;
+      const entry = this.#entries[i] as ControlEntry;
+      if (entry.tUs > input.t0Us) break; // not before its time
+      if (!this.#listening.has(entry.port)) break;
+      bytes += Buffer.byteLength(entry.line) + 1;
+      count += 1;
+      if (bytes > MAX_CONTROL_BYTES_PER_TICK) {
+        throw new ActuatorSourceEnded({
+          kind: 'error',
+          message: `control input for tick ${input.tick} exceeds ${MAX_CONTROL_BYTES_PER_TICK} bytes (${count}+ entries due; the firmware reads its sockets only while it steps, so more than that could not be delivered before the tick)`,
+        });
+      }
+      const batch = batches.get(entry.port) ?? { indices: [], text: [] };
+      batch.indices.push(i);
+      batch.text.push(`${entry.line}\n`);
+      batches.set(entry.port, batch);
+    }
+    if (batches.size === 0) return;
+
+    const writes: Promise<void>[] = [];
+    for (const [port, batch] of batches) {
+      const client = await this.#client(port, this.#listening.get(port) as Target);
+      writes.push(
+        new Promise<void>((resolve) => {
+          client.socket.write(batch.text.join(''), (error) => {
+            if (error) {
+              // The firmware dropped the connection (newer client, closed it): the
+              // entries stay undelivered and go out again over a new connection.
+              this.#drop(port);
+            } else {
+              for (const i of batch.indices) this.#delivered[i] = true;
+              this.#count += batch.indices.length;
+            }
+            resolve();
+          });
+        }),
+      );
+    }
+    await this.#withinStall(
+      Promise.all(writes),
+      () =>
+        new ActuatorSourceEnded({
+          kind: 'error',
+          message: `control input for tick ${input.tick} did not drain within ${this.#stallMs} ms (${bytes} bytes): the firmware's socket buffers are full because it is not reading them`,
+        }),
+    );
+    while (this.#cursor < this.#entries.length && this.#delivered[this.#cursor]) this.#cursor += 1;
+  }
+
+  /** Waits for `promise`, but no longer than the stall timeout: then `timeout()` is thrown. */
+  async #withinStall<T>(promise: Promise<T>, timeout: () => Error): Promise<T> {
+    let timer: NodeJS.Timeout | undefined;
+    const late = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(timeout()), this.#stallMs);
+    });
+    try {
+      return await Promise.race([promise, late]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   /** The connection to a firmware port, opened if needed and connected before it is used. */
-  async #client(port: number, target: { hostPort: number; bindAddress: string }): Promise<Client> {
+  async #client(port: number, target: Target): Promise<Client> {
     let client = this.#clients.get(port);
     if (!client || client.socket.destroyed) {
       client = this.#connect(port, target);
@@ -252,23 +351,15 @@ export class ControlledSource implements ActuatorSource {
     }
     if (!client.isConnected) {
       // Connecting is the kernel's job, but a wait is a wait: it gets the stall timeout.
-      let timer: NodeJS.Timeout | undefined;
-      const timeout = new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () => reject(new ActuatorSourceEnded({ kind: 'stalled', afterMs: this.#stallMs })),
-          this.#stallMs,
-        );
-      });
-      try {
-        await Promise.race([client.connected, timeout]);
-      } finally {
-        clearTimeout(timer);
-      }
+      await this.#withinStall(
+        client.connected,
+        () => new ActuatorSourceEnded({ kind: 'stalled', afterMs: this.#stallMs }),
+      );
     }
     return client;
   }
 
-  #connect(port: number, target: { hostPort: number; bindAddress: string }): Client {
+  #connect(port: number, target: Target): Client {
     const socket = net.connect({ host: target.bindAddress, port: target.hostPort });
     socket.setNoDelay(true);
     socket.setEncoding('utf8');

@@ -101,16 +101,12 @@ describe('1. per-tick waits do not accumulate', () => {
 });
 
 describe('2. control input never blocks a tick', () => {
-  it('keeps stepping while the firmware has megabytes of control lines to drain', async () => {
-    const line = 'x'.repeat(4000);
-    const entries = parseControlScript(Array.from({ length: 2000 }, () => ({ tUs: 1000, line })));
+  async function runWith(entries: ReturnType<typeof parseControlScript>, ticks: number) {
     const source = own(
       withControlScript(
         createFirmwareSource({ binary: built.control as string, stallTimeoutMs: 100 }),
         entries,
-        {
-          stallTimeoutMs: 100,
-        },
+        { stallTimeoutMs: 100 },
       ),
     );
     const run = await createRun({
@@ -121,14 +117,36 @@ describe('2. control input never blocks a tick', () => {
       seed: 1,
       source,
     });
-    const stepping = run.step(60);
     const outcome = await Promise.race([
-      stepping,
+      run.step(ticks),
       new Promise<'hung'>((resolve) => setTimeout(() => resolve('hung'), 15_000)),
     ]);
-    expect(outcome).not.toBe('hung');
-    expect(outcome).toMatchObject({ ticks: 60, status: 'running' });
     await run.stop();
+    return outcome;
+  }
+
+  it('keeps stepping while the firmware has tens of KiB of control lines to read', async () => {
+    // 8 lines of 4000 bytes in each of three ticks, read by the sketch at a line per ms.
+    const line = 'x'.repeat(4000);
+    const entries = parseControlScript(
+      [1000, 2000, 3000].flatMap((tUs) => Array.from({ length: 8 }, () => ({ tUs, line }))),
+    );
+    const outcome = await runWith(entries, 60);
+    expect(outcome).toMatchObject({ ticks: 60, status: 'running' });
+  }, 30_000);
+
+  it('ends with a clear error, not a hang, when one tick is due more than it can deliver', async () => {
+    const line = 'x'.repeat(4000);
+    const entries = parseControlScript(Array.from({ length: 2000 }, () => ({ tUs: 1000, line })));
+    const outcome = await runWith(entries, 60);
+    expect(outcome).not.toBe('hung');
+    expect(outcome).toMatchObject({
+      status: 'ended',
+      end: {
+        kind: 'error',
+        message: expect.stringMatching(/control input for tick 1 exceeds 32768 bytes/) as unknown,
+      },
+    });
   }, 30_000);
 });
 

@@ -50,12 +50,25 @@ export class Channel {
     });
   }
 
+  /** The next event without consuming it, if one is already queued. */
+  peek(): ChannelEvent | undefined {
+    return this.#queue[0];
+  }
+
   /** Writes one frame. Resolves false when the connection is gone (the write is dropped). */
   send(message: Message): Promise<boolean> {
+    return this.sendFrame(encodeFrame(message)); // throws ProtocolError for an oversize message
+  }
+
+  /**
+   * Writes an encoded frame. The promise settles when the frame has been
+   * handed to the kernel, which takes as long as the peer needs to make room
+   * when its buffers are full: a caller that must not wait forever bounds it.
+   */
+  sendFrame(frame: Uint8Array): Promise<boolean> {
     if (this.#closed || this.#socket.destroyed || !this.#socket.writable) {
       return Promise.resolve(false);
     }
-    const frame = encodeFrame(message); // throws ProtocolError for an oversize message
     return new Promise((resolve) => {
       this.#socket.write(frame, (error) => resolve(error == null));
     });
@@ -83,20 +96,26 @@ export class Channel {
 
   #onData(chunk: Uint8Array): void {
     if (this.#closed) return;
+    let decoded: readonly Message[];
+    let malformed: string | undefined;
     try {
-      for (const message of this.#decoder.push(chunk)) {
-        const reason = this.#accept?.(message);
-        if (reason !== undefined) {
-          this.#reject(reason);
-          return;
-        }
-        this.#push({ kind: 'message', message });
-      }
+      decoded = this.#decoder.push(chunk);
     } catch (error) {
       if (!(error instanceof ProtocolError)) throw error;
-      for (const message of error.decoded) this.#push({ kind: 'message', message });
-      this.#reject(error.message);
+      // The frames completed before the bad one are judged like any others,
+      // in order: the first violation, wherever it is, ends the connection.
+      decoded = error.decoded;
+      malformed = error.message;
     }
+    for (const message of decoded) {
+      const reason = this.#accept?.(message);
+      if (reason !== undefined) {
+        this.#reject(reason);
+        return;
+      }
+      this.#push({ kind: 'message', message });
+    }
+    if (malformed !== undefined) this.#reject(malformed);
   }
 
   /** A protocol violation: tell the peer, report it to the reader, accept nothing more. */
