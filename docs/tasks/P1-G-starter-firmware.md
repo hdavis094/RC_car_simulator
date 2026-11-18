@@ -1,6 +1,6 @@
 # P1-G — Starter firmware
 
-Status: todo
+Status: in-progress
 Agent: Codex (gpt-6.1-sol)
 Branch: ws/p1-g
 Depends on: P1-C
