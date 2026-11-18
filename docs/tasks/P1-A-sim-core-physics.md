@@ -1,6 +1,6 @@
 # P1-A — sim-core: clock, world, vehicle physics, actuators
 
-Status: in-review
+Status: done
 Agent: Claude (Sonnet sub-agent)
 Branch: ws/p1-a
 Depends on: P0 (all)
@@ -152,3 +152,12 @@ All three items are fixed, and the `isEnabled()` question is answered. Status st
 - **Refresh is not neutral to contacts (accepted).** `#refreshGroundIndex` discards the car's established solver contacts, so a car pushing against something when a ramp is edited sees its next velocity shift by about 1e-4 m/s. Identical edits at identical ticks still match bit-for-bit, and the first-step refresh has no contacts to lose. This is a comment on `#refreshGroundIndex`. The "leaves a car with no contacts bit-identical" test is reworded to say it covers only a car with no contacts.
 - **`isEnabled()` (answered).** After `setEnabled(true)` the collider's `isEnabled()` reads `false` because Rapier propagates the parent body's enabled state to its colliders during the next physics step (`src/pipeline/user_changes.rs`). It is restored before `World.step()` returns, and no wrong results come from it. This closes the open note in round 2.
 
+
+### Merged (orchestrator, 2026-11-18)
+
+Review round 4 (Codex) approved `0114650` with no findings; CI green on Linux and macOS. Answers to the open questions:
+
+- **Contract change request** (`maxSteeringAngleDeg`): accepted. The schema description now says "virtual centre wheel" (`cddbc5c`).
+- **`--firmware`**: P1-H wires it. Its brief owns the `--firmware` and `--control` CLI options in `src/scenario/` and implements `CreateFirmwareSource`.
+- **Cross-platform determinism**: the macOS CI job (Apple Silicon) reproduces the golden hash. Intel macOS is still unverified.
+- **Tuning**: P2-01 retunes against the v1 scenario.
