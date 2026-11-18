@@ -1,10 +1,10 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { Diagnostic, ProjectInfo, RcsimApi } from '../../shared/ipc.ts';
 import { parseIpcError } from '../../shared/ipc.ts';
 import { TerminalRoot } from '../terminal/index.ts';
 import { useEditorStore } from '../terminal/editor-state.ts';
 import { WorkbenchRoot } from '../workbench/index.ts';
-import { WorldRoot } from '../world/index.ts';
+import { WorldRoot, createWorldDockTabs } from '../world/index.ts';
 import { BottomPanel } from './BottomPanel.tsx';
 import { ENVIRONMENTS, useEnvironmentStore, type Environment } from './environment-store.ts';
 import { useSessionStore } from './session.ts';
@@ -32,6 +32,9 @@ export function App({ api = window.rcsim }: { api?: RcsimApi }): ReactNode {
   const documents = useEditorStore((state) => state.documents);
   const active = useEditorStore((state) => state.active);
   const report = (error: unknown): void => setError(parseIpcError(error).message);
+  // World's dock tabs (the Network Console) stay mounted across environments while a project is
+  // open, so the console keeps its history like the Serial Monitor does.
+  const worldDockTabs = useMemo(() => createWorldDockTabs(api), [api]);
 
   useEffect(() => {
     let alive = true;
@@ -248,10 +251,12 @@ export function App({ api = window.rcsim }: { api?: RcsimApi }): ReactNode {
             <TerminalRoot api={api} {...(project ? { projectDir: project.dir } : {})} />
           </div>
           <div className="environment-page" hidden={current !== 'world'}>
-            <WorldRoot />
+            <WorldRoot api={api} />
           </div>
         </main>
-        {project ? <BottomPanel api={api} projectDir={project.dir} jump={jump} /> : null}
+        {project ? (
+          <BottomPanel api={api} projectDir={project.dir} jump={jump} tabs={worldDockTabs} />
+        ) : null}
       </div>
       <footer className="status-bar">
         <span>

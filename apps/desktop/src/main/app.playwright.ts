@@ -207,6 +207,21 @@ test('Serial Monitor receives the run serial stream, keeps history between tabs,
   await expect(page.getByLabel('Serial output')).not.toContainText('Firmware ready');
 });
 
+test('the shared dock offers the Network Console in every environment', async () => {
+  const page = await app.firstWindow();
+  const environments = page.getByRole('navigation', { name: 'Environments' });
+  for (const name of ['Terminal', '3D World', 'Workbench'] as const) {
+    await environments.getByRole('button', { name, exact: true }).click();
+    const tab = page
+      .getByLabel('Shared bottom panel')
+      .getByRole('tab', { name: 'Network Console', exact: true });
+    await expect(tab).toHaveCount(1);
+    await tab.click();
+    await expect(page.getByTestId('network-console')).toBeVisible();
+  }
+  await page.getByRole('tab', { name: 'Build output', exact: true }).click();
+});
+
 test('renderer reload disposes a shell created without a React cleanup hook', async () => {
   const page = await app.firstWindow();
   const { ptyId } = await page.evaluate(() => window.rcsim.pty.spawn({ cols: 80, rows: 24 }));
