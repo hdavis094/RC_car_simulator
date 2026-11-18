@@ -1,10 +1,17 @@
 import { parseArgs } from 'node:util';
+import { ActuatorSourceEnded } from '../api/actuator-source.ts';
 import { parseAssertion, type ScenarioSpec } from '../api/scenario.ts';
 import { ScenarioInputError, readWorld, runScenario, type ScenarioIo } from './runner.ts';
 
 const USAGE = `usage: rcsim run --car <car.json> --world <world.json> --seconds <n> [options]
 
   --script <timeline.json>   scripted PWM timeline: [{"tUs":0,"gpio":26,"pulseUs":1500}, ...]
+  --firmware <binary>        run firmware built by hal's build-sim (<project>/.rcsim/build/firmware)
+                             in place of --script
+  --control <timeline.json>  with --firmware: control-protocol lines sent to the firmware's
+                             TCP server at given sim times:
+                             [{"tUs":1000000,"message":{"t":"drive","seq":1,"throttle":0.3,"steer":0}}]
+                             (optional "port", or "line" for raw text; "everyMs" with "untilUs" repeats)
   --seed <n>                 seed for all randomness (default: the world file's)
   --tick-us <n>              tick length in microseconds (default 1000)
   --assert <expr>            assertion, repeatable: "collisions == 0", "laps >= 1",
@@ -105,6 +112,24 @@ export async function main(argv: readonly string[], io: CliIo = {}): Promise<num
       err(`rcsim: ${(error as Error).message}\n\n${USAGE}\n`);
       return 2;
     }
+    // The firmware failed before the first tick (it crashed, never connected, spoke another protocol).
+    if (error instanceof ActuatorSourceEnded) {
+      err(`rcsim: the firmware failed to start: ${describeEnd(error.end)}\n`);
+      return 1;
+    }
     throw error;
+  }
+}
+
+function describeEnd(end: ActuatorSourceEnded['end']): string {
+  switch (end.kind) {
+    case 'crashed':
+      return `crashed (${end.signal ?? `exit code ${end.exitCode}`})${end.stderrTail.length ? `\n${end.stderrTail.join('\n')}` : ''}`;
+    case 'stalled':
+      return `no answer within ${end.afterMs} ms`;
+    case 'error':
+      return end.message;
+    case 'finished':
+      return 'finished';
   }
 }

@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@dimforge/rapier3d-deterministic-compat": "^0.21.0",
+    "@rcsim/control-protocol": "workspace:*",
     "@rcsim/schema": "workspace:*",
     "@rcsim/sim-protocol": "workspace:*"
   },

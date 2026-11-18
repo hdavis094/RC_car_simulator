@@ -1,0 +1,66 @@
+# Firmware bridge
+
+Runs a firmware process (built by hal's `build-sim`) in lockstep with a `Run`, over [sim-protocol](../../../sim-protocol/SPEC.md). It implements `ActuatorSource` (`createFirmwareSource`); everything else about a tick (PWM into actuator models, GPIO writes to sensor models, readings and edges back) is the `Run`'s, as documented in `api/README.md`.
+
+| File                  | What                                                                                                           |
+| --------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `firmware-source.ts`  | `FirmwareSource`: the socket server, process, handshake, one STEP/STEP_DONE per tick, stall/crash/restart/stop |
+| `channel.ts`          | one connection: frames in and out, queued events                                                               |
+| `process.ts`          | one firmware process: stderr tail, exit status                                                                 |
+| `control-script.ts`   | `--control` timelines, and `ControlledSource`, which plays them into a firmware's TCP server                   |
+| `fixtures/*/main.cpp` | sketches the tests build with `build-sim`                                                                      |
+
+## How it behaves
+
+- `start` listens on `/tmp/rcsim-<pid>-<n>.sock`, spawns the binary with `RCSIM_SOCKET` (working directory: the project when the binary is `<project>/.rcsim/build/firmware`), reads `HELLO`, answers `CONFIG` (the `Run`'s device table; `halCallCostNs` 1000, `loopCostNs` 5000). A firmware speaking another protocol version gets `BYE(version-mismatch)`.
+- `step` sends one `STEP`: readings get their device index and are ordered by device, then time; at most 16 KiB of Serial RX goes in one `STEP` and the rest follows in later ticks (hal's own RX queue holds 16 KiB and drops the excess, as a UART buffer would). Writing the `STEP` and waiting for its `STEP_DONE` are one wait under one stall timer, so a firmware that isn't reading its socket stalls the tick like one that never answers.
+- **Starting has its own deadline**, `startupTimeoutMs` (default 10 000; a bridge option beside the contract's `FirmwareSourceOptions`): spawn, connect, `HELLO`, `CONFIG`, also on `restart`. It is **one budget** from spawn to `CONFIG` sent, however it is spent across those phases, and `afterMs` reports the real elapsed time. A slow process start on a busy machine is not a stalled step. Exceeding it ends the start as `stalled` with `afterMs` of that timeout.
+- **No answer to a `STEP` in `stallTimeoutMs` of wall time** (default 2000, per step): `BYE(stalled)`, SIGKILL, `ActuatorSourceEnded({kind:'stalled'})`. This is the only wall-clock read in sim-core (ADR 0003).
+- **Frames are handled one at a time, in wire order, however the bytes were chunked** (one chunk, byte by byte, any split: same ticks, clock, serial and end). A frame that is valid in the current state is applied fully: a valid `STEP_DONE` completes its tick and its outputs stand. The first invalid frame ends the connection with `BYE(malformed)`; nothing before it is rolled back, nothing after it is processed, and the run ends at the next tick's wait.
+- **Messages are checked as they arrive**, against the protocol's state then: `HELLO` only first, `STEP_DONE` only while a `STEP` with that tick is outstanding and unanswered, `BYE` any time. Anything else (a `STEP_DONE` before `CONFIG`, a duplicate, a wrong tick, an invalid frame) gets `BYE(malformed)` and the run ends `{kind:'error'}`, as SPEC.md says.
+- **The process dies or the connection drops**: `{kind:'crashed', exitCode, signal, stderrTail}`; a firmware `BYE` message is appended to the tail. A message too big to send is `{kind:'error'}` too.
+- `restart` (the app's "reboot") ends the process politely, spawns a new one on the same socket, and handshakes again; the next `STEP` carries the run's current tick, so `setup()` runs at that tick and the firmware's own `millis()` starts at 0. Network faults set before the reboot are sent again, and every PWM pin the old firmware was driving is reported stopped (`periodUs` 0) with the next tick, as a board reset releases its pins: an armed ESC loses its signal and disarms, and a servo holds. Whatever the new firmware sets up in that same tick follows and wins.
+- **The firmware is the leader of its own process group** (spawned `detached`, POSIX, fine on macOS), and kills (`stop`, stall, `killAllFirmware`) signal the whole group, so helpers it started die with it. The stall and stop paths signal the group *before* waiting for the exit, while the leader is alive; `stop` no longer gives the firmware a grace period after `BYE` (the sim has nothing left to say to a process it is about to kill). The post-exit group kill matters only for helpers left behind by a firmware that exits by itself. A helper that inherited the firmware's stdout/stderr no longer keeps it "alive": process exit is the child's `exit` event, the rest of the group is killed on it, and the pipes get at most 500 ms to deliver the last stderr lines before they are destroyed. (The firmware no longer sees a terminal's Ctrl-C directly; the CLI's termination handlers cover that.)
+- **Known, accepted limitation.** The post-exit `kill(-pid)` runs after the leader is reaped. POSIX never hands out a PID that is still in use as a process group id while any member exists, so when helpers remain the call reaches exactly them, and when none remain it does nothing. A wrong kill needs PID wraparound inside that window *and* the new process starting a group of its own. Node can't keep an exited child unreaped, so closing the last window would need a native helper, which is out of proportion to the risk.
+- `stop` never waits on the socket: the kill deadline (500 ms) starts first and the `BYE` is fire-and-forget.
+- `stop` is safe at any time, during a step too: the step ends with `finished`. During `start` it waits for `start` to notice (it checks after every wait) and then removes whatever was made: no socket file and no process remain. It kills a process that lingers.
+- Waits are one per tick and nothing long-lived is raced: the process-exit and stop reactions are attached once per process, so a run of any length holds a constant number of them.
+
+## When the host goes away
+
+A sketch that never calls hal doesn't notice its socket closing, so a host that dies leaves it spinning. Three layers:
+
+- **Always:** an `exit` hook kills live firmware when the host returns or calls `process.exit()`. It changes no exit behaviour, so the library has it.
+- **The desktop app:** call `killAllFirmware()` (exported from this folder) in the main process's quit handling (`before-quit`/`will-quit`, and its own signal handling). It also removes the sockets, is synchronous, and is safe in a signal handler.
+- **The `rcsim` CLI:** `scenario/bin.ts` calls `installTerminationHandlers()`, which kills the firmware on SIGTERM, SIGINT or SIGHUP and then lets the signal take its default course. A library must not install signal handlers (they change its host's exit behaviour), so nothing else calls it.
+
+Nothing can survive SIGKILL of the host: a spinning firmware would be orphaned. hal exits when its socket reaches EOF, which covers every firmware that calls hal.
+
+## Control timelines
+
+`rcsim run --firmware <binary> --control <timeline.json>` wraps the firmware source in a `ControlledSource`. Each entry is written to the firmware's TCP server at the **first tick boundary at or after its `tUs`, never before**: delivery is quantised to tick starts, so an entry is up to one tick late (with 1 ms ticks, 100 900 µs goes out at 101 000 µs; 101 000 µs goes out at 101 000 µs). The server is found through the firmware's `LISTEN` net event, so the host port hal chose doesn't matter. Entries wait for the port to start listening.
+
+```json
+[
+  { "tUs": 500000, "message": { "t": "mode", "mode": "manual" } },
+  {
+    "tUs": 1000000,
+    "message": { "t": "drive", "seq": 1, "throttle": 0.3, "steer": 0 },
+    "everyMs": 100,
+    "untilUs": 5000000
+  },
+  { "tUs": 6000000, "port": 3333, "line": "not json, sent verbatim" }
+]
+```
+
+`message` is checked against the control-protocol client schema; `line` is sent as is. `everyMs` with `untilUs` repeats an entry (a repeated `drive` has its `seq` raised each time, wrapping at 2³²), the way a client resends a held stick against the 500 ms failsafe. The car's replies are read and kept in `ControlledSource.received`.
+
+**Deterministic delivery.** Same firmware, world, seed and timeline give a bit-identical run, network faults included. For that, every byte due for a tick is in the firmware's receive buffer before that tick's `STEP` is sent: the step writes the due lines, waits for the writes to complete, then sends `STEP`. This relies on loopback TCP queueing a segment on the peer's socket as part of the sender's `write` (Linux: the loopback device delivers through the sending CPU's softirq as the sender leaves its syscall; macOS: loopback input is processed in the sender's context). POSIX doesn't promise it, a delivery deferred to a kernel thread (Linux's ksoftirqd under extreme load) could land late, and macOS isn't verified here. The guarantee that needs no kernel cooperation is a sim-protocol change (a STEP field carrying scripted TCP payloads to hal); see the P1-H handoff.
+
+**Bounded.** The firmware reads its sockets only while it steps, so the drain wait can't depend on it reading. One tick delivers at most 32 KiB of control lines (`MAX_CONTROL_BYTES_PER_TICK`); a tick due more ends the run `{kind:'error', message: 'control input for tick N exceeds 32768 bytes ...'}` before a byte is written. A write that doesn't complete within the stall timeout (the buffers are full because the firmware isn't reading) ends the run with an `error` too. A script should keep the firmware's unread input small: read what you are sent.
+
+**No retries.** A failed write proves nothing about how much of it arrived, so a retry could run commands the firmware already received a second time. Any write failure on a control connection (on any port: it is recorded the instant it happens, before any other port's outcome, and survives every exit from the batch) ends the run `{kind:'error', message: 'control connection to port P reset during tick N; delivery ambiguous ...'}`, and the source takes no further step. (A connection the firmware closed _before_ a write is simply reopened for that write: nothing was in doubt.)
+
+**Unsent entries fail the scenario.** An entry counts as delivered only once its write has completed. A scenario that ends with entries never delivered (a time after the run's end, or a port the firmware never listened on) fails: `passed` is false, `end` is `{kind:'error', message}` naming the entries and their ports, and the CLI exits 1. (`ScenarioResult` has no dedicated field; see the P1-H handoff.)
+
+Live TCP is the one input hal can't make deterministic (the hal README says so). A script over loopback is as close as it gets: every write is flushed to the firmware's socket before the `STEP` that follows it.

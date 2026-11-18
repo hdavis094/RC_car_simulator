@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { Car, World, defaultCatalog, type Catalog } from '@rcsim/schema';
 import type { ActuatorSource, ScriptedPwm } from '../api/actuator-source.ts';
@@ -10,6 +10,13 @@ import {
   type ScenarioResult,
   type ScenarioSpec,
 } from '../api/scenario.ts';
+import {
+  ControlScriptError,
+  parseControlScript,
+  withControlScript,
+  type ControlledSource,
+} from '../bridge/control-script.ts';
+import { createFirmwareSource } from '../bridge/firmware-source.ts';
 import { createRun } from '../run/run.ts';
 import { trackLibrary } from '../world/track-library.ts';
 import { snapshotHash } from './hash.ts';
@@ -21,8 +28,8 @@ export interface ScenarioIo {
   /** Parts catalog; default the built-in one. */
   readonly catalog?: Catalog;
   /**
-   * Builds the source for specs with `firmware` set. The firmware bridge
-   * (P1-H) provides it; without one, `firmware` is an error.
+   * Builds the source for specs with `firmware` set. Default: the firmware
+   * bridge (`bridge/`) running the binary. Override to inject a fake.
    */
   readonly createFirmwareSource?: (spec: ScenarioSpec) => ActuatorSource | Promise<ActuatorSource>;
 }
@@ -85,6 +92,15 @@ export function parseTimeline(value: unknown): ScriptedPwm[] {
   });
 }
 
+function parseControl(value: unknown): ReturnType<typeof parseControlScript> {
+  try {
+    return parseControlScript(value);
+  } catch (error) {
+    if (error instanceof ControlScriptError) throw new ScenarioInputError(error.message);
+    throw error;
+  }
+}
+
 const compare: Record<ScenarioAssertion['op'], (a: number, b: number) => boolean> = {
   '==': (a, b) => a === b,
   '!=': (a, b) => a !== b,
@@ -118,14 +134,32 @@ export async function runScenario(
   if (spec.firmware !== undefined && spec.script !== undefined) {
     throw new ScenarioInputError('give --script or --firmware, not both');
   }
+  if (spec.control !== undefined && spec.firmware === undefined) {
+    throw new ScenarioInputError(
+      '--control needs --firmware: the timeline is sent to its firmware',
+    );
+  }
   let source: ActuatorSource;
+  let controlled: ControlledSource | undefined;
   if (spec.firmware !== undefined) {
-    if (!io.createFirmwareSource) {
-      throw new ScenarioInputError(
-        '--firmware needs the firmware bridge, which is not available here',
-      );
+    // Check the inputs before spawning anything.
+    const control =
+      spec.control !== undefined
+        ? parseControl(await readJson(at(spec.control), 'control timeline'))
+        : undefined;
+    if (io.createFirmwareSource) {
+      source = await io.createFirmwareSource(spec);
+    } else {
+      const binary = at(spec.firmware);
+      const info = await stat(binary).catch(() => undefined);
+      if (!info?.isFile()) {
+        throw new ScenarioInputError(
+          `cannot find firmware "${spec.firmware}": build it with hal's build-sim (<project>/.rcsim/build/firmware)`,
+        );
+      }
+      source = createFirmwareSource({ binary });
     }
-    source = await io.createFirmwareSource(spec);
+    if (control) source = controlled = withControlScript(source, control);
   } else if (spec.script !== undefined) {
     source = createScriptedSource(parseTimeline(await readJson(at(spec.script), 'script')));
   } else {
@@ -153,7 +187,13 @@ export async function runScenario(
   } finally {
     await run.stop();
   }
-  const end: RunEnd = run.end ?? { kind: 'stopped' };
+  let end: RunEnd = run.end ?? { kind: 'stopped' };
+  // A timeline that wasn't played in full is a failed scenario, not a silent pass:
+  // its entries never reached the firmware. (A run that already failed keeps its own end.)
+  const unsent = controlled?.describeUndelivered();
+  if (unsent && (end.kind === 'stopped' || end.kind === 'finished')) {
+    end = { kind: 'error', message: unsent };
+  }
 
   const m = run.metrics();
   const metrics = Object.fromEntries(SCENARIO_METRICS.map((name) => [name, m[name]])) as Record<
