@@ -1,6 +1,6 @@
 # P2-01 — Integration and the v1 demo
 
-Status: todo
+Status: in-progress
 Agent: Claude (Opus)
 Branch: ws/p2-01
 Depends on: all of Phase 1
