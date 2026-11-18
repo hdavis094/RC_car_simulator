@@ -164,7 +164,11 @@ describe('rcsim run', () => {
         ],
         /unknown track "missing-track".*oval/,
       ],
-      [[...base, '--seconds', '1', '--firmware', 'fw'], /firmware bridge/],
+      [[...base, '--seconds', '1', '--firmware', 'fw'], /cannot find firmware "fw".*build-sim/],
+      [
+        [...base, '--seconds', '1', '--script', 'idle.json', '--control', 'c.json'],
+        /--control needs --firmware/,
+      ],
       [
         [...base, '--seconds', '1', '--script', 'idle.json', '--firmware', 'fw'],
         /--script or --firmware, not both/,

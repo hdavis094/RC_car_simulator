@@ -1,0 +1,160 @@
+import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { ActuatorSourceEnded } from '../api/actuator-source.ts';
+import type { RunEnd } from '../api/run.ts';
+import { testRun, testWorldFile } from '../run/test-support.ts';
+import { main } from '../scenario/cli.ts';
+import { exampleCar } from '@rcsim/schema';
+import { createFirmwareSource } from './firmware-source.ts';
+
+const protocol = fileURLToPath(new URL('../../../sim-protocol/src/index.ts', import.meta.url));
+
+let dir: string;
+beforeAll(async () => {
+  dir = await mkdtemp(path.join(tmpdir(), 'rcsim-fake-fw-'));
+});
+afterAll(() => rm(dir, { recursive: true, force: true }));
+
+/**
+ * A "firmware" written in JS that speaks (or breaks) sim-protocol by hand:
+ * `body` runs with `send(message)`, `receive()` and the connected socket.
+ */
+async function fake(name: string, body: string): Promise<string> {
+  const file = path.join(dir, name);
+  await writeFile(
+    file,
+    `#!/usr/bin/env node
+import net from 'node:net';
+import { FrameDecoder, encodeFrame } from ${JSON.stringify(protocol)};
+const socket = net.connect(process.env.RCSIM_SOCKET);
+const decoder = new FrameDecoder();
+const inbox = [];
+let wake;
+socket.on('data', (chunk) => { inbox.push(...decoder.push(chunk)); wake?.(); });
+socket.on('close', () => process.exit(0));
+const send = (m) => socket.write(encodeFrame(m));
+const receive = async () => { while (!inbox.length) await new Promise((r) => (wake = r)); return inbox.shift(); };
+const hello = { type: 'HELLO', protocolVersion: 1, halVersion: 'fake' };
+${body}
+`,
+  );
+  await chmod(file, 0o755);
+  return file;
+}
+
+async function endOf(binary: string, ticks = 3): Promise<RunEnd> {
+  const source = createFirmwareSource({ binary, stallTimeoutMs: 1500 });
+  try {
+    const run = await testRun({ source });
+    try {
+      const result = await run.step(ticks);
+      if (!result.end) throw new Error('the run did not end');
+      return result.end;
+    } finally {
+      await run.stop();
+    }
+  } catch (error) {
+    if (error instanceof ActuatorSourceEnded) return error.end;
+    throw error;
+  } finally {
+    await source.stop();
+  }
+}
+
+describe('a firmware that misbehaves', () => {
+  it('well-behaved reference: answers every step (the harness itself works)', async () => {
+    const binary = await fake(
+      'good',
+      `send(hello); await receive();
+       for (;;) { const s = await receive(); if (s.type === 'BYE') process.exit(0);
+         send({ type: 'STEP_DONE', tick: s.tick, pwm: [], gpioWrites: [], serialTx: new Uint8Array(), netEvents: [], logs: [] }); }`,
+    );
+    const source = createFirmwareSource({ binary });
+    const run = await testRun({ source });
+    expect((await run.step(20)).status).toBe('running');
+    await run.stop();
+  });
+
+  it('is refused for speaking another protocol version, with a clear reason', async () => {
+    const binary = await fake(
+      'old',
+      `send({ ...hello, protocolVersion: 2 }); await receive(); await new Promise((r) => setTimeout(r, 5000));`,
+    );
+    const end = await endOf(binary);
+    expect(end).toMatchObject({ kind: 'error' });
+    expect(JSON.stringify(end)).toMatch(/sim-protocol 2.*speaks 1/);
+  });
+
+  it('is ended as an error for answering the wrong tick', async () => {
+    const binary = await fake(
+      'wrong-tick',
+      `send(hello); await receive(); const s = await receive();
+       send({ type: 'STEP_DONE', tick: s.tick + 5, pwm: [], gpioWrites: [], serialTx: new Uint8Array(), netEvents: [], logs: [] });
+       await new Promise((r) => setTimeout(r, 5000));`,
+    );
+    const end = await endOf(binary);
+    expect(end).toMatchObject({ kind: 'error' });
+    expect(JSON.stringify(end)).toMatch(/STEP_DONE 5/);
+  });
+
+  it('is ended for sending a frame that is not valid, and told so', async () => {
+    const binary = await fake(
+      'garbage',
+      `send(hello); await receive(); await receive();
+       socket.write(Buffer.from([1, 0, 0, 0, 0x7f]));
+       const bye = await receive(); console.error('sim said', bye.type, bye.reason);
+       await new Promise((r) => setTimeout(r, 200));`,
+    );
+    const end = await endOf(binary);
+    expect(end.kind).toBe('crashed');
+    expect(JSON.stringify(end)).toMatch(/malformed frame from the firmware/);
+    expect(JSON.stringify(end)).toMatch(/sim said BYE malformed/);
+  });
+
+  it('is ended for a message that does not belong (a second HELLO instead of STEP_DONE)', async () => {
+    const binary = await fake(
+      'confused',
+      `send(hello); await receive(); await receive(); send(hello); await new Promise((r) => setTimeout(r, 5000));`,
+    );
+    const end = await endOf(binary);
+    expect(end).toMatchObject({ kind: 'error' });
+    expect(JSON.stringify(end)).toMatch(/expected STEP_DONE, got HELLO/);
+  });
+
+  it('stalls the run when it never connects', async () => {
+    const binary = await fake('mute', `await new Promise((r) => setTimeout(r, 10000));`);
+    const source = createFirmwareSource({ binary, stallTimeoutMs: 300 });
+    const err = await testRun({ source }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ActuatorSourceEnded);
+    expect((err as ActuatorSourceEnded).end).toEqual({ kind: 'stalled', afterMs: 300 });
+  });
+
+  it('crashes before saying hello: reported with its exit code', async () => {
+    const binary = await fake('dead', `console.error('missing libfoo.so'); process.exit(127);`);
+    const err = await testRun({ source: createFirmwareSource({ binary }) }).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(ActuatorSourceEnded);
+    expect((err as ActuatorSourceEnded).end).toMatchObject({
+      kind: 'crashed',
+      exitCode: 127,
+      stderrTail: ['missing libfoo.so'],
+    });
+  });
+
+  it('is reported by the CLI when it fails before the first tick', async () => {
+    const binary = await fake('dead-cli', `console.error('no such library'); process.exit(127);`);
+    await writeFile(path.join(dir, 'car.json'), JSON.stringify(exampleCar));
+    await writeFile(path.join(dir, 'world.json'), JSON.stringify(testWorldFile()));
+    let err = '';
+    const code = await main(
+      ['run', '--car', 'car.json', '--world', 'world.json', '--seconds', '1', '--firmware', binary],
+      { cwd: dir, stdout: () => undefined, stderr: (t) => (err += t) },
+    );
+    expect(code).toBe(1);
+    expect(err).toMatch(/firmware failed to start: crashed \(exit code 127\)\nno such library/);
+  });
+});

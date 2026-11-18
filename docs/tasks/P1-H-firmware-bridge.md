@@ -1,6 +1,6 @@
 # P1-H — sim-core: firmware bridge
 
-Status: in-progress
+Status: in-review
 Agent: Claude (Sonnet sub-agent)
 Branch: ws/p1-h
 Depends on: P1-A, P1-C
@@ -52,7 +52,20 @@ The app-side SimService (P2-01), sensor model internals (P1-B).
 
 ## Handoff
 
-- **Built**:
+- **Built**: `packages/sim-core/src/bridge/` (see its README).
+  - `createFirmwareSource` / `FirmwareSource`: Unix socket server under `/tmp`, process spawn with `RCSIM_SOCKET`, HELLO/version check, CONFIG from the Run's device table, one STEP/STEP_DONE per tick (readings given their device index and ordered; Serial RX chunked to the 16 KiB protocol limit), 2 s wall stall timeout (`stalled`, BYE + SIGKILL), crash/exit (`crashed` with exit code, signal, last stderr lines, firmware BYE message), protocol violations (`error`), `restart()` (the next STEP carries the run's current tick; network faults are resent), `stop()` safe at any time including mid-step. An exit hook kills live firmware if the host dies, since a sketch that spins never notices its socket closing.
+  - Streams (serial, log, net) are the Run's existing events, fed from `TickOutput`; nothing extra was needed on the bridge.
+  - `--firmware <binary>` in the CLI: `runScenario` now builds the bridge itself when `io.createFirmwareSource` is absent (the hook stays for fakes); missing binary is exit 2 with a build-sim hint, a firmware failing before the first tick is exit 1. `--control <timeline.json>` (needs `--firmware`): `ControlledSource` wraps the firmware source and writes entries to the firmware's TCP server (found via its LISTEN event) just before the tick containing their time. Format: `{tUs, message | line, port?, everyMs?, untilUs?}`; `message` is checked against control-protocol's client schema, `everyMs` with `untilUs` repeats (a repeated `drive` raises `seq`). Documented in the README and `--help`.
+  - Tests build real sketches (`bridge/fixtures/*/main.cpp`) with `build-sim`, plus JS fake firmwares for protocol misbehaviour. All six acceptance items are covered: servo sweep vs steering angle within the slew limit, `millis()` print exactly 1 000 000 µs apart, `spin` stalled in ~2 s wall, `abort()` crashed with `SIGABRT`, same seed gives identical serial output and snapshot hashes. Also covered: restart, Serial RX, sensor reading to device mapping, HC-SR04 GPIO write/edge round trip, control timeline (also through the CLI), stop mid-step, socket cleanup. Passes with GCC 16 and clang 23 (`CXX=clang++`); macOS untested here.
+  - `pnpm verify` passes.
 - **Deviations from the brief**:
+  - Added `@rcsim/control-protocol` (workspace) to sim-core's dependencies for `--control` validation, so `pnpm-lock.yaml` changed.
+  - Edited P1-A's `scenario/runner.ts` and `cli.ts` (the `--firmware`/`--control` wiring, usage text, startup-failure handling) and one case in `scenario/cli.test.ts` whose expected message changed (`--firmware` with a missing binary no longer says "needs the firmware bridge").
+  - Serial RX beyond hal's own 16 KiB queue is dropped by hal (by design in hal); the bridge only guarantees order and the protocol limit. Noted in the README.
+  - The sketches in `bridge/fixtures/` are test fixtures, not the starter firmware (P1-G).
 - **Contract change requests**:
+  1. **Export the bridge from `packages/sim-core/src/index.ts`** (not mine to edit): add `export { createFirmwareSource, FirmwareSource, parseControlScript, withControlScript, ControlScriptError, ControlledSource, type ControlEntry } from './bridge/index.ts';`. Without it P2-01 cannot import the bridge (the package exports only `.`, `./api`, `./stubs`).
+  2. Optional, for the app's Network Console: `ScenarioResult` has no serial output, so a CLI scenario can't assert on what the firmware printed. A `serial` field (or an `--assert-serial` style option) would need an `api/scenario.ts` change; the tests read serial through `Run`'s `serial` event instead.
 - **Open questions**:
+  - Packaging (P2-01): the bridge spawns whatever binary it is given, so nothing here depends on Node being on PATH, but `build-sim`'s `#!/usr/bin/env node` and cache location are the hal-side issues the hal README already lists.
+  - `ControlledSource` waits indefinitely for a port that never listens; the entries stay in `pending`. Whether the CLI should fail a scenario that ends with control lines unsent is a product call (currently it does not).

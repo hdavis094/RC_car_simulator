@@ -312,6 +312,9 @@ importers:
       '@dimforge/rapier3d-deterministic-compat':
         specifier: ^0.21.0
         version: 0.21.0
+      '@rcsim/control-protocol':
+        specifier: workspace:*
+        version: link:../control-protocol
       '@rcsim/schema':
         specifier: workspace:*
         version: link:../schema
