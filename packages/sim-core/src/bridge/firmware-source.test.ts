@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { defaultCatalog, exampleCar, type ServoParams } from '@rcsim/schema';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { ActuatorSourceEnded, type ActuatorSource } from '../api/actuator-source.ts';
 import type { RunOptions } from '../api/run.ts';
 import { createFakeSensorModel } from '../api/stubs/fake-models.ts';
@@ -14,6 +14,9 @@ import { snapshotHash } from '../scenario/hash.ts';
 import { trackLibrary } from '../world/track-library.ts';
 import { createFirmwareSource, type FirmwareSource } from './firmware-source.ts';
 import { buildSketch, capture, removeProject } from './test-support.ts';
+
+// Waits in these tests are wall-clock and CI is slow: no test may time out before the longest wait it allows.
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 300_000 });
 
 const sketches = ['sweep', 'ticker', 'spin', 'abort', 'exit', 'echo', 'reboot', 'ranger', 'hcsr04'];
 const built: Record<string, string> = {};

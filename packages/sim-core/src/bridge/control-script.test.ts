@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { defaultCatalog, exampleCar } from '@rcsim/schema';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createRun } from '../run/run.ts';
 import { testWorldFile } from '../run/test-support.ts';
 import { main } from '../scenario/cli.ts';
@@ -10,6 +10,9 @@ import { trackLibrary } from '../world/track-library.ts';
 import { ControlScriptError, parseControlScript, withControlScript } from './control-script.ts';
 import { createFirmwareSource } from './firmware-source.ts';
 import { buildSketch, capture, removeProject } from './test-support.ts';
+
+// Waits in these tests are wall-clock and CI is slow: no test may time out before the longest wait it allows.
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 300_000 });
 
 describe('parseControlScript', () => {
   const drive = { t: 'drive', seq: 1, throttle: 0.3, steer: 0 };

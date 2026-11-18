@@ -116,7 +116,15 @@ export class FirmwareProcess {
         this.#exited = true;
         alive.delete(this);
         // Whatever the firmware left running in its group goes with it, and that
-        // releases the pipes it inherited.
+        // releases the pipes it inherited. The stall and stop paths have already signalled
+        // the group while the leader was alive; this matters for helpers left behind by a
+        // firmware that exits by itself. The leader is reaped by now, which is a known,
+        // accepted limitation: POSIX never hands out a PID that is still in use as a process
+        // group id while any member exists, so when helpers remain `kill(-pid)` reaches
+        // exactly them, and when none remain the call does nothing. A wrong kill would take
+        // PID wraparound inside this window *and* the new process starting a group of its own.
+        // Node can't keep an exited child unreaped, so closing that last window would need a
+        // native helper, which is out of proportion to the risk.
         killGroup(child.pid, 'SIGKILL');
         const timer = Promise.withResolvers<void>();
         const handle = setTimeout(() => timer.resolve(), DRAIN_MS);

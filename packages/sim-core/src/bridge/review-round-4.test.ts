@@ -5,11 +5,14 @@ import net from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { defaultCatalog, exampleCar } from '@rcsim/schema';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { ActuatorSource, ActuatorSourceSetup, TickInput } from '../api/actuator-source.ts';
 import { ControlledSource, parseControlScript } from './control-script.ts';
 import { fakeFirmware } from './fake-firmware.ts';
 import { createFirmwareSource } from './firmware-source.ts';
+
+// Waits in these tests are wall-clock and CI is slow: no test may time out before the longest wait it allows.
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 300_000 });
 
 const setup: ActuatorSourceSetup = {
   car: exampleCar,
@@ -76,7 +79,10 @@ describe('startup has its own deadline', () => {
     const binary = await fake('never-hello', `await new Promise((r) => setTimeout(r, 30000));`);
     const source = createFirmwareSource({ binary, startupTimeoutMs: 300 });
     const err = await source.start(setup).catch((e: unknown) => e);
-    expect(err).toMatchObject({ end: { kind: 'stalled', afterMs: 300 } });
+    expect(err).toMatchObject({ end: { kind: 'stalled' } });
+    const afterMs = (err as { end: { afterMs: number } }).end.afterMs;
+    expect(afterMs).toBeGreaterThanOrEqual(300);
+    expect(afterMs).toBeLessThan(5000);
     await source.stop();
   });
 });

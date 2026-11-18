@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { ActuatorSourceEnded } from '../api/actuator-source.ts';
 import type { RunEnd } from '../api/run.ts';
 import { testRun, testWorldFile } from '../run/test-support.ts';
@@ -9,6 +9,9 @@ import { main } from '../scenario/cli.ts';
 import { exampleCar } from '@rcsim/schema';
 import { fakeFirmware } from './fake-firmware.ts';
 import { createFirmwareSource } from './firmware-source.ts';
+
+// Waits in these tests are wall-clock and CI is slow: no test may time out before the longest wait it allows.
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 300_000 });
 
 let dir: string;
 const fake = (name: string, body: string): Promise<string> => fakeFirmware(dir, name, body);
@@ -101,7 +104,11 @@ describe('a firmware that misbehaves', () => {
     const source = createFirmwareSource({ binary, startupTimeoutMs: 300 });
     const err = await testRun({ source }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ActuatorSourceEnded);
-    expect((err as ActuatorSourceEnded).end).toEqual({ kind: 'stalled', afterMs: 300 });
+    const end = (err as ActuatorSourceEnded).end;
+    expect(end.kind).toBe('stalled');
+    // the real elapsed time since spawn, not the nominal timeout
+    expect((end as { afterMs: number }).afterMs).toBeGreaterThanOrEqual(300);
+    expect((end as { afterMs: number }).afterMs).toBeLessThan(5000);
   });
 
   it('crashes before saying hello: reported with its exit code', async () => {

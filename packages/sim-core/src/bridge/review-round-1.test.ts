@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defaultCatalog, exampleCar } from '@rcsim/schema';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type {
   ActuatorSource,
   ActuatorSourceSetup,
@@ -23,6 +23,9 @@ import { fakeFirmware } from './fake-firmware.ts';
 import { createFirmwareSource } from './firmware-source.ts';
 import { killAllFirmware } from './process.ts';
 import { buildSketch, removeProject } from './test-support.ts';
+
+// Waits in these tests are wall-clock and CI is slow: no test may time out before the longest wait it allows.
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 300_000 });
 
 const setup: ActuatorSourceSetup = {
   car: exampleCar,

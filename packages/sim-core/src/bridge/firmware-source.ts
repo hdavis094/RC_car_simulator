@@ -41,8 +41,6 @@ export interface BridgeOptions extends FirmwareSourceOptions {
   readonly startupTimeoutMs?: number;
 }
 
-/** How long a firmware process gets to exit after BYE before it is killed. */
-const EXIT_GRACE_MS = 500;
 /** How long to wait for the exit status of a process whose connection is gone. */
 const EXIT_STATUS_MS = 1000;
 
@@ -91,6 +89,8 @@ export class FirmwareSource implements ActuatorSource {
   readonly #startupMs: number;
   /** True from spawn to the end of the handshake: waits then get the startup deadline. */
   #booting = false;
+  /** `performance.now()` at spawn, and the one deadline for spawn through CONFIG sent. */
+  #bootStart = 0;
   readonly #bindAddress: string;
 
   #setup: ActuatorSourceSetup | undefined;
@@ -265,6 +265,7 @@ export class FirmwareSource implements ActuatorSource {
   /** Spawns the firmware and completes the handshake (HELLO, then CONFIG). */
   async #launch(): Promise<void> {
     this.#booting = true;
+    this.#bootStart = performance.now();
     try {
       await this.#spawnAndHandshake();
     } finally {
@@ -482,8 +483,15 @@ export class FirmwareSource implements ActuatorSource {
         if (this.#slot === done) this.#slot = undefined;
         resolve(waited);
       };
-      const limit = this.#booting ? this.#startupMs : this.#stallMs;
-      const timer = setTimeout(() => done({ kind: 'timeout', afterMs: limit }), limit);
+      // Startup is one budget from spawn to CONFIG sent, however it is spent on connect,
+      // HELLO and CONFIG; a step gets the stall timeout afresh each time.
+      const limit = this.#booting
+        ? Math.max(0, this.#bootStart + this.#startupMs - performance.now())
+        : this.#stallMs;
+      const timer = setTimeout(() => {
+        const afterMs = this.#booting ? Math.ceil(performance.now() - this.#bootStart) : limit;
+        done({ kind: 'timeout', afterMs });
+      }, limit);
       this.#slot = done as (waited: Waited<never>) => void;
       promise.then(
         (value) => done({ kind: 'value', value }),
@@ -609,17 +617,18 @@ export class FirmwareSource implements ActuatorSource {
     this.#channel = undefined;
     this.#nextPromise = undefined;
     if (!proc) return;
-    // The deadline starts first, and nothing below waits on the socket: a firmware
-    // that isn't reading leaves a write pending for good.
-    const handle = setTimeout(() => proc.kill('SIGKILL'), EXIT_GRACE_MS);
+    // Nothing here waits on the socket (a firmware that isn't reading leaves a write
+    // pending for good), and the process group is killed *before* waiting for the exit:
+    // while the leader is alive, its helpers are certainly in its group. (The BYE is a
+    // courtesy; the sim has nothing left to say to a firmware it is about to kill.)
     if (channel && !channel.closed) {
       void channel.send({ type: 'BYE', reason: 'shutdown', message: 'the sim is stopping' });
       channel.end();
     }
+    proc.kill('SIGKILL');
     try {
       await proc.exit.catch(() => undefined);
     } finally {
-      clearTimeout(handle);
       channel?.destroy();
     }
   }

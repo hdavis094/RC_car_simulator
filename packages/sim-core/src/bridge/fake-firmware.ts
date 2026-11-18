@@ -8,15 +8,22 @@ const protocol = fileURLToPath(new URL('../../../sim-protocol/src/index.ts', imp
 /**
  * Writes an executable script in `dir` and returns its path. `body` runs with
  * `send(message)`, `receive()`, `hello` and the connected `socket` in scope;
- * `encodeFrame` is there too, for writes that must arrive together.
+ * `encodeFrame` is there too, for writes that must arrive together. `before`
+ * runs ahead of the connection (to delay it, say).
  */
-export async function fakeFirmware(dir: string, name: string, body: string): Promise<string> {
+export async function fakeFirmware(
+  dir: string,
+  name: string,
+  body: string,
+  before = '',
+): Promise<string> {
   const file = path.join(dir, name);
   await writeFile(
     file,
     `#!/usr/bin/env node
 import net from 'node:net';
 import { FrameDecoder, encodeFrame } from ${JSON.stringify(protocol)};
+${before}
 const socket = net.connect(process.env.RCSIM_SOCKET);
 const decoder = new FrameDecoder();
 const inbox = [];
