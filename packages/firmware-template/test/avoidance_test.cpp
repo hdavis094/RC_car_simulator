@@ -4,7 +4,7 @@
 
 using namespace car;
 namespace {
-constexpr AvoidanceTuning tuning{0.28F, 0.12F, -0.18F, 900, 250, 700, 1.0F / 450, 300, 600};
+constexpr AvoidanceTuning tuning{0.28F, 0.12F, -0.18F, 900, 250, 325, 700, 1.0F / 450, 300, 600};
 std::array<Distance, 3> ranges(uint16_t left, uint16_t centre, uint16_t right) {
   return {{{left, true}, {centre, true}, {right, true}}};
 }
@@ -51,4 +51,18 @@ TEST_CASE("blocked path stops then reverses with opposite steering, wraps and re
       CHECK(recovered.drive.throttle > 0);
     }
   }
+}
+TEST_CASE("blocked exit hysteresis prevents jitter around the entry threshold") {
+  auto d = avoid({}, ranges(500, 250, 700), 0, tuning);
+  for (uint16_t mm : {251, 249, 270, 300, 325}) {
+    d = avoid(d.state, ranges(500, mm, 700), 100, tuning);
+    CHECK(d.state.blocked);
+    CHECK(d.state.blockedSinceMs == 0);
+    CHECK(d.drive.throttle == 0);
+  }
+  d = avoid(d.state, ranges(500, 326, 700), 200, tuning);
+  CHECK_FALSE(d.state.blocked);
+  CHECK(d.drive.throttle > 0);
+  d = avoid(d.state, ranges(500, 270, 700), 210, tuning);
+  CHECK_FALSE(d.state.blocked);
 }

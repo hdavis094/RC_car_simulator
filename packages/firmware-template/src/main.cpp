@@ -7,20 +7,39 @@
 
 #include <array>
 
+#if defined(ARDUINO_ARCH_ESP32)
+#include <lwip/opt.h>
+#include <lwip/sockets.h>
+#endif
+
 #include "avoidance.h"
 #include "car_config.h"
 #include "commands.h"
 #include "control.h"
+#include "outbound.h"
 
 namespace {
 // Initial v1 tuning; P2-01 retunes against the full sim. SI at the sim edge;
 // these thresholds stay in mm because the sensor library reports mm.
-constexpr car::AvoidanceTuning kAvoidance{0.28F, 0.12F,         -0.18F, 900, 250,
-                                          700,   1.0F / 450.0F, 300,    600};
+constexpr car::AvoidanceTuning kAvoidance = [] {
+  car::AvoidanceTuning tuning{};
+  tuning.cruiseThrottle = 0.28F;
+  tuning.slowThrottle = 0.12F;
+  tuning.reverseThrottle = -0.18F;
+  tuning.slowMm = 900;
+  tuning.blockedMm = 250;
+  tuning.clearMm = 325;  // Leave blocked state with 75 mm hysteresis.
+  tuning.sideMm = 700;
+  tuning.steerGain = 1.0F / 450.0F;  // Per mm.
+  tuning.stopMs = 300;
+  tuning.reverseMs = 600;
+  return tuning;
+}();
 constexpr uint32_t kEscArmingMs = 3000;  // Matches the default ESC part definition.
 constexpr uint32_t kSensorPeriodMs = 50;
 constexpr uint16_t kSensorTimeoutMs = 20;
 constexpr uint32_t kTelemetryPeriodMs = 50;
+constexpr uint32_t kWifiStatusPeriodMs = 1000;
 constexpr size_t kReceiveBudget = 256;      // Bound work so a flood cannot starve safety/telemetry.
 constexpr char kCarName[] = "Default car";  // Keep in sync with car.json's name.
 constexpr char kFirmwareVersion[] = "0.1.0";
@@ -48,20 +67,38 @@ car::Actuation automatic, applied;
 car::CommandLine line;
 std::array<car::Distance, 3> distances{};
 std::array<bool, 3> sensorReady{};
-uint32_t armStartedMs = 0, lastSensorMs = 0, lastTelemetryMs = 0;
+uint32_t armStartedMs = 0, lastSensorMs = 0, lastTelemetryMs = 0, lastWifiStatusMs = 0;
+bool escArmed = false;
 bool listening = false, failsafeLogged = false, armingLogged = false, imuReady = false;
 
 uint32_t nowMs() { return static_cast<uint32_t>(millis()); }
-bool armed(uint32_t now) { return uint32_t(now - armStartedMs) >= kEscArmingMs; }
+bool armed(uint32_t now) {
+  escArmed = car::armingComplete(escArmed, armStartedMs, now, kEscArmingMs);
+  return escArmed;
+}
 void writeOutputs() {
-  applied = car::output(control, nowMs(), armed(nowMs()), automatic);
+  const uint32_t now = nowMs();
+  control = car::updateSafety(control, now);
+  applied = car::output(control, now, armed(now), automatic);
   steering.writeMicroseconds(car::pulseUs(applied.steer, 1000, 1500, 2000));
   esc.writeMicroseconds(car::pulseUs(applied.throttle, 1000, 1500, 2000));
 }
 void sendDocument(const JsonDocument& document) {
-  if (!client.connected()) return;
-  serializeJson(document, client);
-  client.println();
+  car::sendDocument(document, writeOutputs, [](const uint8_t* bytes, size_t size) {
+    if (!client.connected()) return car::SendResult::Dropped;
+#if defined(ARDUINO_ARCH_ESP32)
+    const auto result = car::trySendSocket(client.fd(), bytes, size);
+#else
+    // Local HAL fallback: write() only enqueues and never waits (wifi.cpp:195-205,
+    // 320-323). Keep its sim-time latency/loss queues; do not bypass them via fd().
+    const size_t written = client.write(bytes, size);
+    const auto result = written == size ? car::SendResult::Sent
+                                       : (written == 0 ? car::SendResult::Dropped
+                                                       : car::SendResult::Disconnect);
+#endif
+    if (result == car::SendResult::Disconnect) client.stop();
+    return result;
+  });
 }
 void logMessage(const char* message) {
   Serial.println(message);
@@ -89,6 +126,16 @@ void serviceControl() {
   if (incoming) {
     client.stop();
     client = incoming;
+#if defined(ARDUINO_ARCH_ESP32) && LWIP_SO_LINGER
+    // If enabled in the board SDK, avoid waiting for pending TCP data on close.
+    // Stock builds may disable this option, so sending never relies on it.
+    // https://github.com/espressif/esp-lwip/blob/fa4dffdfac52587a26c1f29258376df750cf8474/src/api/api_msg.c#L1024-L1035
+    linger abortive{1, 0};
+    if (setsockopt(client.fd(), SOL_SOCKET, SO_LINGER, &abortive, sizeof(abortive)) != 0) {
+      client.stop();  // This newly accepted socket has never sent any bytes.
+      return;
+    }
+#endif
     client.setNoDelay(true);
     control = car::newConnection(control);
     line.reset();
@@ -134,9 +181,9 @@ void telemetry() {
   document["steer"] = applied.steer;
   auto ranges = document["tof_mm"].to<JsonArray>();
   for (auto distance : distances) ranges.add(distance.valid ? distance.mm : 0);
-  const float batteryV = float(analogRead(BATTERY_SENSE_OUT_PIN)) * 3.3F / 4095.0F *
-                         (BATTERY_SENSE_R1_OHM + BATTERY_SENSE_R2_OHM) / BATTERY_SENSE_R2_OHM;
-  document["batt_mv"] = static_cast<unsigned>(batteryV * 1000.0F + 0.5F);
+  const float batteryMv = float(analogReadMilliVolts(BATTERY_SENSE_OUT_PIN)) *
+                          (BATTERY_SENSE_R1_OHM + BATTERY_SENSE_R2_OHM) / BATTERY_SENSE_R2_OHM;
+  document["batt_mv"] = static_cast<unsigned>(batteryMv + 0.5F);
   if (imuReady) {
     int16_t x, y, z;
     imu.getRotation(&x, &y, &z);
@@ -189,9 +236,18 @@ void setup() {
     WiFi.begin(CAR_WIFI_SSID, CAR_WIFI_PASSWORD);
   }
   // Arming is a time gate, so networking remains responsive while neutral is held.
+  if (CAR_WIFI_ENABLED) {
+    Serial.println(
+        "Wi-Fi: connecting to configured SSID; if this persists, set CAR_WIFI_SSID and "
+        "CAR_WIFI_PASSWORD (default password: change-me)");
+  } else {
+    Serial.println("Wi-Fi: disabled in car config");
+  }
   serviceControl();
 }
 void loop() {
+  // Update safety/PWM before accept, hello, logs or any other network send.
+  writeOutputs();
   serviceControl();
   uint32_t now = nowMs();
   if (uint32_t(now - lastSensorMs) >= kSensorPeriodMs) {
@@ -208,12 +264,25 @@ void loop() {
     automatic = {};
   }
   writeOutputs();
-  const bool failsafe = car::failsafeDue(control, now);
+  const bool failsafe = control.hasDrive && car::failsafeDue(control, now);
   if (failsafe && !failsafeLogged) logMessage("failsafe: no drive for 500 ms");
   failsafeLogged = failsafe;
   if (armed(now) && !armingLogged) {
     logMessage("ESC armed after 3000 ms neutral");
     armingLogged = true;
+  }
+  if (uint32_t(now - lastWifiStatusMs) >= kWifiStatusPeriodMs) {
+    if (!CAR_WIFI_ENABLED) {
+      Serial.println("Wi-Fi: disabled in car config");
+    } else if (WiFi.status() == WL_CONNECTED) {
+      Serial.print("Wi-Fi: connected, IP ");
+      Serial.println(WiFi.localIP());
+    } else {
+      Serial.println(
+          "Wi-Fi: NOT CONNECTED; check CAR_WIFI_SSID / CAR_WIFI_PASSWORD "
+          "(default: change-me)");
+    }
+    lastWifiStatusMs = now;
   }
   if (uint32_t(now - lastTelemetryMs) >= kTelemetryPeriodMs) {
     telemetry();

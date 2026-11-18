@@ -78,3 +78,49 @@ TEST_CASE("normalized actuation maps to the default servo and ESC pulse ranges")
   CHECK(pulseUs(0.4F, 1000, 1500, 2000) == 1700);
   CHECK(pulseUs(-2, 1000, 1500, 2000) == 1000);
 }
+TEST_CASE("mode and e-stop discard a manual command even before its failsafe deadline") {
+  auto state = applyCommand({}, drive(), 0);
+  state = applyCommand(state, Command{}, 100);
+  CHECK_FALSE(state.hasDrive);
+  neutral(state.manual);
+  state = applyCommand(state, mode(Mode::Manual), 300);
+  neutral(output(state, 300, true, {}));
+  CHECK_FALSE(state.hasDrive);
+  CHECK_FALSE(failsafeDue(state, 300));
+  state = applyCommand(state, drive(2), 310);
+  CHECK(output(state, 310, true, {}).throttle > 0);
+  for (Mode next : {Mode::Manual, Mode::Auto}) {
+    auto switched = applyCommand(state, mode(next), 320);
+    CHECK_FALSE(switched.hasDrive);
+    neutral(switched.manual);
+    switched = applyCommand(switched, mode(Mode::Manual), 330);
+    neutral(output(switched, 330, true, {}));
+  }
+}
+TEST_CASE("failsafe stays latched through a full uptime wrap until a new applied drive") {
+  CHECK_FALSE(failsafeDue({}, 500));
+  CHECK_FALSE(failsafeDue({}, 0xffffffffU));
+  auto state = updateSafety(applyCommand({}, drive(), 100), 600);
+  CHECK(state.failsafeTripped);
+  CHECK(state.hasDrive);
+  neutral(output(state, 101, true, {}));  // One full millis cycle after the drive.
+  state = applyCommand(state, mode(Mode::Manual), 102);
+  CHECK(state.failsafeTripped);
+  state = applyCommand(state, Command{}, 103);
+  state = applyCommand(newConnection(state), drive(0), 104);
+  CHECK(state.failsafeTripped);  // Ignored while e-stopped.
+  state = applyCommand(state, mode(Mode::Manual), 105);
+  state = applyCommand(state, drive(0), 106);
+  CHECK_FALSE(state.failsafeTripped);
+  CHECK(output(state, 106, true, {}).throttle > 0);
+}
+TEST_CASE("arming is a one-shot latch across uptime wrap") {
+  bool armed = armingComplete(false, 100, 3099, 3000);
+  CHECK_FALSE(armed);
+  armed = armingComplete(armed, 100, 3100, 3000);
+  CHECK(armed);
+  CHECK(armingComplete(armed, 100, 100, 3000));
+  CHECK(armingComplete(armed, 100, 101, 3000));
+  CHECK_FALSE(armingComplete(false, 0xffffff00U, 2000, 3000));
+  CHECK(armingComplete(false, 0xffffff00U, 3000, 3000));
+}

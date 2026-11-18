@@ -70,7 +70,9 @@ for (const cxx of [process.env.CXX || 'c++', 'g++', 'clang++']) {
     '-isystem',
     path.join(hal, 'libraries/ArduinoJson'),
     ...flags,
-    ...['avoidance.cpp', 'commands.cpp', 'control.cpp'].map((name) => path.join(root, 'src', name)),
+    ...['avoidance.cpp', 'commands.cpp', 'control.cpp', 'outbound.cpp'].map((name) =>
+      path.join(root, 'src', name),
+    ),
     ...readdirSync(path.join(root, 'test'))
       .filter((name) => name.endsWith('.cpp'))
       .map((name) => path.join(root, 'test', name)),

@@ -12,7 +12,7 @@ AvoidanceDecision avoid(AvoidanceState state, const std::array<Distance, 3>& dis
   auto range = [](Distance distance) { return distance.mm == 0 ? 65535 : int(distance.mm); };
   const int left = range(distances[0]), centre = range(distances[1]), right = range(distances[2]);
   const float turn = left < right ? 1.0F : -1.0F;
-  if (centre <= tuning.blockedMm) {
+  if (centre <= (state.blocked ? tuning.clearMm : tuning.blockedMm)) {
     if (!state.blocked) state = {true, nowMs};
     const uint32_t phase =
         uint32_t(nowMs - state.blockedSinceMs) % (tuning.stopMs + tuning.reverseMs);

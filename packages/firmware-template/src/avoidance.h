@@ -15,6 +15,7 @@ struct AvoidanceTuning {
   float reverseThrottle;
   uint16_t slowMm;
   uint16_t blockedMm;
+  uint16_t clearMm;
   uint16_t sideMm;
   float steerGain;
   uint32_t stopMs;
