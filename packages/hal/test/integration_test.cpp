@@ -321,8 +321,9 @@ TEST_CASE("concurrent first builds publish a complete immutable shared HAL cache
   CHECK(fs::exists(other / ".rcsim/build/firmware"));
   size_t temporary = 0, published = 0;
   for (const auto& entry : fs::directory_iterator("build")) {
+    if (before.count(entry.path())) continue;  // leftovers of an earlier, killed build
     if (entry.path().filename().string().rfind(".hal-", 0) == 0) ++temporary;
-    if (!before.count(entry.path()) && entry.path().filename().string().size() == 64) {
+    if (entry.path().filename().string().size() == 64) {
       ++published;
       CHECK(fs::exists(entry.path() / "libhal.a"));
     }
