@@ -870,9 +870,11 @@ export function WorldRoot({ api, initialWorld, showDock = false }: WorldRootProp
 
       if (isEditableEventTarget(event.target)) return;
 
-      if (event.key === 'Escape' && selectedObstacleId) {
+      if (event.key === 'Escape' && (selectedObstacleId || activeTool !== 'select')) {
         event.preventDefault();
         setSelectedObstacleId(null);
+        setPlacementCoordsTouched(false);
+        setActiveTool('select');
         return;
       }
 
@@ -943,6 +945,7 @@ export function WorldRoot({ api, initialWorld, showDock = false }: WorldRootProp
       window.removeEventListener('keyup', onKeyUp);
     };
   }, [
+    activeTool,
     driveMode,
     editable,
     ensureControlConnected,

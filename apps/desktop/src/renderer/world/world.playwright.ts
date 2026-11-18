@@ -111,7 +111,6 @@ test('renders the 3D World oval track WebGL canvas, places three cones, saves wo
 
   // Wait for the viewport ready state to settle ('true' or 'fallback')
   await expect.poll(async () => await viewport.getAttribute('data-ready')).not.toBe('false');
-  const readyState = await viewport.getAttribute('data-ready');
 
   // Collect Electron GPU feature status, basic GPU info, and renderer WebGL context probe diagnostics
   const gpuDiagnostics = await app.evaluate(async ({ app: electronApp }) => {
@@ -139,21 +138,29 @@ test('renders the 3D World oval track WebGL canvas, places three cones, saves wo
       errors.push(typeof msg === 'string' && msg.length > 0 ? msg : 'webglcontextcreationerror');
     };
     canvas.addEventListener('webglcontextcreationerror', onErr);
-    const gl2 = canvas.getContext('webgl2');
-    const gl1 = gl2 ? null : canvas.getContext('webgl');
+    let contextType: 'webgl2' | 'webgl' | null = 'webgl2';
+    let gl: WebGL2RenderingContext | WebGLRenderingContext | null = canvas.getContext('webgl2');
+    if (!gl) {
+      contextType = 'webgl';
+      gl = canvas.getContext('webgl');
+    }
     canvas.removeEventListener('webglcontextcreationerror', onErr);
-    const gl = gl2 ?? gl1;
     let renderer: string | null = null;
     let vendor: string | null = null;
     if (gl) {
-      const dbg = gl.getExtension('WEBGL_debug_renderer_info');
-      renderer = String(
-        dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER),
-      );
-      vendor = String(
-        dbg ? gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL) : gl.getParameter(gl.VENDOR),
-      );
-      gl.getExtension('WEBGL_lose_context')?.loseContext();
+      try {
+        const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+        renderer = String(
+          dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER),
+        );
+        vendor = String(
+          dbg ? gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL) : gl.getParameter(gl.VENDOR),
+        );
+      } finally {
+        gl.getExtension('WEBGL_lose_context')?.loseContext();
+      }
+    } else {
+      contextType = null;
     }
     return {
       readyAttr: vp?.getAttribute('data-ready') ?? null,
@@ -162,6 +169,7 @@ test('renders the 3D World oval track WebGL canvas, places three cones, saves wo
       viewportWebglVendor: vp?.getAttribute('data-webgl-vendor') ?? null,
       viewportWebglError: vp?.getAttribute('data-webgl-error') ?? null,
       probeAvailable: Boolean(gl),
+      probeContextType: contextType,
       probeRenderer: renderer,
       probeVendor: vendor,
       probeCreationErrors: errors,
@@ -174,6 +182,24 @@ test('renders the 3D World oval track WebGL canvas, places three cones, saves wo
     body: Buffer.from(diagnosticReport, 'utf8'),
     contentType: 'application/json',
   });
+
+  // Cross-check the test's own WebGL probe against the viewport's data-webgl-* attributes.
+  // If they disagree, fail immediately.
+  const viewportHasContext =
+    (rendererWebglDiagnostics.viewportWebglContext ?? '').trim().length > 0;
+  expect(
+    viewportHasContext,
+    `Test WebGL probe (probeAvailable=${String(rendererWebglDiagnostics.probeAvailable)}) disagreed with viewport data-webgl-context="${String(rendererWebglDiagnostics.viewportWebglContext)}" (data-webgl-error="${String(rendererWebglDiagnostics.viewportWebglError)}")`,
+  ).toBe(rendererWebglDiagnostics.probeAvailable);
+  expect(rendererWebglDiagnostics.viewportWebglContext ?? '').toBe(
+    rendererWebglDiagnostics.probeContextType ?? '',
+  );
+  expect(rendererWebglDiagnostics.viewportWebglRenderer ?? '').toBe(
+    rendererWebglDiagnostics.probeRenderer ?? '',
+  );
+  expect(rendererWebglDiagnostics.viewportWebglVendor ?? '').toBe(
+    rendererWebglDiagnostics.probeVendor ?? '',
+  );
 
   // Read the car pose from the rendered scene rather than hard-coding it
   const carX = Number(await viewport.getAttribute('data-car-x'));
@@ -204,6 +230,7 @@ test('renders the 3D World oval track WebGL canvas, places three cones, saves wo
 
   for (let i = 0; i < targetConePositions.length; i++) {
     const pos = targetConePositions[i]!;
+    await page.getByTestId('palette-tool-cone').click();
     const box = await pointerLayer.boundingBox();
     expect(box).not.toBeNull();
     // Verify the editor toolbar does not overlap the 3D viewport
@@ -227,9 +254,10 @@ test('renders the 3D World oval track WebGL canvas, places three cones, saves wo
     await page.mouse.click(clickX, clickY);
     await expect(page.getByTestId(`obstacle-marker-cone-${i + 1}`)).toBeVisible();
 
-    // Deselect between placements so no selected-obstacle rotate handle or controls remain active
+    // Deselect between placements (Escape also returns activeTool to 'select')
     await page.keyboard.press('Escape');
     await expect(page.getByTestId('selected-obstacle-controls')).toHaveCount(0);
+    await expect(page.getByTestId('palette-tool-select')).toHaveAttribute('aria-pressed', 'true');
   }
 
   await expect(page.getByTestId('obstacle-marker-cone-1')).toBeVisible();
@@ -264,27 +292,40 @@ test('renders the 3D World oval track WebGL canvas, places three cones, saves wo
     expect(savedJson.obstacles[i]!.positionM.z).toBeCloseTo(targetConePositions[i]!.z, 1);
   }
 
-  // Check whether WebGL context creation succeeded in this environment (measured fact, not keyed on OS).
-  // Evidence: On Linux, Electron bundles `libvk_swiftshader.so` and `--use-gl=angle --use-angle=swiftshader`
-  // provides a working WebGL2 context (`readyState === 'true'`). On GitHub Actions `macos-latest` VMs,
-  // there is no hardware GPU and if Chromium/ANGLE cannot create a WebGL context (`!rendererWebglDiagnostics.probeAvailable`
-  // or `readyState === 'fallback'`), the app renders the user-facing "WebGL unavailable" fallback.
-  const webglContextUnavailable =
-    readyState === 'fallback' || !rendererWebglDiagnostics.probeAvailable;
+  const latestReadyState = await viewport.getAttribute('data-ready');
+  const latestWebglError = (await viewport.getAttribute('data-webgl-error')) ?? '';
 
-  if (webglContextUnavailable) {
+  // Rule 1 & 2: If the probe reports no usable WebGL context could be created:
+  // - On darwin (GitHub Actions macOS GPU-less VM), assert the user-facing "WebGL unavailable"
+  //   fallback banner is visible and skip only the WebGL canvas pixel/screenshot steps.
+  // - On every other platform (Linux, Windows, where SwiftShader is bundled), WebGL being
+  //   unavailable is a hard test failure naming data-webgl-error.
+  if (!rendererWebglDiagnostics.probeAvailable) {
+    if (process.platform !== 'darwin') {
+      throw new Error(
+        `WebGL context creation failed on ${process.platform} where software WebGL (SwiftShader) is expected to work (data-webgl-error="${latestWebglError}", probeCreationErrors=${JSON.stringify(rendererWebglDiagnostics.probeCreationErrors)}).`,
+      );
+    }
     const fallbackBanner = page.getByTestId('webgl-unavailable');
     await expect(fallbackBanner).toBeVisible();
     await expect(fallbackBanner).toContainText('WebGL unavailable');
     expect(errors).toEqual([]);
     test.skip(
-      webglContextUnavailable,
-      `Skipping WebGL canvas pixel assertions because WebGL context creation failed in this VM (readyState=${String(readyState)}, error=${String(rendererWebglDiagnostics.viewportWebglError || rendererWebglDiagnostics.probeCreationErrors.join('; ') || 'unavailable')}). Verified app launch, 3D World mount, obstacle placement, worlds/oval-cones.json save, and user-facing "WebGL unavailable" fallback.`,
+      true,
+      `Skipping WebGL canvas pixel assertions on darwin GPU-less VM because WebGL context creation failed (data-webgl-error="${latestWebglError}"). Verified app launch, 3D World mount, obstacle placement, worlds/oval-cones.json save, and user-facing "WebGL unavailable" fallback.`,
     );
     return;
   }
 
-  expect(readyState).toBe('true');
+  // Rule 3: If the probe says WebGL is available but data-ready !== 'true' (e.g. R3F threw inside
+  // CanvasErrorBoundary), fail on EVERY platform and include the boundary's error message.
+  if (latestReadyState !== 'true') {
+    throw new Error(
+      `WebGL context is available (renderer="${String(rendererWebglDiagnostics.probeRenderer)}"), but 3D World scene did not reach data-ready="true" (data-ready="${String(latestReadyState)}", data-webgl-error="${latestWebglError}").`,
+    );
+  }
+
+  expect(latestReadyState).toBe('true');
 
   // Wait for two animation frames so the Orbit camera frame and live marker projections are painted,
   // then sample pixels at each projected cone position and assert orange cone colour (#f97316) is present

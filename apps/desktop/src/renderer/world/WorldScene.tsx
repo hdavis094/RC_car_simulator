@@ -83,28 +83,33 @@ export function probeWebGLSupport(): WebGLProbeResult {
 
     let renderer: string | null = null;
     let vendor: string | null = null;
-    if (typeof gl.getParameter === 'function') {
-      const debugInfo =
-        typeof gl.getExtension === 'function' ? gl.getExtension('WEBGL_debug_renderer_info') : null;
-      const rawRenderer = debugInfo
-        ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL)
-        : gl.getParameter(gl.RENDERER);
-      const rawVendor = debugInfo
-        ? gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL)
-        : gl.getParameter(gl.VENDOR);
-      renderer = typeof rawRenderer === 'string' ? rawRenderer : null;
-      vendor = typeof rawVendor === 'string' ? rawVendor : null;
+    try {
+      if (typeof gl.getParameter === 'function') {
+        const debugInfo =
+          typeof gl.getExtension === 'function'
+            ? gl.getExtension('WEBGL_debug_renderer_info')
+            : null;
+        const rawRenderer = debugInfo
+          ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL)
+          : gl.getParameter(gl.RENDERER);
+        const rawVendor = debugInfo
+          ? gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL)
+          : gl.getParameter(gl.VENDOR);
+        renderer = typeof rawRenderer === 'string' ? rawRenderer : null;
+        vendor = typeof rawVendor === 'string' ? rawVendor : null;
+      }
+      return {
+        available: true,
+        contextType,
+        renderer,
+        vendor,
+        errorMessage: null,
+      };
+    } finally {
+      if (typeof gl.getExtension === 'function') {
+        gl.getExtension('WEBGL_lose_context')?.loseContext();
+      }
     }
-    if (typeof gl.getExtension === 'function') {
-      gl.getExtension('WEBGL_lose_context')?.loseContext();
-    }
-    return {
-      available: true,
-      contextType,
-      renderer,
-      vendor,
-      errorMessage: null,
-    };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return {
@@ -849,7 +854,11 @@ export function WorldScene({
 
   const webglProbe = useMemo(() => probeWebGLSupport(), []);
   const webglAvailable = webglProbe.available;
-  const webglErrorDetail = canvasErrorText ?? webglProbe.errorMessage;
+  const rawWebglErrorDetail = canvasErrorText ?? webglProbe.errorMessage;
+  const webglErrorDetail =
+    rawWebglErrorDetail && rawWebglErrorDetail.length > 300
+      ? `${rawWebglErrorDetail.slice(0, 297)}...`
+      : rawWebglErrorDetail;
 
   useEffect(() => {
     const el = viewportRef.current;

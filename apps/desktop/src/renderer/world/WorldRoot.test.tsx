@@ -1879,14 +1879,27 @@ describe('3D World environment (P1-F)', () => {
     expect(cone1Marker.style.pointerEvents).toBe('auto');
     expect(screen.getByTestId('obstacle-rotate-handle-cone-1')).toBeDefined();
 
-    // Pressing Escape deselects cone-1 and hides selected-obstacle-controls & rotate handle
+    // Pressing Escape while a placement tool is active deselects cone-1 AND returns activeTool to 'select'
+    fireEvent.click(screen.getByTestId('palette-tool-cone'));
+    expect(screen.getByTestId('palette-tool-cone').getAttribute('aria-pressed')).toBe('true');
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(screen.queryByTestId('selected-obstacle-controls')).toBeNull();
     expect(screen.queryByTestId('obstacle-rotate-handle-cone-1')).toBeNull();
+    expect(screen.getByTestId('palette-tool-select').getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByTestId('palette-tool-cone').getAttribute('aria-pressed')).toBe('false');
 
-    // probeWebGLSupport captures webglcontextcreationerror statusMessage when WebGL context creation fails
+    // probeWebGLSupport calls loseContext() in finally even if getParameter throws
+    const loseContextSpy = vi.fn();
+    const throwingGl = {
+      getParameter: () => {
+        throw new Error('getParameter exploded');
+      },
+      getExtension: (name: string) =>
+        name === 'WEBGL_lose_context' ? { loseContext: loseContextSpy } : null,
+    };
     const getContextSpy = vi
       .spyOn(HTMLCanvasElement.prototype, 'getContext')
+      .mockReturnValueOnce(throwingGl as unknown as RenderingContext)
       .mockImplementation(function (this: HTMLCanvasElement) {
         const errEvent = new Event('webglcontextcreationerror') as Event & {
           statusMessage?: string;
@@ -1896,6 +1909,11 @@ describe('3D World environment (P1-F)', () => {
         return null;
       });
     try {
+      const thrownProbe = probeWebGLSupport();
+      expect(thrownProbe.available).toBe(false);
+      expect(thrownProbe.errorMessage).toContain('getParameter exploded');
+      expect(loseContextSpy).toHaveBeenCalledTimes(1);
+
       const probe = probeWebGLSupport();
       expect(probe.available).toBe(false);
       expect(probe.errorMessage).toContain('Could not create a WebGL context (GPU unavailable).');
