@@ -242,6 +242,9 @@ importers:
         specifier: ^5.0.16
         version: 5.0.16(@types/react@19.3.0)(react@19.3.1)(use-sync-external-store@1.7.0(react@19.3.1))
     devDependencies:
+      '@react-three/test-renderer':
+        specifier: ^9.1.1
+        version: 9.1.1(@react-three/fiber@9.8.2(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(three@0.187.0))(react@19.3.1)(three@0.187.0)
       '@testing-library/dom':
         specifier: ^10.4.2
         version: 10.4.2
@@ -611,6 +614,13 @@ packages:
         optional: true
       react-native:
         optional: true
+
+  '@react-three/test-renderer@9.1.1':
+    resolution: {integrity: sha512-4DmLn0tg+AP8aU0Mb5vekjHqFrwRJ3z11HfQGOJIDj6DxZ/5BjRHRsDxY0Y+g4l8+WHysQ6PeuSdzTDDYoGuXg==}
+    peerDependencies:
+      '@react-three/fiber': '>=9.0.0'
+      react: ^19.0.0
+      three: '>=0.156'
 
   '@rolldown/binding-android-arm-eabi@1.2.16':
     resolution: {integrity: sha512-ia3DwAs0OsMGS7+IConptSiyk9pEXkOx/AbJ2n/lAGxH3QkWQus1t8d7gnAT38FCU2sQu8lUbeR6AiZFv4JxaA==}
@@ -2046,6 +2056,12 @@ snapshots:
     transitivePeerDependencies:
       - '@types/react'
       - immer
+
+  '@react-three/test-renderer@9.1.1(@react-three/fiber@9.8.2(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(three@0.187.0))(react@19.3.1)(three@0.187.0)':
+    dependencies:
+      '@react-three/fiber': 9.8.2(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(three@0.187.0)
+      react: 19.3.1
+      three: 0.187.0
 
   '@rolldown/binding-android-arm-eabi@1.2.16':
     optional: true
