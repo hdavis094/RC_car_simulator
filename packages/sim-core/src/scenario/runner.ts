@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { Car, World, defaultCatalog, type Catalog } from '@rcsim/schema';
@@ -176,6 +177,10 @@ export async function runScenario(
     ...(spec.tickUs !== undefined ? { tickUs: spec.tickUs } : {}),
     source,
   });
+  const serial = createHash('sha256');
+  run.on('serial', (bytes) => {
+    serial.update(bytes);
+  });
   const ticks = Math.round((spec.seconds * 1_000_000) / run.clock.tickUs);
   try {
     // In slices, so a long scenario doesn't hold one enormous promise chain.
@@ -212,6 +217,7 @@ export async function runScenario(
     assertions,
     end,
     snapshotHash: snapshotHash(run.snapshot()),
+    serialHash: serial.digest('hex'),
     wallMs: Math.round(performance.now() - started),
   };
 }

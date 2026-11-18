@@ -46,6 +46,11 @@ export interface ScenarioResult {
   readonly end: RunEnd;
   /** Hash of the final snapshot, to compare runs for determinism. */
   readonly snapshotHash: string;
+  /**
+   * Lowercase hex SHA-256 of every byte the firmware wrote to Serial during the
+   * run, in tick order (a run with no firmware serial output hashes zero bytes).
+   */
+  readonly serialHash: string;
   readonly wallMs: number;
 }
 
