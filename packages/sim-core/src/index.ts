@@ -16,6 +16,21 @@ export { createActuatorModel, createEscModel, createServoModel } from './actuato
 export { createSensorModel } from './sensors/index.ts';
 export { createRun, type MeasuredRun, type RunMetrics } from './run/index.ts';
 export {
+  ControlScriptError,
+  ControlledSource,
+  DEFAULT_STALL_TIMEOUT_MS,
+  DEFAULT_STARTUP_TIMEOUT_MS,
+  FirmwareSource,
+  createFirmwareSource,
+  installTerminationHandlers,
+  killAllFirmware,
+  parseControlScript,
+  withControlScript,
+  type BridgeOptions,
+  type ControlEntry,
+  type UndeliveredEntry,
+} from './bridge/index.ts';
+export {
   ScenarioInputError,
   createScriptedSource,
   parseTimeline,

@@ -1,6 +1,6 @@
 # P1-H — sim-core: firmware bridge
 
-Status: in-review
+Status: done
 Agent: Claude (Sonnet sub-agent)
 Branch: ws/p1-h
 Depends on: P1-A, P1-C
@@ -126,3 +126,16 @@ All three items fixed; `pnpm verify` passes; not pushed or rebased. New tests: `
 
 `fakeFirmware` gained an optional `before` script that runs ahead of the connection, for the delayed-connect test.
 
+
+### Merged (orchestrator, 2026-11-18)
+
+Codex review round 6 approved `83ea36f` with no findings, including an end-to-end check against P1-B's sensor models (HC-SR04 at 1 m ≈ 5831 µs) and the P1-G starter firmware under `rcsim run --firmware`. CI is green on Linux and macOS; the first macOS run failed P1-A's "60 s of sim time in under 10 s" bound at 12.0 s, and a re-run passed at 6.4 s, while the test takes 3.3 s locally on both main and this branch. That bound is noisy on hosted macOS runners and is tracked for P2-01.
+
+Contract change requests:
+
+- **Export the bridge from `src/index.ts`**: accepted and done on main with this merge.
+- **`ScenarioResult` serial / `diagnostics`**: deferred to P2-01.
+- **`STEP.tcpInput`**: accepted for P2-01. It replaces the loopback-TCP reliance for scripted control input, along with the 32 KiB per-tick bound.
+- **`startupTimeoutMs` on the contract's `FirmwareSourceOptions`**: deferred to P2-01. `BridgeOptions` carries it until then.
+
+Accepted limitation: the post-reap group kill (documented in the bridge README).
