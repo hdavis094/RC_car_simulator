@@ -1,6 +1,6 @@
 # P1-C — hal: Arduino/ESP32 layer for desktop builds
 
-Status: in-review
+Status: done
 Agent: Codex (gpt-6.1-sol)
 Branch: ws/p1-c
 Depends on: P0 (all)
@@ -106,3 +106,8 @@ FreeRTOS tasks, `attachInterrupt`, BLE, the sim-side bridge (P1-H), PlatformIO r
   - Confirmed `randomSeed(0)` is a no-op in the target core. The existing HAL behavior is retained, cited in code and tested both before the first random draw and midway through an explicitly seeded sequence. Source: [Arduino ESP32 3.3.0 WMath.cpp](https://github.com/espressif/arduino-esp32/blob/3.3.0/cores/esp32/WMath.cpp#L40-L45), also checked against 3.0.0. The simulator continues deriving its initial deterministic state from CONFIG.seed.
   - Validation: final `pnpm verify` passed: 42 HAL cases / 1,951 assertions with each of GCC and Clang, two Node script tests, 312 TypeScript tests and seven Electron tests.
   - No contract changes. Status remains in-review. Both-OS CI was green at baseline `fa65363`; the new changes still need the next macOS CI run. No rebase or push was performed.
+
+- **Merged** (orchestrator, 2026-11-18): review round 3 approved `afccfef`; CI green on Linux and macOS (run 44371835810). Non-blocking follow-ups, not fixed:
+  - `scripts/build-cache.mjs` judges a temp directory's age by its creation mtime, which doesn't advance while Make writes into subdirectories. A cold build lasting over an hour (e.g. across a suspend) can have its directory removed mid-build. Non-ENOENT errors (e.g. EACCES) during cleanup fail an unrelated build. Use the newest mtime in the tree or a lock file, and swallow cleanup errors.
+  - The unroutable-connect test passes trivially on a host with no default route (ENETUNREACH returns at once). A loopback listener with a full backlog would exercise the shared allowance deterministically.
+  - A firmware that retries a failing connect every `loop()` can still cost up to 100 ms of wall time per tick. Documented, within the stall budget.
