@@ -20,6 +20,7 @@
 #include "control_input.h"
 #include "outbound.h"
 #include "serial_log.h"
+#include "telemetry_schedule.h"
 
 namespace {
 // Initial v1 tuning; P2-01 retunes against the full sim. SI at the sim edge;
@@ -41,7 +42,6 @@ constexpr car::AvoidanceTuning kAvoidance = [] {
 constexpr uint32_t kEscArmingMs = 3000;  // Matches the default ESC part definition.
 constexpr uint32_t kSensorPeriodMs = 50;
 constexpr uint16_t kSensorTimeoutMs = 20;
-constexpr uint32_t kTelemetryPeriodMs = 50;
 constexpr uint32_t kWifiStatusPeriodMs = 1000;
 constexpr char kCarName[] = "Default car";  // Keep in sync with car.json's name.
 constexpr char kFirmwareVersion[] = "0.1.0";
@@ -67,10 +67,11 @@ car::ControlState control;
 car::AvoidanceState avoidance;
 car::Actuation automatic, applied;
 car::ControlInput input;
+car::TelemetrySchedule telemetrySchedule;
 bool helloPending = false;
 std::array<car::Distance, 3> distances{};
 std::array<bool, 3> sensorReady{};
-uint32_t armStartedMs = 0, lastSensorMs = 0, lastTelemetryMs = 0, lastWifiStatusMs = 0;
+uint32_t armStartedMs = 0, lastSensorMs = 0, lastWifiStatusMs = 0;
 bool escArmed = false;
 bool listening = false, failsafeLogged = false, armingLogged = false, imuReady = false;
 
@@ -266,6 +267,9 @@ void controlStep() {
     automatic = {};
   }
   writeOutputs();
+  // Poll between bounded input slices, after safety/output work. A fresh time
+  // read includes HAL costs from sensors and PWM, without shifting the phase.
+  if (telemetrySchedule.take(nowMs())) telemetry();
 }
 }  // namespace
 void loop() {
@@ -296,10 +300,6 @@ void loop() {
                          "(default: change-me)");
     }
     lastWifiStatusMs = now;
-  }
-  if (uint32_t(now - lastTelemetryMs) >= kTelemetryPeriodMs) {
-    telemetry();
-    lastTelemetryMs = now;
   }
   delay(1);
 }

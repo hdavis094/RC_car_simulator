@@ -29,7 +29,7 @@ bool trySerialLine(SerialPort& serial, const char* message) {
 #if defined(ARDUINO_ARCH_ESP32)
     static_assert(HasSerialCapacity<SerialPort>::value, "Board Serial requires a capacity query");
 #else
-    // Local fallback pending HAL's HardwareSerial::availableForWrite() mirror.
+    // Compatibility fallback for HAL revisions before the capacity API landed.
     // HAL captures bytes rather than waiting on a UART (arduino.cpp:73-76).
     // Bounded lines + coalesced/rate-limited logs stay below its 16 KiB tick cap.
 #endif

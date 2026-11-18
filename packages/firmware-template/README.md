@@ -24,7 +24,9 @@ Every send first updates PWM with the current failsafe/e-stop state. JSON is ser
 
 HAL builds use a local fallback to its existing nonblocking `WiFiClient::write` queue, preserving sim latency/loss injection. No `availableForWrite` shim is assumed. A defensive short-write result disconnects instead of appending another JSON line to an incomplete prefix. This fallback and the board adapter compile against their respective existing APIs; no HAL edit is required. The regression suite fills a host socket and verifies that dropped sends leave no prefix, still update outputs first, and enforce failsafe/e-stop without waiting. Temporary `ENOMEM`/`ENOBUFS` results also drop the unsent line. Hello remains pending after a drop and is retried once per outer loop until sent; other network messages wait for hello. Battery telemetry uses `analogReadMilliVolts()` on both targets.
 
-Input is processed in slices of at most 8 lines / 256 bytes. Sensors, avoidance and outputs run between slices, with a 4096-byte total receive cap per outer loop. This handles an e-stop following 256 empty junk lines in one outer loop while continuing control updates; a larger backlog is spread across later loops. Invalid and overlong lines are counted and reported in at most one Serial/network summary per second. No line can trigger an immediate diagnostic write. On the board, every Serial message checks `Serial.availableForWrite()` for the complete CRLF line and is skipped if space is insufficient. HAL lacks `int HardwareSerial::availableForWrite()` today (requested in Handoff); the local host fallback captures the bounded, low-rate messages without a UART wait. Tests cover full UART space, a continuing flood behind e-stop, summary coalescing, peer closure/EPIPE and descriptor bounds.
+Input is processed in slices of at most 8 lines / 256 bytes. Sensors, avoidance and outputs run between slices, with a 4096-byte total receive cap per outer loop. This handles an e-stop following 256 empty junk lines in one outer loop while continuing control updates; a larger backlog is spread across later loops. Invalid and overlong lines are counted and reported in at most one Serial/network summary per second. No line can trigger an immediate diagnostic write. On the board, every Serial message checks `Serial.availableForWrite()` for the complete CRLF line and is skipped if space is insufficient. Both the board and HAL now supply `HardwareSerial::availableForWrite()`, so both use the capacity check. HAL returns current serial-frame headroom and charges the normal HAL call cost. The compatibility fallback remains for older HAL revisions. Tests cover full UART space, a continuing flood behind e-stop, summary coalescing, peer closure/EPIPE and descriptor bounds.
+
+Telemetry uses fixed 50 ms deadlines anchored to boot, advancing the deadline by whole periods rather than scheduling from the latest send. The schedule is checked after sensor/avoidance/output work between every input slice, so a large command burst cannot defer the check until the end of the outer loop. Actual uptime is reported in telemetry. After a long stall, missed slots are skipped while preserving phase; no catch-up burst delays control work. Unit tests cover jitter, missed slots and uptime wrap; integration tests check both consecutive intervals and absolute 50 ms phase through input floods.
 
 ## Host verification
 
@@ -32,7 +34,8 @@ Input is processed in slices of at most 8 lines / 256 bytes. Sensors, avoidance 
 
 - `src/commands.*`: pure command parser and bounded incremental line framing.
 - `src/control_input.h`: bounded input slices and coalesced rejection counts.
-- `src/serial_log.h`: whole-line Serial capacity check and local HAL fallback.
+- `src/serial_log.h`: whole-line Serial capacity check and compatibility fallback.
+- `src/telemetry_schedule.h`: boot-anchored 20 Hz deadlines.
 - `src/control.*`: pure sequence, mode, e-stop, failsafe, arming output gate and pulse mapping.
 - `src/avoidance.*`: pure avoidance decisions with explicit state and time inputs.
 - `src/outbound.*`: bounded serialization and the board nonblocking socket adapter.

@@ -150,6 +150,7 @@ TEST_CASE(
   bool connected = false, replaced = false, sawAuto = false, sawDrive = false, sawFailsafe = false;
   uint32_t escPulse = 0, steeringPulse = 0;
   size_t serialBeforeFlood = 0;
+  size_t peakSerialBytes = 0;
   for (uint64_t tick = 0; tick < 5100; ++tick) {
     if (tick == 100) first.write("{\"t\":\"drive\",\"seq\":100,\"throttle\":0.8,\"steer\":-0.5}\n");
     if (tick == 2900) first.write("{\"t\":\"mode\",\"mode\":\"auto\"}\n");
@@ -180,6 +181,7 @@ TEST_CASE(
     REQUIRE(done["type"] == "STEP_DONE");
     REQUIRE(done["message"]["tick"] == tick);
     auto data = done["message"].as<JsonVariantConst>();
+    peakSerialBytes = std::max(peakSerialBytes, data["serialTx"].size());
     for (auto byte : data["serialTx"].as<JsonArrayConst>())
       serial += static_cast<char>(byte.as<uint8_t>());
     for (auto event : data["netEvents"].as<JsonArrayConst>()) {
@@ -238,6 +240,7 @@ TEST_CASE(
   CHECK(sawAuto);
   CHECK(sawDrive);
   CHECK(sawFailsafe);
+  CHECK(peakSerialBytes < 1024);  // More than 15 KiB of headroom in each serial TX frame.
   CHECK(serial.find("Donkey Car starter firmware") != std::string::npos);
   CHECK(serial.find("ESC armed after 3000 ms neutral") != std::string::npos);
   CHECK(serial.find("initialization failed") == std::string::npos);
@@ -256,7 +259,15 @@ TEST_CASE(
     for (const auto& message : *stream) {
       if (message["t"] != "telemetry") continue;
       const auto ms = message["ms"].as<uint32_t>();
-      if (count) CHECK(ms - last == doctest::Approx(50).epsilon(0.06));
+      if (count) {
+        INFO("previous telemetry ms=", last, ", current ms=", ms,
+             ", peak serial bytes/tick=", peakSerialBytes);
+        CHECK(ms - last == doctest::Approx(50).epsilon(0.06));
+      }
+      // Global phase must remain anchored to boot, including both input floods
+      // and controller replacement. Permit only bounded polling/serialization jitter.
+      INFO("telemetry ms=", ms, ", phase offset=", ms % 50);
+      CHECK(ms % 50 <= 2);
       last = ms;
       ++count;
       CHECK(message["tof_mm"][0] == 812);
