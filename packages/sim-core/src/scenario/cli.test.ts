@@ -165,6 +165,10 @@ describe('rcsim run', () => {
         /unknown track "missing-track".*oval/,
       ],
       [[...base, '--seconds', '1', '--firmware', 'fw'], /firmware bridge/],
+      [
+        [...base, '--seconds', '1', '--script', 'idle.json', '--firmware', 'fw'],
+        /--script or --firmware, not both/,
+      ],
       [['fly'], /unknown command/],
       [['run', '--bogus'], /bogus/],
     ];

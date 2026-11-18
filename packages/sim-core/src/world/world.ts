@@ -206,6 +206,13 @@ export class PhysicsWorld implements World {
    * the car's collider. Contacts the car has are dropped and re-made around
    * it, so the stop events are fed to the contact history here, and the new
    * touches in the real step then count as the same contacts.
+   *
+   * Not neutral to contact dynamics: the refresh discards the car's
+   * established solver contacts, so a car pushing against something when this
+   * runs has its next velocity shift by about 1e-4 m/s. With no contacts
+   * (the first step, or a car in the air or clear of everything) it leaves
+   * the car bit-identical, and the same edits at the same ticks always give
+   * the same result.
    */
   #refreshGroundIndex(vehicle: RapierVehicle, nowUs: number): void {
     vehicle.body.setEnabled(false);
@@ -387,10 +394,11 @@ export class PhysicsWorld implements World {
     obstacle.x = position.x;
     obstacle.z = position.z;
     obstacle.yawDeg = yawDeg;
-    // Pose the collider now (raycasts read it), and start the contact history
-    // afresh: the car touching the obstacle where it was is not a touch where it is.
+    // Pose the collider now (raycasts read it). Forget the bounce history, but
+    // not whether the car is touching: a contact that never ended is not a new
+    // collision, and one the move ends is reported as a stop by the next step.
     this.#world.propagateModifiedBodyPositionsToColliders();
-    this.#contacts.forget(contactKey({ kind: 'obstacle', id }));
+    this.#contacts.reset(contactKey({ kind: 'obstacle', id }));
     this.#indexStale = true;
     if (obstacle.type === 'ramp') this.#groundStale = true;
   }

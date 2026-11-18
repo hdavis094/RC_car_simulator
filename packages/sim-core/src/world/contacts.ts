@@ -46,6 +46,17 @@ export class ContactTracker {
     if (state.active === 0) state.releasedAtUs = nowUs;
   }
 
+  /**
+   * Clears the bounce history of a target that has moved, but not whether it
+   * is being touched: a contact that never ended is never a new collision. If
+   * the move really ends the contact, Rapier reports a stop, and a later
+   * touch counts.
+   */
+  reset(key: string): void {
+    const state = this.#targets.get(key);
+    if (state) state.releasedAtUs = undefined;
+  }
+
   /** Forgets a target (it was removed from the world). */
   forget(key: string): void {
     this.#targets.delete(key);

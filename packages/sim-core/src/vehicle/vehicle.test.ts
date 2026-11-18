@@ -295,3 +295,49 @@ describe('the Vehicle contract', () => {
     });
   });
 });
+
+describe('wheel poses', () => {
+  for (const tickMs of [1, 20]) {
+    it(`stay at their chassis-frame offsets from the car while it drives fast (${tickMs} ms ticks)`, async () => {
+      const { world, car } = await openFloor();
+      const dt = tickMs / 1000;
+      let tick = 0;
+      const step = (seconds: number, command: VehicleCommand): void => {
+        for (let i = 0; i < Math.round(seconds / dt); i++) {
+          car.applyCommand(command);
+          world.step(dt, ++tick * tickMs * 1000);
+        }
+      };
+      step(4, { steerAngleRad: 0, motorDuty: 1 });
+      const speed = car.state().forwardSpeedMps;
+      expect(speed).toBeGreaterThan(4); // at 4 m/s a one-tick lag would be 4 mm (1 ms) or 80 mm (20 ms)
+      for (let k = 0; k < 5; k++) {
+        step(dt * 3, { steerAngleRad: 0, motorDuty: 1 });
+        const { pose, wheels } = car.state();
+        const conj: [number, number, number, number] = [
+          -pose.rotation[0],
+          -pose.rotation[1],
+          -pose.rotation[2],
+          pose.rotation[3],
+        ];
+        const expected = [
+          [-TRACK_WIDTH / 2, -WHEELBASE / 2],
+          [TRACK_WIDTH / 2, -WHEELBASE / 2],
+          [-TRACK_WIDTH / 2, WHEELBASE / 2],
+          [TRACK_WIDTH / 2, WHEELBASE / 2],
+        ];
+        wheels.forEach((w, i) => {
+          const rel = rotate(conj, [
+            w.position[0] - pose.position[0],
+            w.position[1] - pose.position[1],
+            w.position[2] - pose.position[2],
+          ]);
+          expect(rel[0]).toBeCloseTo(expected[i]![0]!, 5);
+          expect(rel[2]).toBeCloseTo(expected[i]![1]!, 5);
+          expect(rel[1]).toBeGreaterThan(0.03);
+          expect(rel[1]).toBeLessThan(0.09);
+        });
+      }
+    });
+  }
+});

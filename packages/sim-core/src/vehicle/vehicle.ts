@@ -59,6 +59,8 @@ export class RapierVehicle implements Vehicle {
   readonly #loadN: readonly number[];
   /** Wheel centres in the chassis frame with the car at rest on flat ground. */
   readonly #wheelRest: readonly Vec3[];
+  /** Each wheel's suspension hard point in the body (centre-of-gravity) frame. */
+  readonly #hardPoints: Vec3[] = [];
   /** False until the suspension has first been queried (`beforeStep`): its hard points are unset before. */
   #queried = false;
   #command: VehicleCommand = { steerAngleRad: 0, motorDuty: 0 };
@@ -130,8 +132,10 @@ export class RapierVehicle implements Vehicle {
       loads.push(share * m * GRAVITY);
       const sag = (GRAVITY * share) / TUNING.stiffness;
       const hardPointY = Rw + TUNING.restLengthM - sag;
+      const hardPoint: Vec3 = [x - cogM[0], hardPointY - cogM[1], z - cogM[2]];
+      this.#hardPoints.push(hardPoint);
       this.#controller.addWheel(
-        { x: x - cogM[0], y: hardPointY - cogM[1], z: z - cogM[2] },
+        { x: hardPoint[0], y: hardPoint[1], z: hardPoint[2] },
         { x: 0, y: -1, z: 0 },
         // +X axle: positive engine force drives toward −Z, which is forward.
         { x: 1, y: 0, z: 0 },
@@ -279,13 +283,17 @@ export class RapierVehicle implements Vehicle {
           inContact: false,
         };
       }
-      const hard = c.wheelHardPoint(i) ?? { x: 0, y: 0, z: 0 };
+      // The controller caches its hard point before physics, so it would lag the
+      // chassis by a step. Place the wheel from the chassis transform as it is
+      // now, keeping the controller's suspension length and spin.
+      const [hx, hy, hz] = this.#hardPoints[i] as Vec3;
       const length = c.wheelSuspensionLength(i) ?? TUNING.restLengthM;
-      const down = rotate(rotation, [0, -length, 0]);
+      const local = rotate(rotation, [hx, hy - length, hz]);
+      const body = this.body.translation();
       const steerRad = this.#steerRad[i] ?? 0;
       const spinRad = c.wheelRotation(i) ?? 0;
       return {
-        position: [hard.x + down[0], hard.y + down[1], hard.z + down[2]],
+        position: [body.x + local[0], body.y + local[1], body.z + local[2]],
         // chassis × steer about the chassis Y axis × spin about the axle (−X rolls forward)
         rotation: quatMul(quatMul(rotation, quatY(steerRad)), quatX(-spinRad)),
         steerRad,

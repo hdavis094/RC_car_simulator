@@ -41,4 +41,28 @@ describe('ContactTracker', () => {
     t.forget('a');
     expect(t.started('a', 3_000)).toBe(true); // forgotten while still touching
   });
+
+  it('keeps whether a moved target is touched: a contact that never ended is not counted again', () => {
+    const t = new ContactTracker();
+    expect(t.started('a', 0)).toBe(true);
+    t.reset('a'); // moved, still touching
+    t.stopped('a', 1_000_000); // a refresh drops the contact…
+    expect(t.started('a', 1_000_000)).toBe(false); // …and makes it again in the same step
+  });
+
+  it('counts a touch after a move that really ended the contact', () => {
+    const t = new ContactTracker();
+    expect(t.started('a', 0)).toBe(true);
+    t.reset('a');
+    t.stopped('a', 5_000_000); // the move took it out of reach
+    expect(t.started('a', 6_000_000)).toBe(true);
+  });
+
+  it('counts a touch right after a move ended the contact once the history is reset', () => {
+    const t = new ContactTracker();
+    expect(t.started('a', 0)).toBe(true);
+    t.stopped('a', 1_000);
+    t.reset('a'); // moved while apart: the old release no longer matters
+    expect(t.started('a', 2_000)).toBe(true);
+  });
 });

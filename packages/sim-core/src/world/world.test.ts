@@ -256,7 +256,7 @@ describe('the suspension and edits made while paused', () => {
     expect(car.state().wheels[0].position[1]).toBeCloseTo(0.055, 2);
   });
 
-  it('changes nothing about the car: edits that need an index refresh leave its motion bit-identical', async () => {
+  it('leaves a car with no contacts bit-identical when an edit needs an index refresh', async () => {
     const a = await settledCar();
     const b = await settledCar();
     a.step(1, 0.3);
@@ -284,5 +284,30 @@ describe('the suspension and edits made while paused', () => {
     world.moveObstacle(world.obstacles().find((o) => o.type === 'ramp')!.id, { x: -21, z: -20 }, 0);
     step(300, 0.5);
     expect(hits.count).toBe(1);
+  });
+
+  it('does not report a collision again when its obstacle is moved to the same pose and the index is refreshed', async () => {
+    const { world, step, hits } = await settledCar({ obstacles: [cone('c', 2.4, -0.6)] });
+    step(1500, 0.5); // pushes against the cone
+    expect(hits.count).toBe(1);
+    world.moveObstacle('c', { x: 2.4, z: -0.6 }, 0); // identical pose
+    step(100, 0.5);
+    world.addObstacle({ type: 'ramp', positionM: { x: -20, z: -20 }, yawDeg: 0 });
+    step(300, 0.5);
+    expect(hits.count).toBe(1);
+    world.moveObstacle('c', { x: 2.401, z: -0.6 }, 0); // 1 mm sideways: still touching
+    step(100, 0.5);
+    world.moveObstacle(world.obstacles().find((o) => o.type === 'ramp')!.id, { x: -21, z: -20 }, 0);
+    step(300, 0.5);
+    expect(hits.count).toBe(1);
+  });
+
+  it('counts a new collision when a move ends the contact and the car re-touches later', async () => {
+    const { world, step, hits } = await settledCar({ obstacles: [cone('c', 2.4, -0.6)] });
+    step(1500, 0.5);
+    expect(hits.count).toBe(1);
+    world.moveObstacle('c', { x: 2.4, z: -2.5 }, 0); // well ahead: contact ends
+    step(2000, 0.5); // drives on and hits it again
+    expect(hits.count).toBe(2);
   });
 });

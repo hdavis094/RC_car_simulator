@@ -115,6 +115,9 @@ export async function runScenario(
     throw new ScenarioInputError(`world "${spec.world}": ${(error as Error).message}`);
   }
 
+  if (spec.firmware !== undefined && spec.script !== undefined) {
+    throw new ScenarioInputError('give --script or --firmware, not both');
+  }
   let source: ActuatorSource;
   if (spec.firmware !== undefined) {
     if (!io.createFirmwareSource) {

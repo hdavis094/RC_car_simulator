@@ -39,7 +39,7 @@ const DRIVEN: ScriptedPwm[] = [
  * If you change the physics on purpose, run the test, check the car still
  * moves sensibly, and paste the new hash from the failure message.
  */
-const DRIVEN_GOLDEN_HASH = 'bf735395212b0f11b25d1e20a8fe7975b8fa1d618cc25b85564c568e8fbf687b';
+const DRIVEN_GOLDEN_HASH = 'b113eae87cc8b8000dc9525c98c9e21222494ac615da6349c1ffe38d44942a6a';
 
 describe('determinism', () => {
   async function drivenRun(): Promise<MeasuredRun> {
