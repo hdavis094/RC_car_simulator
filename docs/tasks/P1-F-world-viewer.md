@@ -1,6 +1,6 @@
 # P1-F — app: 3D World environment
 
-Status: in-review
+Status: done
 Agent: Antigravity
 Branch: ws/p1-f
 Depends on: P1-A
@@ -113,3 +113,22 @@ Run wiring in the main process (P2-01), track editing, the camera sensor, networ
   - **Optional `ControlApi` state query (`apps/desktop/src/shared/ipc.ts`)**: `NetworkConsole` currently derives connection state from `control.onState` / `control.onMessage` / `control.onRaw` via a per-`RcsimApi` tracker primed by `WorldRoot` (and when `App.tsx` mounts `createWorldDockTabs(api)` on project open, `NetworkConsole` is mounted from the start). If a consumer ever mounts in a fresh renderer context after main's `ControlClient` connected without prior events in that renderer, adding `state?: () => Promise<ConnectionState>` to `ControlApi` is the smallest optional addition.
 - **Open questions**:
   - None.
+
+### Merged (orchestrator, 2026-11-18)
+
+Claude review round 3 approved the feature work; the Antigravity worker ran out of credits during the CI round, so the orchestrator finished `7690019` and wrote `98c5680`, both reviewed by OpenCode (Codex was out of credits) and approved. CI is green on Linux and macOS, and on macOS the World test runs in full: hosted macOS runners do give WebGL once the darwin-invalid `--use-angle=swiftshader` flag is dropped. The `test.skip` branch remains only for a darwin runner with no WebGL context at all.
+
+Contract change requests:
+
+- **`App.tsx` mounts `createWorldDockTabs(api)` in the shared `BottomPanel` whenever a project is open**: accepted and done on main with this merge.
+- **`ControlApi.state()`**: deferred. The per-api tracker covers the app as wired.
+
+Non-blocking follow-ups, not fixed:
+
+- `WorldRoot.tsx:~417` calls `loadTrackById` on every run status event, rebuilding and disposing the track meshes each time. Overlapping loads can resolve out of order, so skip it when the id is unchanged and guard against stale responses.
+- `NetworkConsole.tsx`: the module-level tracker never unsubscribes, leaking one listener set per HMR reload (dev only). Every raw line is also `JSON.parse`d and copied into the 500-entry history even while hidden; store raw lines and format only when visible.
+- The `frameloop="never"` test asserts only `data-active`, not that rendering resumes.
+- The Playwright cone-pixel check is loose (any orange-ish pixel within 14 px of the ground point). Narrow it to a cone-sized window with a minimum count.
+- Paused edits are kept locally while `worldEdit` is a stub, so resume snaps back to the sim's poses with no message. Resolves when P2-01 wires `worldEdit`.
+- After the user clicks Disconnect in the console, the next drive key reconnects silently with no backoff.
+- The renderer copies of the oval/technical tracks and `OBSTACLE_DIMENSIONS` stay until P2-01 wires `worldEdit`; a drift test guards them.
