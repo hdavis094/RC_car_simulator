@@ -48,6 +48,7 @@ void Runtime::start(const JsonDocument& config, const JsonDocument& first, Excha
   modes_.fill(0);
   levels_.fill(false);
   written_.fill(false);
+  simDriven_.fill(false);
   periods_.fill(0);
   pulses_.fill(0);
   rx_.clear();
@@ -96,6 +97,7 @@ void Runtime::step(const JsonDocument& message, bool first) {
   if (!s["netFaults"].isNull()) faults_.set(s["netFaults"]);
   step_ = message;
   serialCount_ = 0;
+  connectWaitRemainingUs_ = 100000;
   done_.clear();
   done_["type"] = "STEP_DONE";
   auto d = done_["message"].to<JsonObject>();
@@ -106,7 +108,9 @@ void Runtime::step(const JsonDocument& message, bool first) {
 void Runtime::edges() {
   auto list = step_["message"]["gpioEdges"].as<JsonArrayConst>();
   while (edge_ < list.size() && list[edge_]["tUs"].as<uint64_t>() * 1000 <= now_) {
-    levels_[list[edge_]["gpio"].as<uint8_t>()] = list[edge_]["level"].as<bool>();
+    auto pin = list[edge_]["gpio"].as<uint8_t>();
+    levels_[pin] = list[edge_]["level"].as<bool>();
+    simDriven_[pin] = true;
     ++edge_;
   }
 }
@@ -158,9 +162,9 @@ void Runtime::mode(uint8_t pin, uint8_t mode) {
   modes_[pin] = mode;
   if (mode == 1 || mode == 5) {
     written_[pin] = false;
-    if (mode == 5) levels_[pin] = true;
+    if (mode == 5 && !simDriven_[pin]) levels_[pin] = true;
     for (size_t d = 0; d < deviceCount(); ++d)
-      if (this->pin(d, "XSHUT") == pin) levels_[pin] = true;
+      if (this->pin(d, "XSHUT") == pin && !simDriven_[pin]) levels_[pin] = true;
   }
 }
 void Runtime::write(uint8_t pin, bool level) {

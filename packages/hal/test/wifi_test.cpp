@@ -311,3 +311,34 @@ TEST_CASE("closing outgoing TCP clients emits no unmatched server connection eve
   delay(1);
   CHECK(sim.done.back()["message"]["netEvents"].size() == 0);
 }
+
+TEST_CASE("repeated unreachable connects share a small host wait budget within one tick") {
+  FakeSim sim;
+  sim.start();
+  auto wallStart = SteadyClock::now();
+  auto simStart = runtime().nowNs();
+  for (int attempt = 0; attempt < 8; ++attempt) {
+    WiFiClient client;
+    // Routing/firewall errors may fail sooner; neither address should consume a
+    // fresh long timeout on every attempt or every client instance.
+    client.connect(attempt % 2 ? "192.0.2.1" : "10.255.255.1", 80);
+  }
+  auto elapsed = SteadyClock::now() - wallStart;
+  INFO("repeated connect wall milliseconds: "
+       << std::chrono::duration<double, std::milli>(elapsed).count());
+  CHECK(elapsed < std::chrono::milliseconds(400));
+  CHECK(runtime().nowNs() - simStart == 8000);
+  CHECK(sim.done.empty());
+  delay(1);
+  CHECK(runtime().connectWaitBudgetUs() == 100000);
+}
+TEST_CASE("WiFiClient inherits the Arduino ESP32 3.x Stream timeout in milliseconds") {
+  FakeSim sim;
+  sim.start();
+  WiFiClient client;
+  client.setTimeout(3);
+  auto start = runtime().nowNs();
+  CHECK(client.readString().empty());
+  CHECK(runtime().nowNs() - start >= 2000000);
+  CHECK(runtime().nowNs() - start < 4000000);
+}

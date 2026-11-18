@@ -276,16 +276,17 @@ int WiFiClient::connect(const char* host, uint16_t port) {
   int result =
       ::connect(socket_->fd, reinterpret_cast<sockaddr*>(&socket_->peer), sizeof(socket_->peer));
   if (result < 0 && errno == EINPROGRESS) {
-    // Resolve the Arduino connect result in host time; never advance the sim clock.
-    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    // All clients share 100 ms per STEP, leaving ample room for STEP_DONE before
+    // the sim's stall timeout. Exhausted ticks still permit a zero-time readiness check.
+    auto waitStart = std::chrono::steady_clock::now();
+    auto deadline = waitStart + std::chrono::microseconds(runtime().connectWaitBudgetUs());
     while (true) {
-      auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
-                           deadline - std::chrono::steady_clock::now())
-                           .count();
-      if (remaining < 0) break;
+      auto remaining =
+          std::chrono::ceil<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now())
+              .count();
       pollfd p{socket_->fd, POLLOUT, 0};
-      int ready = ::poll(&p, 1, static_cast<int>(remaining) + 1);
-      if (ready < 0 && errno == EINTR) continue;
+      int ready = ::poll(&p, 1, static_cast<int>(std::max<int64_t>(remaining, 0)));
+      if (ready < 0 && errno == EINTR && std::chrono::steady_clock::now() < deadline) continue;
       int error = 0;
       socklen_t size = sizeof(error);
       if (ready > 0 && (p.revents & (POLLOUT | POLLERR | POLLHUP)) &&
@@ -293,6 +294,10 @@ int WiFiClient::connect(const char* host, uint16_t port) {
         result = 0;
       break;
     }
+    auto waited =
+        std::chrono::ceil<std::chrono::microseconds>(std::chrono::steady_clock::now() - waitStart)
+            .count();
+    runtime().chargeConnectWait(static_cast<uint64_t>(waited));
   }
   if (result < 0) {
     closeSocket(*socket_);

@@ -76,6 +76,8 @@ TEST_CASE("core helpers use common types, configured ADC depth and PWM") {
   CHECK(constrain(2, -1.5f, 1.5f) == 1.5f);
   CHECK(constrain(-2, -1.5f, 1.5f) == -1.5f);
   CHECK(radians(90) == doctest::Approx(HALF_PI));
+  CHECK(degrees(HALF_PI) == doctest::Approx(90));
+  CHECK(TWO_PI == doctest::Approx(2 * PI));
   CHECK(sq(3.5) == 12.25);
   CHECK(LED_BUILTIN == 2);
   analogReadResolution(10);
@@ -112,4 +114,65 @@ TEST_CASE("Arduino random is repeatable from the session seed and explicit resee
   CHECK(random(100000) == value);
   CHECK(random(0) == 0);
   CHECK(random(5, 5) == 5);
+}
+
+TEST_CASE("String addition formats numbers and appends characters without ambiguity") {
+  String s = "a";
+  int number = 42;
+  CHECK(s + number == "a42");
+  CHECK(s + 43U == "a43");
+  CHECK(s + 44L == "a44");
+  CHECK(s + 45UL == "a45");
+  CHECK(s + 1.5f == "a1.50");
+  CHECK(s + 2.5 == "a2.50");
+  CHECK(s + 'c' == "ac");
+  CHECK(String("a") + 'c' == "ac");
+  CHECK(String("a") + 42 + 'c' + 1.5 == "a42c1.50");
+  CHECK(s == "a");
+  CHECK(String("abaca").lastIndexOf('a') == 4);
+  CHECK(String("abaca").lastIndexOf("ba") == 1);
+  CHECK(String("abaca").lastIndexOf('z') == -1);
+  CHECK(String("CaR").equalsIgnoreCase("car"));
+  CHECK_FALSE(String("car").equalsIgnoreCase("cart"));
+}
+TEST_CASE("randomSeed zero preserves the existing ESP32 Arduino random sequence") {
+  FakeSim sim;
+  sim.start();
+  auto sessionFirst = random(1000000);
+  sim.start();
+  randomSeed(0);
+  CHECK(random(1000000) == sessionFirst);
+  randomSeed(123);
+  auto first = random(1000000), second = random(1000000);
+  randomSeed(123);
+  CHECK(random(1000000) == first);
+  randomSeed(0);
+  CHECK(random(1000000) == second);
+}
+TEST_CASE("INPUT_PULLUP defaults an undriven input and preserves sim-driven low edges") {
+  FakeSim sim;
+  sim.prepare = [](JsonDocument& d) {
+    if (d["message"]["tick"] != 0) return;
+    auto edges = d["message"]["gpioEdges"].as<JsonArray>();
+    for (int i = 0; i < 3; ++i) {
+      auto e = edges.add<JsonObject>();
+      e["gpio"] = 34;
+      e["tUs"] = i * 50;
+      e["level"] = i == 1;
+    }
+  };
+  sim.start();
+  pinMode(32, INPUT_PULLUP);
+  CHECK(digitalRead(32) == HIGH);
+  pinMode(34, INPUT_PULLUP);
+  CHECK(digitalRead(34) == LOW);
+  delayMicroseconds(50);
+  pinMode(34, INPUT_PULLUP);
+  CHECK(digitalRead(34) == HIGH);
+  delayMicroseconds(50);
+  pinMode(34, INPUT_PULLUP);
+  CHECK(digitalRead(34) == LOW);
+  delay(1);
+  pinMode(34, INPUT_PULLUP);
+  CHECK(digitalRead(34) == LOW);
 }

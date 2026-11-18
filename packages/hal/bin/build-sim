@@ -13,6 +13,7 @@ import {
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { compilerWords, makeCompiler } from '../scripts/compiler-command.mjs';
+import { removeStaleBuilds } from '../scripts/build-cache.mjs';
 
 const hal = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const project = process.argv[2];
@@ -20,8 +21,8 @@ if (!project || process.argv.length !== 3) {
   console.error('usage: build-sim <project-dir>');
   process.exit(2);
 }
-function run(command, args, cwd) {
-  const result = spawnSync(command, args, { cwd, stdio: 'inherit' });
+function run(command, args, cwd, env = process.env) {
+  const result = spawnSync(command, args, { cwd, env, stdio: 'inherit' });
   if (result.error) throw result.error;
   if (result.status !== 0) {
     const error = new Error(`compiler/build exited with ${result.status ?? result.signal}`);
@@ -47,6 +48,13 @@ try {
   const output = path.join(root, '.rcsim', 'build');
   const words = compilerWords(process.env.CXX || 'c++');
   const [command, ...prefix] = words;
+  const cppFlags = process.env.CPPFLAGS?.trim() ? compilerWords(process.env.CPPFLAGS) : [];
+  const cxxFlags = process.env.CXXFLAGS?.trim() ? compilerWords(process.env.CXXFLAGS) : [];
+  // Make receives shell-quoted words; the firmware spawn receives the same argv
+  // directly. Preserve unset variables so Make can apply its default flags.
+  const makeEnv = { ...process.env };
+  if (process.env.CPPFLAGS !== undefined) makeEnv.CPPFLAGS = makeCompiler(cppFlags);
+  if (process.env.CXXFLAGS !== undefined) makeEnv.CXXFLAGS = makeCompiler(cxxFlags);
   const version = spawnSync(command, [...prefix, '--version'], { cwd: root, encoding: 'utf8' });
   if (version.error) throw version.error;
   if (version.status !== 0) throw new Error('cannot determine CXX version');
@@ -66,6 +74,7 @@ try {
   mkdirSync(output, { recursive: true });
   if (!existsSync(path.join(cache, 'libhal.a'))) {
     mkdirSync(path.join(hal, 'build'), { recursive: true });
+    removeStaleBuilds(path.join(hal, 'build'));
     const temporary = mkdtempSync(path.join(hal, 'build', '.hal-'));
     try {
       run(
@@ -78,6 +87,7 @@ try {
           'lib',
         ],
         hal,
+        makeEnv,
       );
       try {
         renameSync(temporary, cache);
@@ -107,6 +117,8 @@ try {
       path.join(hal, 'libraries', 'ArduinoJson'),
       '-I',
       path.join(root, 'include'),
+      ...cppFlags,
+      ...cxxFlags,
       ...sources,
       path.join(cache, 'libhal.a'),
       '-o',

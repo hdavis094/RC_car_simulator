@@ -24,6 +24,7 @@
 #define F(s) (s)
 constexpr double PI = 3.14159265358979323846;
 constexpr double HALF_PI = PI / 2;
+constexpr double TWO_PI = PI * 2;
 constexpr int LED_BUILTIN = 2;
 constexpr uint32_t SERIAL_8N1 = 0x800001cU;
 constexpr double DEG_TO_RAD = PI / 180;
@@ -94,6 +95,20 @@ class String : public std::string {
     auto n = find(s, from);
     return n == npos ? -1 : static_cast<int>(n);
   }
+  int lastIndexOf(char c) const {
+    auto pos = rfind(c);
+    return pos == npos ? -1 : static_cast<int>(pos);
+  }
+  int lastIndexOf(const String& text) const {
+    auto pos = rfind(text);
+    return pos == npos ? -1 : static_cast<int>(pos);
+  }
+  bool equalsIgnoreCase(const String& text) const {
+    String a(*this), b(text);
+    a.toLowerCase();
+    b.toLowerCase();
+    return a == b;
+  }
   String substring(unsigned int from, unsigned int to) const {
     if (from > to) std::swap(from, to);
     return substr(std::min<size_t>(from, size()), to - from);
@@ -139,6 +154,20 @@ inline String operator+(const String& a, const char* b) {
 }
 inline String operator+(const char* a, const String& b) {
   return String(a + static_cast<const std::string&>(b));
+}
+
+template <typename T, std::enable_if_t<std::is_arithmetic_v<T>, int> = 0>
+inline String operator+(const String& text, T value) {
+  String result(text);
+  result += value;
+  return result;
+}
+template <typename T, std::enable_if_t<std::is_arithmetic_v<T>, int> = 0>
+inline String operator+(T value, const String& text) {
+  String result;
+  result += value;
+  result += text;
+  return result;
 }
 
 class Print;
@@ -249,6 +278,10 @@ void analogReadResolution(uint8_t bits);
 template <typename T>
 constexpr auto radians(T degrees) {
   return degrees * DEG_TO_RAD;
+}
+template <typename T>
+constexpr auto degrees(T angle) {
+  return angle * RAD_TO_DEG;
 }
 template <typename T>
 constexpr auto sq(T value) {

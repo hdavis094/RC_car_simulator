@@ -32,6 +32,10 @@ class WiFiClient : public Stream {
   int connect(const char* host, uint16_t port);
   int connect(IPAddress host, uint16_t port);
   uint8_t connected();
+  // Core 3.x NetworkClient inherits Stream::setTimeout (milliseconds), unlike 2.x:
+  // https://github.com/espressif/arduino-esp32/blob/3.3.0/libraries/Network/src/NetworkClient.h
+  // https://github.com/espressif/arduino-esp32/blob/3.3.0/cores/esp32/Stream.h#L58
+  using Stream::setTimeout;
   explicit operator bool() const;
   using Print::write;
   using Stream::read;

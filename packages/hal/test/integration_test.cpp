@@ -273,8 +273,20 @@ std::string compilerLauncher(const Project& p) {
   return shellWord(wrapper.string()) + " " + (cxx ? cxx : "c++");
 }
 }  // namespace
-TEST_CASE("build-sim accepts a multi-word quoted compiler launcher without Werror") {
+TEST_CASE("build-sim accepts a multi-word compiler and cleans abandoned cold builds") {
   Project p;
+  auto stale = fs::absolute(fs::path("build") / (".hal-abandoned-" + std::to_string(getpid())));
+  auto recent = fs::absolute(fs::path("build") / (".hal-active-" + std::to_string(getpid())));
+  struct Cleanup {
+    fs::path a, b;
+    ~Cleanup() {
+      fs::remove_all(a);
+      fs::remove_all(b);
+    }
+  } cleanup{stale, recent};
+  fs::create_directories(stale);
+  fs::create_directories(recent);
+  fs::last_write_time(stale, fs::file_time_type::clock::now() - std::chrono::hours(2));
   auto cxx = compilerLauncher(p);
   Child build;
   build.launch(fs::absolute("bin/build-sim").string(), {p.root.string()}, p.root / "diagnostics",
@@ -283,6 +295,8 @@ TEST_CASE("build-sim accepts a multi-word quoted compiler launcher without Werro
   INFO(contents(p.root / "diagnostics"));
   REQUIRE(status == 0);
   CHECK(fs::exists(p.root / ".rcsim/build/firmware"));
+  CHECK_FALSE(fs::exists(stale));
+  CHECK(fs::exists(recent));
 }
 TEST_CASE("concurrent first builds publish a complete immutable shared HAL cache") {
   Project p;
@@ -315,4 +329,27 @@ TEST_CASE("concurrent first builds publish a complete immutable shared HAL cache
   }
   CHECK(temporary == 0);
   CHECK(published == 1);
+}
+
+TEST_CASE("build-sim propagates sanitizer and quoted preprocessor flags to firmware") {
+  Project p;
+  auto include = p.root / "flags with spaces";
+  fs::create_directories(include);
+  std::ofstream(include / "review_flags.h") << "#define REVIEW_INCLUDE 5\n";
+  std::ofstream(p.root / "src/main.cpp")
+      << "#include <Arduino.h>\n#include <review_flags.h>\n"
+         "static_assert(REVIEW_FLAG == 7 && REVIEW_INCLUDE == 5);\n"
+         "#if defined(__clang__)\n#if !__has_feature(address_sanitizer)\n#error sanitizer flag "
+         "missing\n#endif\n"
+         "#elif !defined(__SANITIZE_ADDRESS__)\n#error sanitizer flag missing\n#endif\n"
+         "void setup() {}\nvoid loop() {}\n";
+  Child build;
+  build.launch(fs::absolute("bin/build-sim").string(), {p.root.string()}, p.root / "diagnostics",
+               "",
+               {{"CXXFLAGS", "-fsanitize=address -fno-omit-frame-pointer"},
+                {"CPPFLAGS", "-DREVIEW_FLAG=7 -I" + shellWord(include.string())}});
+  int status = build.wait(40);
+  INFO(contents(p.root / "diagnostics"));
+  REQUIRE(status == 0);
+  CHECK(fs::exists(p.root / ".rcsim/build/firmware"));
 }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <deque>
 #include <functional>
@@ -19,11 +20,18 @@ class Runtime {
   uint64_t nowNs() const { return now_; }
   uint64_t uptimeNs() const { return now_ - boot_; }
   void loopReturned();
+  // Arduino ESP32 3.x ignores zero, preserving the current PRNG state:
+  // https://github.com/espressif/arduino-esp32/blob/3.3.0/cores/esp32/WMath.cpp#L40-L45
   void randomSeed(uint32_t seed) {
     if (seed) randomState_ = seed;
   }
   uint32_t randomWord();
   uint8_t adcBits = 12;
+  // Shared host-time allowance for outbound connects in the current STEP.
+  uint64_t connectWaitBudgetUs() const { return connectWaitRemainingUs_; }
+  void chargeConnectWait(uint64_t us) {
+    connectWaitRemainingUs_ -= std::min(us, connectWaitRemainingUs_);
+  }
   void mode(uint8_t pin, uint8_t mode);
   void write(uint8_t pin, bool level);
   bool read(uint8_t pin);
@@ -53,12 +61,14 @@ class Runtime {
   std::array<uint8_t, 256> modes_{};
   std::array<bool, 256> levels_{};
   std::array<bool, 256> written_{};
+  std::array<bool, 256> simDriven_{};
   std::array<uint32_t, 256> periods_{}, pulses_{};
   std::vector<uint8_t> addresses_;
   std::deque<uint8_t> rx_;
   uint64_t now_ = 0, boot_ = 0, end_ = 0, tick_ = 0;
   size_t edge_ = 0, serialCount_ = 0;
   uint32_t randomState_ = 1;
+  uint64_t connectWaitRemainingUs_ = 100000;
   bool active_ = false;
 };
 Runtime& runtime();
