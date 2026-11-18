@@ -13,6 +13,7 @@ export {
 } from './world/index.ts';
 export { RapierVehicle, vehicleParams, type VehicleParams } from './vehicle/index.ts';
 export { createActuatorModel, createEscModel, createServoModel } from './actuators/index.ts';
+export { createSensorModel } from './sensors/index.ts';
 export { createRun, type MeasuredRun, type RunMetrics } from './run/index.ts';
 export {
   ScenarioInputError,
