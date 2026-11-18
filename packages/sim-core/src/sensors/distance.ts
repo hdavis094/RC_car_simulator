@@ -5,8 +5,15 @@ import { sensorTransform } from './pose.ts';
 import { rotate } from '../world/quat.ts';
 
 const OUT_OF_RANGE_MM = 8190;
+/** Start delay after TRIG falling edge before ECHO rises (8 cycles at 40 kHz). */
 const START_DELAY_US = 200;
+/** Sound speed, m/s. */
 const SOUND_SPEED_MPS = 343;
+/**
+ * HC-SR04 ECHO high time when nothing is in range. Cited: HC-SR04 datasheet
+ * (Cytron) — no echo is reported as a ~38 ms pulse.
+ */
+const TIMEOUT_HIGH_US = 38_000;
 
 export function createDistanceSensorModel(part: PartContext): SensorModel {
   const definition = part.definition;
@@ -23,12 +30,12 @@ export function createDistanceSensorModel(part: PartContext): SensorModel {
     n === 1 ? [0] : Array.from({ length: n }, (_, i) => -beamRad / 2 + (i * beamRad) / (n - 1));
   const localDirs: Vec3[] = angles.map((a) => [Math.sin(a), 0, -Math.cos(a)]);
 
-  const isHc = definition.id.includes('hc-sr04');
+  // A part is an HC-SR04 when it exposes TRIG and ECHO pins.
+  const isHc = part.gpioPins['TRIG'] !== undefined && part.gpioPins['ECHO'] !== undefined;
   const trigGpio = part.gpioPins['TRIG'];
   const echoGpio = part.gpioPins['ECHO'];
 
-  const periodUs = Math.round(1_000_000 / params.updateHz);
-  let nextUs = 0;
+  let readIndex = 0;
   let beams: SensorBeam[] = [];
 
   // HC-SR04 state
@@ -40,7 +47,6 @@ export function createDistanceSensorModel(part: PartContext): SensorModel {
     level: boolean;
   }
   const scheduled: ScheduledEdge[] = [];
-  let tickUs = 1000;
 
   function doCast(
     world: SensorContext['world'],
@@ -68,20 +74,21 @@ export function createDistanceSensorModel(part: PartContext): SensorModel {
     return { nearest, newBeams };
   }
 
-  function processTrigger(trigUs: number, context: SensorContext): void {
+  function processTrigger(trigFallUs: number, context: SensorContext): void {
     const { nearest } = doCast(context.world, context.vehicle);
-    const tickIndex = Math.floor(trigUs / tickUs);
-    const t1 = (tickIndex + 1) * tickUs;
-    const rise = Math.max(trigUs + START_DELAY_US, t1);
+    const tickNow = context.nowUs;
+    const rise = Math.max(trigFallUs + START_DELAY_US, tickNow);
+    if (echoGpio === undefined) return;
     if (nearest === null || nearest < minRangeM || nearest > maxRangeM) {
-      // timeout: no echo
+      // Timeout behaviour: hold ECHO high for TIMEOUT_HIGH_US.
+      scheduled.push({ gpio: echoGpio, tUs: rise, level: true });
+      scheduled.push({ gpio: echoGpio, tUs: rise + TIMEOUT_HIGH_US, level: false });
       return;
     }
     const distMm = nearest * 1000;
     const sigmaMm = (params.noiseSigmaPct / 100) * distMm;
     const noisyDistM = (distMm + context.rng.normal() * sigmaMm) / 1000;
     const highTimeUs = Math.round(((2 * noisyDistM) / SOUND_SPEED_MPS) * 1_000_000);
-    if (echoGpio === undefined) return;
     scheduled.push({ gpio: echoGpio, tUs: rise, level: true });
     scheduled.push({ gpio: echoGpio, tUs: rise + highTimeUs, level: false });
   }
@@ -90,10 +97,9 @@ export function createDistanceSensorModel(part: PartContext): SensorModel {
     instanceId: part.instance.instanceId,
     template: behavior.template,
     update(context: SensorContext): readonly SensorReading[] {
-      tickUs = context.dtUs;
-      // Process any HC-SR04 triggers detected last tick.
+      // Process any HC-SR04 triggers detected since the last tick.
       if (isHc && pendingTriggers.length > 0) {
-        for (const trigUs of pendingTriggers) processTrigger(trigUs, context);
+        for (const trigFallUs of pendingTriggers) processTrigger(trigFallUs, context);
         pendingTriggers.length = 0;
       }
 
@@ -103,8 +109,9 @@ export function createDistanceSensorModel(part: PartContext): SensorModel {
       if (isHc) return [];
 
       const out: SensorReading[] = [];
-      while (nextUs < context.nowUs) {
-        const tUs = nextUs;
+      while (true) {
+        const tUs = Math.floor((readIndex * 1_000_000) / params.updateHz);
+        if (tUs >= context.nowUs) break;
         if (nearest === null || nearest < minRangeM || nearest > maxRangeM) {
           out.push({ type: 'distance', tUs, mm: OUT_OF_RANGE_MM, status: 'no-target' });
         } else {
@@ -113,7 +120,7 @@ export function createDistanceSensorModel(part: PartContext): SensorModel {
           const noisy = distMm + context.rng.normal() * sigmaMm;
           out.push({ type: 'distance', tUs, mm: Math.round(noisy), status: 'valid' });
         }
-        nextUs += periodUs;
+        readIndex += 1;
       }
       return out;
     },
@@ -124,7 +131,7 @@ export function createDistanceSensorModel(part: PartContext): SensorModel {
         trigHighStart = write.tUs;
       } else {
         if (trigHighStart !== null && write.tUs - trigHighStart >= 10) {
-          pendingTriggers.push(trigHighStart);
+          pendingTriggers.push(write.tUs); // anchor on falling edge
         }
         trigHighStart = null;
       }
@@ -133,11 +140,15 @@ export function createDistanceSensorModel(part: PartContext): SensorModel {
       t0Us: number,
       t1Us: number,
     ): readonly { gpio: number; tUs: number; level: boolean }[] {
+      // Purge stale edges before the current window.
+      for (let i = scheduled.length - 1; i >= 0; i--) {
+        if (scheduled[i]!.tUs < t0Us) scheduled.splice(i, 1);
+      }
       const out = scheduled
         .filter((e) => e.tUs >= t0Us && e.tUs < t1Us)
         .sort((a, b) => a.tUs - b.tUs)
         .map((e) => ({ gpio: e.gpio, tUs: e.tUs, level: e.level }));
-      // remove returned
+      // Remove delivered edges.
       for (const e of out) {
         const idx = scheduled.findIndex(
           (s) => s.gpio === e.gpio && s.tUs === e.tUs && s.level === e.level,
