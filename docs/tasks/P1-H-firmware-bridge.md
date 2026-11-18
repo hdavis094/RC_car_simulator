@@ -1,6 +1,6 @@
 # P1-H — sim-core: firmware bridge
 
-Status: todo
+Status: in-progress
 Agent: Claude (Sonnet sub-agent)
 Branch: ws/p1-h
 Depends on: P1-A, P1-C

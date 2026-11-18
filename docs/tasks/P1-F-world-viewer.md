@@ -1,6 +1,6 @@
 # P1-F — app: 3D World environment
 
-Status: todo
+Status: in-progress
 Agent: Antigravity
 Branch: ws/p1-f
 Depends on: P1-A

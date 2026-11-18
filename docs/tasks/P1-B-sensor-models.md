@@ -1,6 +1,6 @@
 # P1-B — sim-core: sensor models
 
-Status: todo
+Status: in-progress
 Agent: OpenCode (freebeam)
 Branch: ws/p1-b
 Depends on: P1-A
