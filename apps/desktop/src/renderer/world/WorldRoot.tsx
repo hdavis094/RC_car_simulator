@@ -870,6 +870,12 @@ export function WorldRoot({ api, initialWorld, showDock = false }: WorldRootProp
 
       if (isEditableEventTarget(event.target)) return;
 
+      if (event.key === 'Escape' && selectedObstacleId) {
+        event.preventDefault();
+        setSelectedObstacleId(null);
+        return;
+      }
+
       // Obstacle rotation & deletion shortcuts when an obstacle is selected and editable
       if (editable && selectedObstacleId) {
         const selectedObs = worldFileRef.current.obstacles.find((o) => o.id === selectedObstacleId);
@@ -1332,17 +1338,21 @@ export function WorldRoot({ api, initialWorld, showDock = false }: WorldRootProp
         data-testid="world-editor-toolbar"
         style={{
           display: 'flex',
-          flexWrap: 'wrap',
+          flexWrap: 'nowrap',
           alignItems: 'center',
           gap: 10,
+          minHeight: 38,
           padding: '6px 14px',
           background: '#141d26',
           borderBottom: '1px solid #2b3947',
           fontSize: 12,
           flexShrink: 0,
+          overflowX: 'auto',
+          overflowY: 'hidden',
+          whiteSpace: 'nowrap',
         }}
       >
-        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
           <span>Track</span>
           <select
             aria-label="Track"
@@ -1368,7 +1378,7 @@ export function WorldRoot({ api, initialWorld, showDock = false }: WorldRootProp
         <div
           role="group"
           aria-label="Obstacle palette"
-          style={{ display: 'flex', alignItems: 'center', gap: 4 }}
+          style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}
         >
           {PALETTE_TOOLS.map((tool) => (
             <button
@@ -1396,7 +1406,7 @@ export function WorldRoot({ api, initialWorld, showDock = false }: WorldRootProp
         <div
           role="group"
           aria-label="Placement coordinates"
-          style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+          style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}
         >
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
             <span>X</span>
@@ -1465,6 +1475,7 @@ export function WorldRoot({ api, initialWorld, showDock = false }: WorldRootProp
               background: '#1c2732',
               borderRadius: 4,
               border: '1px solid #344352',
+              flexShrink: 0,
             }}
           >
             <span>
@@ -1570,7 +1581,7 @@ export function WorldRoot({ api, initialWorld, showDock = false }: WorldRootProp
         <div
           role="group"
           aria-label="World layout files"
-          style={{ display: 'flex', alignItems: 'center', gap: 5 }}
+          style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0 }}
         >
           <input
             type="text"
@@ -1618,7 +1629,13 @@ export function WorldRoot({ api, initialWorld, showDock = false }: WorldRootProp
         <div
           role="group"
           aria-label="Camera mode"
-          style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 'auto' }}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 4,
+            marginLeft: 'auto',
+            flexShrink: 0,
+          }}
         >
           {CAMERA_MODES.map((mode) => (
             <button

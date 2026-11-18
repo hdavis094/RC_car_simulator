@@ -21,10 +21,12 @@ export {
   WorldScene,
   applyOverlayMarkerElementPose,
   canUseWebGL,
+  probeWebGLSupport,
   projectPointWithCamera,
   type EditorTool,
   type ProjectedMarkerPose,
   type SceneRunMode,
+  type WebGLProbeResult,
   type WorldR3FSceneProps,
   type WorldSceneProps,
 } from './WorldScene.tsx';

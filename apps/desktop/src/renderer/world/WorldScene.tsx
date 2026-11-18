@@ -30,37 +30,109 @@ import {
 } from './scene-data.ts';
 import { buildTrackSurfaceGeometry } from './track-mesh.ts';
 
-export function canUseWebGL(): boolean {
+export interface WebGLProbeResult {
+  readonly available: boolean;
+  readonly contextType: 'webgl2' | 'webgl' | null;
+  readonly renderer: string | null;
+  readonly vendor: string | null;
+  readonly errorMessage: string | null;
+}
+
+export function probeWebGLSupport(): WebGLProbeResult {
   if (typeof document === 'undefined' || typeof window === 'undefined') {
-    return false;
+    return {
+      available: false,
+      contextType: null,
+      renderer: null,
+      vendor: null,
+      errorMessage: 'DOM document/window unavailable',
+    };
   }
+  const errors: string[] = [];
   try {
     const canvas = document.createElement('canvas');
-    const gl = canvas.getContext('webgl2') ?? canvas.getContext('webgl');
+    const onContextCreationError = (event: Event): void => {
+      const statusMessage = (event as Event & { readonly statusMessage?: string }).statusMessage;
+      if (typeof statusMessage === 'string' && statusMessage.trim().length > 0) {
+        errors.push(statusMessage.trim());
+      } else {
+        errors.push('webglcontextcreationerror');
+      }
+    };
+    canvas.addEventListener('webglcontextcreationerror', onContextCreationError);
+    let contextType: 'webgl2' | 'webgl' | null = 'webgl2';
+    let gl: WebGL2RenderingContext | WebGLRenderingContext | null = canvas.getContext('webgl2');
     if (!gl) {
-      return false;
+      contextType = 'webgl';
+      gl = canvas.getContext('webgl');
+    }
+    canvas.removeEventListener('webglcontextcreationerror', onContextCreationError);
+
+    if (!gl) {
+      return {
+        available: false,
+        contextType: null,
+        renderer: null,
+        vendor: null,
+        errorMessage:
+          errors.length > 0
+            ? errors.join('; ')
+            : 'canvas.getContext("webgl2"/"webgl") returned null',
+      };
+    }
+
+    let renderer: string | null = null;
+    let vendor: string | null = null;
+    if (typeof gl.getParameter === 'function') {
+      const debugInfo =
+        typeof gl.getExtension === 'function' ? gl.getExtension('WEBGL_debug_renderer_info') : null;
+      const rawRenderer = debugInfo
+        ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL)
+        : gl.getParameter(gl.RENDERER);
+      const rawVendor = debugInfo
+        ? gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL)
+        : gl.getParameter(gl.VENDOR);
+      renderer = typeof rawRenderer === 'string' ? rawRenderer : null;
+      vendor = typeof rawVendor === 'string' ? rawVendor : null;
     }
     if (typeof gl.getExtension === 'function') {
       gl.getExtension('WEBGL_lose_context')?.loseContext();
     }
-    return true;
-  } catch {
-    return false;
+    return {
+      available: true,
+      contextType,
+      renderer,
+      vendor,
+      errorMessage: null,
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      available: false,
+      contextType: null,
+      renderer: null,
+      vendor: null,
+      errorMessage: errors.length > 0 ? `${errors.join('; ')}; ${message}` : message,
+    };
   }
+}
+
+export function canUseWebGL(): boolean {
+  return probeWebGLSupport().available;
 }
 
 class CanvasErrorBoundary extends Component<
   {
     readonly children: ReactNode;
     readonly fallback: ReactNode;
-    readonly onError?: () => void;
+    readonly onError?: (error: Error) => void;
   },
   { readonly hasError: boolean }
 > {
   constructor(props: {
     readonly children: ReactNode;
     readonly fallback: ReactNode;
-    readonly onError?: () => void;
+    readonly onError?: (error: Error) => void;
   }) {
     super(props);
     this.state = { hasError: false };
@@ -70,8 +142,8 @@ class CanvasErrorBoundary extends Component<
     return { hasError: true };
   }
 
-  override componentDidCatch(_error: Error, _info: ErrorInfo): void {
-    this.props.onError?.();
+  override componentDidCatch(error: Error, _info: ErrorInfo): void {
+    this.props.onError?.(error);
   }
 
   override render(): ReactNode {
@@ -758,6 +830,7 @@ export function WorldScene({
   const markerElementRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const [canvasReady, setCanvasReady] = useState(false);
   const [canvasErrored, setCanvasErrored] = useState(false);
+  const [canvasErrorText, setCanvasErrorText] = useState<string | null>(null);
   const [viewportSize, setViewportSize] = useState<{
     readonly width: number;
     readonly height: number;
@@ -774,7 +847,9 @@ export function WorldScene({
     | null
   >(null);
 
-  const webglAvailable = useMemo(() => canUseWebGL(), []);
+  const webglProbe = useMemo(() => probeWebGLSupport(), []);
+  const webglAvailable = webglProbe.available;
+  const webglErrorDetail = canvasErrorText ?? webglProbe.errorMessage;
 
   useEffect(() => {
     const el = viewportRef.current;
@@ -1023,6 +1098,7 @@ export function WorldScene({
       : 4 / 3;
 
   const readyAttr = !webglAvailable || canvasErrored ? 'fallback' : canvasReady ? 'true' : 'false';
+  const isPlacementToolActive = editable && activeTool !== 'select';
 
   return (
     <div
@@ -1032,6 +1108,10 @@ export function WorldScene({
       data-active={active ? 'true' : 'false'}
       data-car-x={sceneData.carPose.position[0]}
       data-car-z={sceneData.carPose.position[2]}
+      data-webgl-context={webglProbe.contextType ?? ''}
+      data-webgl-renderer={webglProbe.renderer ?? ''}
+      data-webgl-vendor={webglProbe.vendor ?? ''}
+      data-webgl-error={webglErrorDetail ?? ''}
       style={{
         position: 'relative',
         flex: 1,
@@ -1046,7 +1126,8 @@ export function WorldScene({
         {webglAvailable ? (
           <CanvasErrorBoundary
             fallback={nonWebglFallback}
-            onError={() => {
+            onError={(err) => {
+              setCanvasErrorText(err.message);
               setCanvasErrored(true);
             }}
           >
@@ -1090,8 +1171,7 @@ export function WorldScene({
         style={{
           position: 'absolute',
           inset: 0,
-          cursor:
-            editable && activeTool !== 'select' ? 'crosshair' : dragState ? 'grabbing' : 'grab',
+          cursor: isPlacementToolActive ? 'crosshair' : dragState ? 'grabbing' : 'grab',
         }}
       >
         {/* Interactive obstacle handles for selection, dragging, and rotating */}
@@ -1120,6 +1200,7 @@ export function WorldScene({
               data-position-z={obs.pose.position[2]}
               data-yaw-deg={obs.yawDeg}
               onPointerDown={(e) => {
+                if (isPlacementToolActive) return;
                 e.stopPropagation();
                 onSelectObstacle(obs.id);
                 if (editable) {
@@ -1142,11 +1223,12 @@ export function WorldScene({
                 borderRadius: '50%',
                 border: isSelected ? '2px solid #84ddbf' : '1px solid transparent',
                 background: isSelected ? 'rgba(132, 221, 191, 0.18)' : 'transparent',
-                cursor: editable ? 'move' : 'pointer',
+                cursor: isPlacementToolActive ? 'crosshair' : editable ? 'move' : 'pointer',
+                pointerEvents: isPlacementToolActive ? 'none' : 'auto',
               }}
-              title={`${obs.type} (${obs.id}) @ (${obs.pose.position[0].toFixed(2)}, ${obs.pose.position[2].toFixed(2)}) m, ${obs.yawDeg.toFixed(1)}°`}
+              title={`${obs.type} (${obs.id}) @ (${obs.pose.position[0].toFixed(2)}, ${obs.pose.position[2].toFixed(2)}) m, ${obs.yawDeg.toFixed(1)}\u00b0`}
             >
-              {isSelected && editable && (
+              {isSelected && editable && !isPlacementToolActive && (
                 <button
                   type="button"
                   aria-label={`Rotate obstacle ${obs.id}`}

@@ -44,6 +44,7 @@ import {
   interpolateSnapshots,
   normalizeLayoutPath,
   primeControlLinkTracker,
+  probeWebGLSupport,
   screenToGroundPoint,
   yawDegToQuat,
   type ProjectedMarkerPose,
@@ -1851,5 +1852,55 @@ describe('3D World environment (P1-F)', () => {
       true,
     );
     expect(fake.calls.some((c) => c.service === 'control' && c.method === 'disconnect')).toBe(true);
+  });
+
+  it('CI fixes: passes pointer events through existing obstacle markers while a placement tool is active, deselects on Escape, keeps editor toolbar single-row, and probes WebGL creation errors', () => {
+    const fake = createFakeWithRealTracks();
+    render(<WorldRoot api={fake.api} />);
+
+    const toolbar = screen.getByTestId('world-editor-toolbar');
+    expect(toolbar.style.flexWrap).toBe('nowrap');
+
+    // Select Cone tool and place cone-1
+    fireEvent.click(screen.getByTestId('palette-tool-cone'));
+    const ground = screen.getByTestId('world-ground');
+    fireEvent.pointerDown(ground, { button: 0, clientX: 420, clientY: 280 });
+    fireEvent.pointerUp(ground);
+
+    const cone1Marker = screen.getByTestId('obstacle-marker-cone-1');
+    // While Cone placement tool is active, existing obstacle markers must have pointerEvents: 'none'
+    // and must not render a rotate handle that could intercept subsequent placement clicks
+    expect(cone1Marker.style.pointerEvents).toBe('none');
+    expect(screen.queryByTestId('obstacle-rotate-handle-cone-1')).toBeNull();
+    expect(screen.getByTestId('selected-obstacle-controls')).toBeDefined();
+
+    // Switching to Select tool restores marker pointer events and rotate handle for selected cone-1
+    fireEvent.click(screen.getByTestId('palette-tool-select'));
+    expect(cone1Marker.style.pointerEvents).toBe('auto');
+    expect(screen.getByTestId('obstacle-rotate-handle-cone-1')).toBeDefined();
+
+    // Pressing Escape deselects cone-1 and hides selected-obstacle-controls & rotate handle
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByTestId('selected-obstacle-controls')).toBeNull();
+    expect(screen.queryByTestId('obstacle-rotate-handle-cone-1')).toBeNull();
+
+    // probeWebGLSupport captures webglcontextcreationerror statusMessage when WebGL context creation fails
+    const getContextSpy = vi
+      .spyOn(HTMLCanvasElement.prototype, 'getContext')
+      .mockImplementation(function (this: HTMLCanvasElement) {
+        const errEvent = new Event('webglcontextcreationerror') as Event & {
+          statusMessage?: string;
+        };
+        errEvent.statusMessage = 'Could not create a WebGL context (GPU unavailable).';
+        this.dispatchEvent(errEvent);
+        return null;
+      });
+    try {
+      const probe = probeWebGLSupport();
+      expect(probe.available).toBe(false);
+      expect(probe.errorMessage).toContain('Could not create a WebGL context (GPU unavailable).');
+    } finally {
+      getContextSpy.mockRestore();
+    }
   });
 });
