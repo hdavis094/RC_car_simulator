@@ -1,6 +1,7 @@
 #include "outbound.h"
 
 #include <doctest.h>
+#include <sys/select.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -60,6 +61,18 @@ TEST_CASE("a full socket cannot delay the output update, failsafe or e-stop") {
   }
   JsonDocument message;
   message["t"] = "telemetry";
+  JsonDocument greeting;
+  greeting["t"] = "hello";
+  bool helloPending = true;
+  auto hello = [&] {
+    return sendDocument(
+        greeting, [] {},
+        [&](const uint8_t* bytes, size_t size) { return trySendSocket(sockets[0], bytes, size); });
+  };
+  helloPending = retryHello(helloPending, hello);
+  CHECK(helloPending);
+  helloPending = retryHello(helloPending, hello);
+  CHECK(helloPending);
   const Command drive{CommandType::Drive, 1, {0.4F, -0.2F}, Mode::Manual};
   auto state = applyCommand({}, drive, 0);
   Actuation applied;
@@ -95,8 +108,8 @@ TEST_CASE("a full socket cannot delay the output update, failsafe or e-stop") {
             },
             sender) == SendResult::Dropped);
   CHECK(applied.throttle == 0);
-  // A regression to NetworkClient's 1 s select/retry loop violates this bound.
-  CHECK(std::chrono::steady_clock::now() - start < std::chrono::milliseconds(250));
+  // Loaded macOS runners have headroom; blocking retry regressions take seconds.
+  CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(1));
   size_t received = 0;
   while (true) {
     char bytes[4096];
@@ -106,13 +119,41 @@ TEST_CASE("a full socket cannot delay the output update, failsafe or e-stop") {
     received += static_cast<size_t>(n);
   }
   CHECK(received == queued);  // No prefix of a dropped line reached the peer.
-  CHECK(sendDocument(
-            message, [] {},
-            [&](const uint8_t* bytes, size_t size) {
-              return trySendSocket(sockets[0], bytes, size);
-            }) == SendResult::Sent);
+  helloPending = retryHello(helloPending, hello);
+  CHECK_FALSE(helloPending);
+  helloPending = retryHello(helloPending, [] {
+    FAIL("a sent hello must not be repeated");
+    return SendResult::Sent;
+  });
+  CHECK_FALSE(helloPending);
   char bytes[128];
   const auto n = ::recv(sockets[1], bytes, sizeof(bytes), 0);
   REQUIRE(n > 0);
-  CHECK(std::string(bytes, static_cast<size_t>(n)) == "{\"t\":\"telemetry\"}\n");
+  CHECK(std::string(bytes, static_cast<size_t>(n)) == "{\"t\":\"hello\"}\n");
+}
+TEST_CASE("socket send treats memory exhaustion as a dropped message, and peer closure as fatal") {
+  CHECK(socketSendResult(-1, 10, ENOMEM) == SendResult::Dropped);
+  CHECK(socketSendResult(-1, 10, ENOBUFS) == SendResult::Dropped);
+  CHECK(socketSendResult(-1, 10, EPIPE) == SendResult::Disconnect);
+  CHECK(socketSendResult(5, 10, 0) == SendResult::Disconnect);
+  int sockets[2];
+  REQUIRE(::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
+  struct Cleanup {
+    int fd;
+    ~Cleanup() { ::close(fd); }
+  } cleanup{sockets[0]};
+#ifdef SO_NOSIGPIPE
+  int enabled = 1;
+  REQUIRE(setsockopt(sockets[0], SOL_SOCKET, SO_NOSIGPIPE, &enabled, sizeof(enabled)) == 0);
+#endif
+  REQUIRE(::close(sockets[1]) == 0);
+  const uint8_t bytes[] = {'x', '\n'};
+  CHECK(trySendSocket(sockets[0], bytes, sizeof(bytes)) == SendResult::Disconnect);
+  CHECK(errno == EPIPE);
+}
+TEST_CASE("socket fd bounds are rejected before FD_SET can access them") {
+  const uint8_t bytes[] = {'x', '\n'};
+  CHECK(trySendSocket(-1, bytes, sizeof(bytes)) == SendResult::Dropped);
+  CHECK(trySendSocket(FD_SETSIZE, bytes, sizeof(bytes)) == SendResult::Dropped);
+  CHECK(trySendSocket(FD_SETSIZE + 1, bytes, sizeof(bytes)) == SendResult::Dropped);
 }

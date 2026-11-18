@@ -127,6 +127,7 @@ TEST_CASE(
   std::string serial, firstText, secondText;
   bool connected = false, replaced = false, sawAuto = false, sawDrive = false, sawFailsafe = false;
   uint32_t escPulse = 0, steeringPulse = 0;
+  size_t serialBeforeFlood = 0;
   for (uint64_t tick = 0; tick < 5100; ++tick) {
     if (tick == 100) first.write("{\"t\":\"drive\",\"seq\":100,\"throttle\":0.8,\"steer\":-0.5}\n");
     if (tick == 2900) first.write("{\"t\":\"mode\",\"mode\":\"auto\"}\n");
@@ -147,6 +148,11 @@ TEST_CASE(
     if (tick == 4400)
       second.write(std::string(4096, 'x') + "\n{\"t\":\"unknown\"}\n{\"t\":\"estop\"}\n");
     if (tick == 4500) second.write("{\"t\":\"mode\",\"mode\":\"auto\"}\n");
+    if (tick == 4800) {
+      serialBeforeFlood = serial.size();
+      first.read(firstText);
+      second.write(std::string(256, '\n') + "{\"t\":\"estop\"}\n" + std::string(1024, '\n'));
+    }
     send(fd, sim.next());
     auto done = receive(fd);
     REQUIRE(done["type"] == "STEP_DONE");
@@ -188,6 +194,10 @@ TEST_CASE(
     }
     if (tick > 4350 && tick < 4400) CHECK(escPulse == 1750);
     if (tick > 4450 && tick < 4500) CHECK(escPulse == 1500);
+    if (tick == 4850) {
+      CHECK(escPulse == 1500);
+      CHECK(serial.size() - serialBeforeFlood <= 128);
+    }
     if (connected) first.read(firstText);
     if (replaced) second.read(secondText);
   }
@@ -210,8 +220,7 @@ TEST_CASE(
   CHECK(serial.find("ESC armed after 3000 ms neutral") != std::string::npos);
   CHECK(serial.find("initialization failed") == std::string::npos);
   CHECK(serial.find("failsafe: no drive for 500 ms") != std::string::npos);
-  CHECK(secondText.find("longer than 4096 bytes") != std::string::npos);
-  CHECK(secondText.find("ignored invalid control command") != std::string::npos);
+  CHECK(secondText.find("1 invalid lines, 1 overlong lines") != std::string::npos);
   const auto original = messages(firstText), replacement = messages(secondText);
   REQUIRE_FALSE(original.empty());
   REQUIRE_FALSE(replacement.empty());

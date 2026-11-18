@@ -9,6 +9,13 @@ namespace car {
 // Smaller than lwIP's TCP_SNDLOWAT, checked against the board's actual config.
 constexpr size_t kOutboundBytes = 512;
 enum class SendResult { Sent, Dropped, Disconnect };
+SendResult socketSendResult(std::ptrdiff_t written, size_t requested, int error);
+// At most one hello attempt per outer loop. Dropped attempts remain pending;
+// a successful attempt suppresses all subsequent retries until reconnection.
+template <typename Sender>
+bool retryHello(bool pending, Sender sender) {
+  return pending && sender() != SendResult::Sent;
+}
 SendResult trySendSocket(int fd, const uint8_t* bytes, size_t size);
 
 // Sender must make one bounded, nonblocking attempt; never retry a partial line.

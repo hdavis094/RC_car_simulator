@@ -6,6 +6,7 @@
 #include <WiFi.h>
 
 #include <array>
+#include <cstdio>
 
 #if defined(ARDUINO_ARCH_ESP32)
 #include <lwip/opt.h>
@@ -16,7 +17,9 @@
 #include "car_config.h"
 #include "commands.h"
 #include "control.h"
+#include "control_input.h"
 #include "outbound.h"
+#include "serial_log.h"
 
 namespace {
 // Initial v1 tuning; P2-01 retunes against the full sim. SI at the sim edge;
@@ -40,7 +43,6 @@ constexpr uint32_t kSensorPeriodMs = 50;
 constexpr uint16_t kSensorTimeoutMs = 20;
 constexpr uint32_t kTelemetryPeriodMs = 50;
 constexpr uint32_t kWifiStatusPeriodMs = 1000;
-constexpr size_t kReceiveBudget = 256;      // Bound work so a flood cannot starve safety/telemetry.
 constexpr char kCarName[] = "Default car";  // Keep in sync with car.json's name.
 constexpr char kFirmwareVersion[] = "0.1.0";
 #ifndef CAR_WIFI_SSID
@@ -64,7 +66,8 @@ WiFiClient client;
 car::ControlState control;
 car::AvoidanceState avoidance;
 car::Actuation automatic, applied;
-car::CommandLine line;
+car::ControlInput input;
+bool helloPending = false;
 std::array<car::Distance, 3> distances{};
 std::array<bool, 3> sensorReady{};
 uint32_t armStartedMs = 0, lastSensorMs = 0, lastTelemetryMs = 0, lastWifiStatusMs = 0;
@@ -83,8 +86,10 @@ void writeOutputs() {
   steering.writeMicroseconds(car::pulseUs(applied.steer, 1000, 1500, 2000));
   esc.writeMicroseconds(car::pulseUs(applied.throttle, 1000, 1500, 2000));
 }
-void sendDocument(const JsonDocument& document) {
-  car::sendDocument(document, writeOutputs, [](const uint8_t* bytes, size_t size) {
+car::SendResult sendDocument(const JsonDocument& document, bool greeting = false) {
+  return car::sendDocument(document, writeOutputs, [greeting](const uint8_t* bytes, size_t size) {
+    // The first complete message on a new connection must be hello.
+    if (helloPending && !greeting) return car::SendResult::Dropped;
     if (!client.connected()) return car::SendResult::Dropped;
 #if defined(ARDUINO_ARCH_ESP32)
     const auto result = car::trySendSocket(client.fd(), bytes, size);
@@ -101,21 +106,21 @@ void sendDocument(const JsonDocument& document) {
   });
 }
 void logMessage(const char* message) {
-  Serial.println(message);
+  car::trySerialLine(Serial, message);
   JsonDocument document;
   document["t"] = "log";
   document["msg"] = message;
   sendDocument(document);
 }
-void hello() {
+car::SendResult hello() {
   JsonDocument document;
   document["t"] = "hello";
   document["name"] = kCarName;
   document["fw"] = kFirmwareVersion;
   document["proto"] = 1;
-  sendDocument(document);
+  return sendDocument(document, true);
 }
-void serviceControl() {
+void serviceConnection() {
   if (!listening && CAR_WIFI_ENABLED && WiFi.status() == WL_CONNECTED) {
     server.begin();
     listening = true;
@@ -138,27 +143,26 @@ void serviceControl() {
 #endif
     client.setNoDelay(true);
     control = car::newConnection(control);
-    line.reset();
-    hello();
-  }
-  for (size_t count = 0; count < kReceiveBudget && client.available(); ++count) {
-    const int byte = client.read();
-    if (byte < 0) break;
-    const auto result = line.push(static_cast<char>(byte));
-    if (result == car::CommandLine::Result::TooLong) {
-      logMessage("discarded control line longer than 4096 bytes");
-    } else if (result == car::CommandLine::Result::Ready) {
-      car::Command command;
-      if (!car::parseCommand(line.data(), line.size(), command)) {
-        logMessage("ignored invalid control command");
-        continue;
-      }
-      control = car::applyCommand(control, command, nowMs());
-      // E-stop is reflected in PWM before any sensor reads or telemetry work.
-      writeOutputs();
-    }
+    input.resetConnection();
+    helloPending = true;
   }
 }
+size_t serviceControl(size_t byteBudget) {
+  return input.readSlice(client, byteBudget, [](const car::Command& command) {
+    control = car::applyCommand(control, command, nowMs());
+    writeOutputs();  // E-stop updates PWM immediately, before the next line.
+  });
+}
+void reportRejectedLines() {
+  const auto rejected = input.takeRejected(nowMs());
+  if (!rejected.any()) return;
+  char message[96];
+  std::snprintf(
+      message, sizeof(message), "control input: rejected %lu invalid lines, %lu overlong lines",
+      static_cast<unsigned long>(rejected.invalid), static_cast<unsigned long>(rejected.overlong));
+  logMessage(message);  // At most one Serial + network summary per second.
+}
+
 void readSensors() {
   for (size_t i = 0; i < distances.size(); ++i) {
     if (!sensorReady[i]) {
@@ -195,7 +199,7 @@ void telemetry() {
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("Donkey Car starter firmware 0.1.0");
+  car::trySerialLine(Serial, "Donkey Car starter firmware 0.1.0");
   steering.setPeriodHertz(50);
   steering.attach(STEERING_SIGNAL_PIN, 1000, 2000);
   steering.writeMicroseconds(1500);
@@ -237,18 +241,16 @@ void setup() {
   }
   // Arming is a time gate, so networking remains responsive while neutral is held.
   if (CAR_WIFI_ENABLED) {
-    Serial.println(
-        "Wi-Fi: connecting to configured SSID; if this persists, set CAR_WIFI_SSID and "
-        "CAR_WIFI_PASSWORD (default password: change-me)");
+    car::trySerialLine(
+        Serial,
+        "Wi-Fi: connecting; set CAR_WIFI_SSID / CAR_WIFI_PASSWORD (default password: change-me)");
   } else {
-    Serial.println("Wi-Fi: disabled in car config");
+    car::trySerialLine(Serial, "Wi-Fi: disabled in car config");
   }
-  serviceControl();
+  serviceConnection();
 }
-void loop() {
-  // Update safety/PWM before accept, hello, logs or any other network send.
-  writeOutputs();
-  serviceControl();
+namespace {
+void controlStep() {
   uint32_t now = nowMs();
   if (uint32_t(now - lastSensorMs) >= kSensorPeriodMs) {
     readSensors();
@@ -264,6 +266,15 @@ void loop() {
     automatic = {};
   }
   writeOutputs();
+}
+}  // namespace
+void loop() {
+  writeOutputs();
+  serviceConnection();
+  car::runControlPasses(serviceControl, controlStep);
+  helloPending = car::retryHello(helloPending, hello);
+  reportRejectedLines();
+  const uint32_t now = nowMs();
   const bool failsafe = control.hasDrive && car::failsafeDue(control, now);
   if (failsafe && !failsafeLogged) logMessage("failsafe: no drive for 500 ms");
   failsafeLogged = failsafe;
@@ -273,14 +284,16 @@ void loop() {
   }
   if (uint32_t(now - lastWifiStatusMs) >= kWifiStatusPeriodMs) {
     if (!CAR_WIFI_ENABLED) {
-      Serial.println("Wi-Fi: disabled in car config");
+      car::trySerialLine(Serial, "Wi-Fi: disabled in car config");
     } else if (WiFi.status() == WL_CONNECTED) {
-      Serial.print("Wi-Fi: connected, IP ");
-      Serial.println(WiFi.localIP());
+      const String address = WiFi.localIP().toString();
+      char message[64];
+      std::snprintf(message, sizeof(message), "Wi-Fi: connected, IP %s", address.c_str());
+      car::trySerialLine(Serial, message);
     } else {
-      Serial.println(
-          "Wi-Fi: NOT CONNECTED; check CAR_WIFI_SSID / CAR_WIFI_PASSWORD "
-          "(default: change-me)");
+      car::trySerialLine(Serial,
+                         "Wi-Fi: NOT CONNECTED; check CAR_WIFI_SSID / CAR_WIFI_PASSWORD "
+                         "(default: change-me)");
     }
     lastWifiStatusMs = now;
   }

@@ -15,6 +15,13 @@ namespace car {
 static_assert(kOutboundBytes <= TCP_SNDLOWAT,
               "Outbound lines must fit lwIP's writable low-water mark");
 #endif
+SendResult socketSendResult(std::ptrdiff_t written, size_t requested, int error) {
+  if (written >= 0 && static_cast<size_t>(written) == requested) return SendResult::Sent;
+  if (written < 0 && (error == EAGAIN || error == EWOULDBLOCK || error == EINTR ||
+                      error == ENOMEM || error == ENOBUFS))
+    return SendResult::Dropped;
+  return SendResult::Disconnect;
+}
 SendResult trySendSocket(int fd, const uint8_t* bytes, size_t size) {
 #if defined(ARDUINO_ARCH_ESP32)
   // lwIP fd sets can be offset; FD_SETSIZE alone need not include that offset.
@@ -52,11 +59,8 @@ SendResult trySendSocket(int fd, const uint8_t* bytes, size_t size) {
   flags |= MSG_NOSIGNAL;
 #endif
   const auto written = ::send(fd, bytes, size, flags);
-  if (written >= 0 && static_cast<size_t>(written) == size) return SendResult::Sent;
-  if (written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR))
-    return SendResult::Dropped;
-  // Defensive guard for other stacks: never append another message to a prefix.
-  // The caller aborts this connection, so the peer discards its incomplete line.
-  return SendResult::Disconnect;
+  // A partial result is fatal: never append another message to a prefix.
+  // Temporary memory/buffer exhaustion drops the entire unsent line.
+  return socketSendResult(written, size, errno);
 }
 }  // namespace car
