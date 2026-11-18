@@ -18,7 +18,7 @@ beforeAll(async () => {
 afterAll(() => rm(dir, { recursive: true, force: true }));
 
 async function endOf(binary: string, ticks = 3): Promise<RunEnd> {
-  const source = createFirmwareSource({ binary, stallTimeoutMs: 1500 });
+  const source = createFirmwareSource({ binary, stallTimeoutMs: 5000 });
   try {
     const run = await testRun({ source });
     try {
@@ -96,9 +96,9 @@ describe('a firmware that misbehaves', () => {
     expect(JSON.stringify(end)).toMatch(/unexpected HELLO.*waiting for STEP_DONE for tick 0/);
   });
 
-  it('stalls the run when it never connects', async () => {
+  it('stalls the start when it never connects, after the startup timeout', async () => {
     const binary = await fake('mute', `await new Promise((r) => setTimeout(r, 10000));`);
-    const source = createFirmwareSource({ binary, stallTimeoutMs: 300 });
+    const source = createFirmwareSource({ binary, startupTimeoutMs: 300 });
     const err = await testRun({ source }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ActuatorSourceEnded);
     expect((err as ActuatorSourceEnded).end).toEqual({ kind: 'stalled', afterMs: 300 });

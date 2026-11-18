@@ -309,48 +309,61 @@ export class ControlledSource implements ActuatorSource {
     if (batches.size === 0) return;
 
     const writes: Promise<void>[] = [];
-    let failedPort: number | undefined;
-    for (const [port, batch] of batches) {
-      const client = await this.#client(port, this.#listening.get(port) as Target);
-      writes.push(
-        new Promise<void>((resolve) => {
-          client.socket.write(batch.text.join(''), (error) => {
-            if (error) {
-              failedPort ??= port;
-              this.#drop(port);
-            } else {
-              for (const i of batch.indices) this.#delivered[i] = true;
-              this.#count += batch.indices.length;
-            }
-            resolve();
-          });
-        }),
+    try {
+      for (const [port, batch] of batches) {
+        const client = await this.#client(port, this.#listening.get(port) as Target);
+        writes.push(
+          new Promise<void>((resolve) => {
+            client.socket.write(batch.text.join(''), (error) => {
+              if (error) {
+                // A failed write proves nothing about how much of it arrived, and a retry
+                // could run commands the firmware already received a second time. So it is
+                // recorded here, the instant it happens, before any other await, and from
+                // then on every step refuses: whatever else is going on in this batch.
+                this.#failure ??= new ActuatorSourceEnded({
+                  kind: 'error',
+                  message: `control connection to port ${port} reset during tick ${input.tick}; delivery ambiguous (the firmware may have received some of the lines, so none are resent)`,
+                });
+                this.#drop(port);
+              } else {
+                for (const i of batch.indices) this.#delivered[i] = true;
+                this.#count += batch.indices.length;
+              }
+              resolve();
+            });
+          }),
+        );
+      }
+      await this.#withinStall(
+        Promise.all(writes),
+        () =>
+          new ActuatorSourceEnded({
+            kind: 'error',
+            message: `control input for tick ${input.tick} did not drain within ${this.#stallMs} ms (${bytes} bytes): the firmware's socket buffers are full because it is not reading them`,
+          }),
       );
+    } catch (error) {
+      // Another port failing (or the drain timing out) while earlier writes are still in
+      // flight: let them report first, so an ambiguous failure is not lost behind this one.
+      await this.#withinStall(Promise.all(writes), () => error as Error, 500).catch(
+        () => undefined,
+      );
+      // Whatever ended delivery ends the source: nothing is sent again after a partial batch.
+      this.#failure ??=
+        error instanceof ActuatorSourceEnded
+          ? error
+          : new ActuatorSourceEnded({ kind: 'error', message: `control: ${String(error)}` });
+      throw this.#failure;
     }
-    await this.#withinStall(
-      Promise.all(writes),
-      () =>
-        new ActuatorSourceEnded({
-          kind: 'error',
-          message: `control input for tick ${input.tick} did not drain within ${this.#stallMs} ms (${bytes} bytes): the firmware's socket buffers are full because it is not reading them`,
-        }),
-    );
-    // A failed write proves nothing about how much of it arrived, and a retry could
-    // run commands the firmware already received a second time: never retried.
-    if (failedPort !== undefined) {
-      throw (this.#failure = new ActuatorSourceEnded({
-        kind: 'error',
-        message: `control connection to port ${failedPort} reset during tick ${input.tick}; delivery ambiguous (the firmware may have received some of the lines, so none are resent)`,
-      }));
-    }
+    if (this.#failure) throw this.#failure;
     while (this.#cursor < this.#entries.length && this.#delivered[this.#cursor]) this.#cursor += 1;
   }
 
-  /** Waits for `promise`, but no longer than the stall timeout: then `timeout()` is thrown. */
-  async #withinStall<T>(promise: Promise<T>, timeout: () => Error): Promise<T> {
+  /** Waits for `promise`, but no longer than the stall timeout (or `ms`): then `timeout()` is thrown. */
+  async #withinStall<T>(promise: Promise<T>, timeout: () => Error, ms = this.#stallMs): Promise<T> {
     let timer: NodeJS.Timeout | undefined;
     const late = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(timeout()), this.#stallMs);
+      timer = setTimeout(() => reject(timeout()), ms);
     });
     try {
       return await Promise.race([promise, late]);

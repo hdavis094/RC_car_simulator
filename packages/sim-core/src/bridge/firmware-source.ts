@@ -27,7 +27,19 @@ import { FirmwareProcess, trackSocket, untrackSocket, type ExitInfo } from './pr
 export const HAL_CALL_COST_NS = 1000;
 export const LOOP_COST_NS = 5000;
 export const DEFAULT_STALL_TIMEOUT_MS = 2000;
+/**
+ * How long the firmware gets to start: spawn, connect, HELLO, CONFIG. Separate
+ * from the per-step stall timeout: a process start on a slow machine (a busy CI
+ * runner, a cold disk) is not a stalled step.
+ */
+export const DEFAULT_STARTUP_TIMEOUT_MS = 10_000;
 export const DEFAULT_BIND_ADDRESS = '127.0.0.1';
+
+/** `FirmwareSourceOptions` plus what the bridge itself adds. */
+export interface BridgeOptions extends FirmwareSourceOptions {
+  /** Wall-clock limit for starting the firmware (spawn to CONFIG), also on restart; default 10 000 ms. */
+  readonly startupTimeoutMs?: number;
+}
 
 /** How long a firmware process gets to exit after BYE before it is killed. */
 const EXIT_GRACE_MS = 500;
@@ -48,7 +60,7 @@ type Waited<T> =
   | { readonly kind: 'value'; readonly value: T }
   | { readonly kind: 'exit'; readonly info: ExitInfo }
   | { readonly kind: 'spawn-error'; readonly error: Error }
-  | { readonly kind: 'timeout' }
+  | { readonly kind: 'timeout'; readonly afterMs: number }
   | { readonly kind: 'stopped' };
 
 const immediate = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
@@ -76,6 +88,9 @@ export class FirmwareSource implements ActuatorSource {
   readonly #binary: string;
   readonly #cwd: string;
   readonly #stallMs: number;
+  readonly #startupMs: number;
+  /** True from spawn to the end of the handshake: waits then get the startup deadline. */
+  #booting = false;
   readonly #bindAddress: string;
 
   #setup: ActuatorSourceSetup | undefined;
@@ -112,10 +127,11 @@ export class FirmwareSource implements ActuatorSource {
   #lastFaults: NetFaults | undefined;
   #resendFaults = false;
 
-  constructor(options: FirmwareSourceOptions) {
+  constructor(options: BridgeOptions) {
     this.#binary = path.resolve(options.binary);
     this.#cwd = options.cwd ?? defaultCwd(this.#binary);
     this.#stallMs = options.stallTimeoutMs ?? DEFAULT_STALL_TIMEOUT_MS;
+    this.#startupMs = options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS;
     this.#bindAddress = options.bindAddress ?? DEFAULT_BIND_ADDRESS;
   }
 
@@ -248,6 +264,15 @@ export class FirmwareSource implements ActuatorSource {
 
   /** Spawns the firmware and completes the handshake (HELLO, then CONFIG). */
   async #launch(): Promise<void> {
+    this.#booting = true;
+    try {
+      await this.#spawnAndHandshake();
+    } finally {
+      this.#booting = false;
+    }
+  }
+
+  async #spawnAndHandshake(): Promise<void> {
     const setup = this.#setup as ActuatorSourceSetup;
     // No await between this check and the spawn: a stop can't slip in between.
     this.#checkNotStopped();
@@ -457,7 +482,8 @@ export class FirmwareSource implements ActuatorSource {
         if (this.#slot === done) this.#slot = undefined;
         resolve(waited);
       };
-      const timer = setTimeout(() => done({ kind: 'timeout' }), this.#stallMs);
+      const limit = this.#booting ? this.#startupMs : this.#stallMs;
+      const timer = setTimeout(() => done({ kind: 'timeout', afterMs: limit }), limit);
       this.#slot = done as (waited: Waited<never>) => void;
       promise.then(
         (value) => done({ kind: 'value', value }),
@@ -506,7 +532,7 @@ export class FirmwareSource implements ActuatorSource {
       proc.kill('SIGKILL');
       await proc.exit.catch(() => undefined);
       this.#channel?.destroy();
-      return new ActuatorSourceEnded({ kind: 'stalled', afterMs: this.#stallMs });
+      return new ActuatorSourceEnded({ kind: 'stalled', afterMs: what.afterMs });
     }
     if (what.kind === 'spawn-error') {
       this.#state = 'ended';
@@ -600,6 +626,6 @@ export class FirmwareSource implements ActuatorSource {
 }
 
 /** Creates the firmware bridge's `ActuatorSource` (sim-core/src/bridge). */
-export function createFirmwareSource(options: FirmwareSourceOptions): FirmwareSource {
+export function createFirmwareSource(options: BridgeOptions): FirmwareSource {
   return new FirmwareSource(options);
 }

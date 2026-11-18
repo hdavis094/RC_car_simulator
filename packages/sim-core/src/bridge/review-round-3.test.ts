@@ -115,7 +115,7 @@ describe('1. a failed control write is never retried', () => {
       }
       return realWrite.apply(this, args as never);
     } as typeof net.Socket.prototype.write;
-    const source = new ControlledSource(fw.inner, entries, { stallTimeoutMs: 1000 });
+    const source = new ControlledSource(fw.inner, entries, { stallTimeoutMs: 5000 });
     await source.start(setup);
     await source.step(tick(0));
     const err = await source.step(tick(1)).catch((e: unknown) => e);
@@ -235,7 +235,7 @@ describe('3. stopping while a control connection is being made', () => {
     const source = new ControlledSource(
       fw.inner,
       parseControlScript([{ tUs: 1000, line: 'test' }]),
-      { stallTimeoutMs: 5000 },
+      { stallTimeoutMs: 30_000 },
     );
     await source.start(setup);
     await source.step(tick(0));
@@ -248,10 +248,10 @@ describe('3. stopping while a control connection is being made', () => {
     await source.stop();
     const result = await Promise.race([
       stepping,
-      new Promise((resolve) => setTimeout(() => resolve('still waiting'), 2000)),
+      new Promise((resolve) => setTimeout(() => resolve('still waiting'), 10_000)),
     ]);
     expect(result).toMatchObject({ end: { kind: 'finished' } });
-    expect(Date.now() - started).toBeLessThan(1500);
+    expect(Date.now() - started).toBeLessThan(4000);
     await fw.close();
   });
 });

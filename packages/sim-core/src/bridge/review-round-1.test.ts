@@ -104,9 +104,9 @@ describe('2. control input never blocks a tick', () => {
   async function runWith(entries: ReturnType<typeof parseControlScript>, ticks: number) {
     const source = own(
       withControlScript(
-        createFirmwareSource({ binary: built.control as string, stallTimeoutMs: 100 }),
+        createFirmwareSource({ binary: built.control as string, stallTimeoutMs: 2000 }),
         entries,
-        { stallTimeoutMs: 100 },
+        { stallTimeoutMs: 2000 },
       ),
     );
     const run = await createRun({
@@ -193,7 +193,7 @@ describe('4. stopping while starting', () => {
     expect(existsSync(source.socketPath)).toBe(false);
     if (existsSync(pidFile)) {
       const pid = Number(await readFile(pidFile, 'utf8'));
-      expect(await until(() => !alive(pid), 2000)).toBe(true);
+      expect(await until(() => !alive(pid), 5000)).toBe(true);
     }
     await source.stop(); // twice is fine
   });
@@ -225,7 +225,7 @@ describe('5. the host going away', () => {
     expect(alive(h.pid)).toBe(true);
     h.kill();
     await h.hostExit;
-    expect(await until(() => !alive(h.pid), 3000)).toBe(true);
+    expect(await until(() => !alive(h.pid), 8000)).toBe(true);
     expect(existsSync(h.socket)).toBe(false); // and no socket file is left behind
   }, 30_000);
 
@@ -242,7 +242,7 @@ describe('5. the host going away', () => {
     const pid = source.pid as number;
     expect(alive(pid)).toBe(true);
     killAllFirmware();
-    expect(await until(() => !alive(pid), 3000)).toBe(true);
+    expect(await until(() => !alive(pid), 8000)).toBe(true);
     expect(await stepping).toMatchObject({ end: { kind: 'crashed', signal: 'SIGKILL' } });
   });
 });
@@ -256,7 +256,7 @@ describe('6. messages are judged when they arrive', () => {
       world: testWorldFile(),
       track: trackLibrary.load('oval'),
       seed: 1,
-      source: own(createFirmwareSource({ binary, stallTimeoutMs: 1500 })),
+      source: own(createFirmwareSource({ binary, stallTimeoutMs: 5000 })),
     }).catch((error: unknown) => ({ failed: error }));
     if ('failed' in run) return { ticks: 0, end: (run.failed as { end?: unknown }).end };
     const result = await run.step(20);

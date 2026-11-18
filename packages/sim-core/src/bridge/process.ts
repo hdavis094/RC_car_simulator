@@ -20,7 +20,7 @@ const TAIL_LINE_CHARS = 500;
  * below covers a host that simply returns or calls `process.exit()`; it
  * changes no exit behaviour, so a library may have it.
  */
-const alive = new Set<ChildProcess>();
+const alive = new Set<FirmwareProcess>();
 let hooked = false;
 function hookExit(): void {
   if (hooked) return;
@@ -38,7 +38,7 @@ export const untrackSocket = (file: string): void => void sockets.delete(file);
  * the sockets they were connected to. Synchronous: safe in an exit or signal handler.
  */
 export function killAllFirmware(): void {
-  for (const child of alive) child.kill('SIGKILL');
+  for (const proc of alive) proc.kill('SIGKILL');
   for (const file of sockets) rmSync(file, { force: true });
 }
 
@@ -59,9 +59,32 @@ export function installTerminationHandlers(): void {
   }
 }
 
+/** How long, after the process has exited, its stderr gets to deliver the last lines. */
+const DRAIN_MS = 500;
+
 /**
- * One firmware process. Its stdout is drained and dropped (Serial goes over
- * sim-protocol), its stderr is kept as a tail of lines for crash reports.
+ * Sends `signal` to the firmware's whole process group (it is spawned as the
+ * leader of its own), so helpers it started die with it. POSIX; fine on macOS.
+ */
+function killGroup(pid: number | undefined, signal: NodeJS.Signals): void {
+  if (pid === undefined) return;
+  try {
+    process.kill(-pid, signal);
+  } catch {
+    // no such group: nothing is left of it
+  }
+}
+
+/**
+ * One firmware process, the leader of its own process group. Its stdout is
+ * drained and dropped (Serial goes over sim-protocol), its stderr is kept as a
+ * tail of lines for crash reports.
+ *
+ * `exit` settles when the process has *exited*, not when every holder of its
+ * pipes has let go: a helper that inherited stdout/stderr would otherwise keep
+ * a dead firmware "running" for as long as it lives. On exit the rest of the
+ * group is killed, and the pipes get at most `DRAIN_MS` to deliver the last
+ * stderr lines before they are destroyed.
  */
 export class FirmwareProcess {
   readonly #child: ChildProcess;
@@ -72,24 +95,43 @@ export class FirmwareProcess {
 
   /** Rejects (as `exit` does) when the process can't be started at all. */
   constructor(binary: string, cwd: string, env: NodeJS.ProcessEnv) {
-    this.#child = spawn(binary, [], { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
-    alive.add(this.#child);
+    this.#child = spawn(binary, [], {
+      cwd,
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: true, // its own process group (setsid): `killGroup` reaches its helpers
+    });
+    alive.add(this);
     hookExit();
-    this.#child.stdout?.resume();
-    this.#child.stderr?.setEncoding('utf8');
-    this.#child.stderr?.on('data', (text: string) => this.#onStderr(text));
+    const child = this.#child;
+    child.stdout?.resume();
+    child.stderr?.setEncoding('utf8');
+    child.stderr?.on('data', (text: string) => this.#onStderr(text));
+    const stderrClosed = new Promise<void>((resolve) => {
+      if (!child.stderr) resolve();
+      else child.stderr.once('close', () => resolve());
+    });
     this.exit = new Promise<ExitInfo>((resolve, reject) => {
-      // 'close' comes after the exit and after stdio is drained, so the tail is complete.
-      this.#child.once('close', (exitCode, signal) => {
+      child.once('exit', (exitCode, signal) => {
         this.#exited = true;
-        alive.delete(this.#child);
-        if (this.#partial) this.#keep(this.#partial);
-        this.#partial = '';
-        resolve({ exitCode, signal, stderrTail: [...this.#tail] });
+        alive.delete(this);
+        // Whatever the firmware left running in its group goes with it, and that
+        // releases the pipes it inherited.
+        killGroup(child.pid, 'SIGKILL');
+        const timer = Promise.withResolvers<void>();
+        const handle = setTimeout(() => timer.resolve(), DRAIN_MS);
+        void Promise.race([stderrClosed, timer.promise]).then(() => {
+          clearTimeout(handle);
+          child.stdout?.destroy();
+          child.stderr?.destroy();
+          if (this.#partial) this.#keep(this.#partial);
+          this.#partial = '';
+          resolve({ exitCode, signal, stderrTail: [...this.#tail] });
+        });
       });
-      this.#child.once('error', (error) => {
+      child.once('error', (error) => {
         this.#exited = true;
-        alive.delete(this.#child);
+        alive.delete(this);
         reject(error);
       });
     });
@@ -105,8 +147,9 @@ export class FirmwareProcess {
     return this.#exited;
   }
 
+  /** Signals the firmware and everything it started (its process group). */
   kill(signal: NodeJS.Signals = 'SIGKILL'): void {
-    if (!this.#exited) this.#child.kill(signal);
+    if (!this.#exited) killGroup(this.#child.pid, signal);
   }
 
   #onStderr(text: string): void {

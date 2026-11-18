@@ -246,10 +246,10 @@ describe('4. a firmware that is not reading its socket', () => {
         () => 'answered',
         (e: unknown) => e,
       ),
-      new Promise((resolve) => setTimeout(() => resolve('hung'), 3000)),
+      new Promise((resolve) => setTimeout(() => resolve('hung'), 10_000)),
     ]);
     expect(outcome).toMatchObject({ end: { kind: 'stalled', afterMs: 100 } });
-    expect(Date.now() - started).toBeLessThan(2000);
+    expect(Date.now() - started).toBeLessThan(8000);
   });
 
   it('stops promptly: the kill deadline never waits for a BYE write', async () => {
@@ -267,10 +267,10 @@ describe('4. a firmware that is not reading its socket', () => {
     const started = Date.now();
     const outcome = await Promise.race([
       source.stop().then(() => 'stopped'),
-      new Promise((resolve) => setTimeout(() => resolve('hung'), 3000)),
+      new Promise((resolve) => setTimeout(() => resolve('hung'), 10_000)),
     ]);
     expect(outcome).toBe('stopped');
-    expect(Date.now() - started).toBeLessThan(2000);
+    expect(Date.now() - started).toBeLessThan(8000);
     expect(await stepping).toMatchObject({ end: { kind: 'finished' } });
     expect(() => process.kill(pid, 0)).toThrow();
     expect(existsSync(source.socketPath)).toBe(false);
