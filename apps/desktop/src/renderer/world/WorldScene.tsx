@@ -106,8 +106,12 @@ export function probeWebGLSupport(): WebGLProbeResult {
         errorMessage: null,
       };
     } finally {
-      if (typeof gl.getExtension === 'function') {
-        gl.getExtension('WEBGL_lose_context')?.loseContext();
+      try {
+        if (typeof gl.getExtension === 'function') {
+          gl.getExtension('WEBGL_lose_context')?.loseContext();
+        }
+      } catch {
+        // Releasing the probe context is best effort; a throw here must not hide the probe result.
       }
     }
   } catch (err) {

@@ -1921,4 +1921,32 @@ describe('3D World environment (P1-F)', () => {
       getContextSpy.mockRestore();
     }
   });
+
+  it('probeWebGLSupport still reports a working context when releasing it throws', () => {
+    const workingGl = {
+      RENDERER: 0x1f01,
+      VENDOR: 0x1f00,
+      getParameter: (p: number) => (p === 0x1f01 ? 'Test Renderer' : 'Test Vendor'),
+      getExtension: (name: string) =>
+        name === 'WEBGL_lose_context'
+          ? {
+              loseContext: () => {
+                throw new Error('loseContext exploded');
+              },
+            }
+          : null,
+    };
+    const getContextSpy = vi
+      .spyOn(HTMLCanvasElement.prototype, 'getContext')
+      .mockReturnValue(workingGl as unknown as RenderingContext);
+    try {
+      const probe = probeWebGLSupport();
+      expect(probe.available).toBe(true);
+      expect(probe.renderer).toBe('Test Renderer');
+      expect(probe.vendor).toBe('Test Vendor');
+      expect(probe.errorMessage).toBeNull();
+    } finally {
+      getContextSpy.mockRestore();
+    }
+  });
 });

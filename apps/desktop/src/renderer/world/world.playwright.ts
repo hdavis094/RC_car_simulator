@@ -110,7 +110,9 @@ test('renders the 3D World oval track WebGL canvas, places three cones, saves wo
   await expect(viewport).toBeVisible();
 
   // Wait for the viewport ready state to settle ('true' or 'fallback')
-  await expect.poll(async () => await viewport.getAttribute('data-ready')).not.toBe('false');
+  await expect
+    .poll(async () => await viewport.getAttribute('data-ready'), { timeout: 20_000 })
+    .not.toBe('false');
 
   // Collect Electron GPU feature status, basic GPU info, and renderer WebGL context probe diagnostics
   const gpuDiagnostics = await app.evaluate(async ({ app: electronApp }) => {
@@ -148,16 +150,25 @@ test('renders the 3D World oval track WebGL canvas, places three cones, saves wo
     let renderer: string | null = null;
     let vendor: string | null = null;
     if (gl) {
+      // Mirror probeWebGLSupport() in WorldScene.tsx: keep only string values, else null.
       try {
         const dbg = gl.getExtension('WEBGL_debug_renderer_info');
-        renderer = String(
-          dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER),
-        );
-        vendor = String(
-          dbg ? gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL) : gl.getParameter(gl.VENDOR),
-        );
+        const rawRenderer: unknown = dbg
+          ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)
+          : gl.getParameter(gl.RENDERER);
+        const rawVendor: unknown = dbg
+          ? gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL)
+          : gl.getParameter(gl.VENDOR);
+        renderer = typeof rawRenderer === 'string' ? rawRenderer : null;
+        vendor = typeof rawVendor === 'string' ? rawVendor : null;
+      } catch (err) {
+        errors.push(`getParameter failed: ${err instanceof Error ? err.message : String(err)}`);
       } finally {
-        gl.getExtension('WEBGL_lose_context')?.loseContext();
+        try {
+          gl.getExtension('WEBGL_lose_context')?.loseContext();
+        } catch {
+          // best effort, as in WorldScene.tsx
+        }
       }
     } else {
       contextType = null;
@@ -231,10 +242,14 @@ test('renders the 3D World oval track WebGL canvas, places three cones, saves wo
   for (let i = 0; i < targetConePositions.length; i++) {
     const pos = targetConePositions[i]!;
     await page.getByTestId('palette-tool-cone').click();
+    // Layout may still be settling on a loaded runner: wait until both boxes exist.
+    await expect.poll(async () => (await pointerLayer.boundingBox()) !== null).toBe(true);
+    const toolbar = page.getByTestId('world-editor-toolbar');
+    await expect.poll(async () => (await toolbar.boundingBox()) !== null).toBe(true);
     const box = await pointerLayer.boundingBox();
     expect(box).not.toBeNull();
     // Verify the editor toolbar does not overlap the 3D viewport
-    const toolbarBox = await page.getByTestId('world-editor-toolbar').boundingBox();
+    const toolbarBox = await toolbar.boundingBox();
     expect(toolbarBox).not.toBeNull();
     expect(toolbarBox!.y + toolbarBox!.height).toBeLessThanOrEqual(box!.y + 1);
 
@@ -327,10 +342,13 @@ test('renders the 3D World oval track WebGL canvas, places three cones, saves wo
 
   expect(latestReadyState).toBe('true');
 
-  // Wait for two animation frames so the Orbit camera frame and live marker projections are painted,
-  // then sample pixels at each projected cone position and assert orange cone colour (#f97316) is present
+  // Wait several animation frames (a loaded runner may drop some) so the Orbit camera frame and live
+  // marker projections are painted, then sample pixels at each projected cone position and assert
+  // orange cone colour (#f97316) is present
   const canvasStats = await page.evaluate(async () => {
-    await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+    for (let frame = 0; frame < 10; frame++) {
+      await new Promise<void>((r) => requestAnimationFrame(() => r()));
+    }
     const canvas = document.querySelector(
       '[data-testid="world-viewport"] canvas',
     ) as HTMLCanvasElement | null;
