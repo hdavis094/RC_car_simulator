@@ -1,6 +1,6 @@
 # P1-G — Starter firmware
 
-Status: in-review
+Status: done
 Agent: Codex (gpt-6.1-sol)
 Branch: ws/p1-g
 Depends on: P1-C
@@ -93,3 +93,13 @@ The sim-side bridge (P1-H), tuning against the real sim (P2-01 retunes if needed
 - Root cause: firmware scheduled telemetry relative to its last late loop timestamp (`lastTelemetryMs = now`) and checked it only after processing the entire input burst. At 4353 ms, the next relative deadline became 4403 ms; command processing held that poll until 4408 ms. The additional normal HAL call cost for `availableForWrite()` changed the loop phase enough to expose the existing scheduling flaw. HAL's implementation is correct for this use, and no HAL files were edited.
 - Replaced that schedule with boot-anchored 50 ms deadlines (`next += periods * 50`), checked between bounded input slices after sensor/avoidance/output updates with a fresh uptime reading. Repeated late polls do not accumulate phase drift. Missed periods after a long stall are skipped without a catch-up burst; telemetry timestamps still report actual uptime. Kept the existing interval assertion and added an absolute phase check (at most 2 ms polling jitter), plus pure timer tests for late passes, missed periods and millis wrap.
 - Validation: 27 firmware doctest cases pass with GCC and Clang. **`pnpm verify` passes**, including both firmware compiler runs, watchdog checks, 460 Vitest tests, both HAL suites (43 cases each) and all 7 Playwright tests. Status stays **in-review**; no push or rebase. The Serial capacity contract request is resolved; no new request is needed.
+
+### Merged (orchestrator, 2026-11-18)
+
+Review round 4 approved `490cafd`; CI green on Linux and macOS (macOS in 3.5 min, confirming the hang fix). The contract change request (`Serial.availableForWrite`) landed on main as `addc31c`. Non-blocking follow-ups, not fixed:
+
+- `scripts/run-host-tests.mjs` spawns the test binary `detached`, so Ctrl-C of `pnpm test` orphans it and its firmware child until their bounded socket operations end. Forward SIGINT/SIGTERM to the group.
+- The 60 s watchdog covers the whole binary, including the 5,100-tick integration run. A much slower runner would be reported as a hang; make it per-case or raise it to about 120 s if that happens.
+- After a reconnect, the first telemetry line arrives on the next 50 ms grid slot (up to 50 ms after `hello`). Document it in the README.
+- `tof_mm: 0` means both "failed sensor" and "no target", because control-protocol SPEC.md has no failure value. Tracked for P3.
+- Desktop copy filter: exclude `scripts/`, `test/` and `package.json` when creating a project from the template. P1-D follow-up, tracked for P2-01.
