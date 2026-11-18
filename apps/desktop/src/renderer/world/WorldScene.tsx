@@ -17,11 +17,12 @@ import {
   DEFAULT_CAR_GEOMETRY,
   OBSTACLE_DIMENSIONS,
   computeCameraTransform,
+  extractRenderedBeams,
   groundPointToViewportUV,
-  quatToYawDeg,
   screenToGroundPoint,
   type CameraMode,
   type OrbitCameraState,
+  type RenderedBeamData,
   type RenderedObstacleData,
   type WorldSceneData,
 } from './scene-data.ts';
@@ -69,7 +70,7 @@ class CanvasErrorBoundary extends Component<
   }
 
   override componentDidCatch(_error: Error, _info: ErrorInfo): void {
-    // Fallback rendered when headless environment cannot initialize WebGL.
+    // Fallback rendered when environment cannot initialize WebGL.
   }
 
   override render(): ReactNode {
@@ -166,12 +167,20 @@ function buildRampGeometry(): THREE.BufferGeometry {
   return geom;
 }
 
-function ObstacleMesh({ obstacle }: { readonly obstacle: RenderedObstacleData }): ReactNode {
-  const rampGeometry = useMemo(() => buildRampGeometry(), []);
+const SHARED_RAMP_GEOMETRY = buildRampGeometry();
+
+function ObstacleMesh({
+  obstacle,
+  groupRef,
+}: {
+  readonly obstacle: RenderedObstacleData;
+  readonly groupRef?: (el: THREE.Group | null) => void;
+}): ReactNode {
   const { position, rotation } = obstacle.pose;
 
   return (
     <group
+      ref={groupRef}
       name={`obstacle:${obstacle.id}`}
       position={[position[0], position[1], position[2]]}
       quaternion={[rotation[0], rotation[1], rotation[2], rotation[3]]}
@@ -232,7 +241,7 @@ function ObstacleMesh({ obstacle }: { readonly obstacle: RenderedObstacleData })
       )}
 
       {obstacle.type === 'ramp' && (
-        <mesh geometry={rampGeometry}>
+        <mesh geometry={SHARED_RAMP_GEOMETRY}>
           <meshStandardMaterial color="#06b6d4" roughness={0.5} side={THREE.DoubleSide} />
         </mesh>
       )}
@@ -254,63 +263,182 @@ function ObstacleMesh({ obstacle }: { readonly obstacle: RenderedObstacleData })
   );
 }
 
-function WorldR3FScene({
-  sceneData,
-  cameraMode,
-  orbitState,
-  interpolator,
-}: {
+interface PooledBeamSlot {
+  readonly group: THREE.Group;
+  readonly line: THREE.Line;
+  readonly lineGeometry: THREE.BufferGeometry;
+  readonly positionAttr: THREE.BufferAttribute;
+  readonly lineMaterial: THREE.LineBasicMaterial;
+  readonly hitMesh: THREE.Mesh;
+}
+
+class SensorBeamsPool {
+  readonly root = new THREE.Group();
+  readonly #slots = new Map<string, PooledBeamSlot>();
+  readonly #hitGeometry = new THREE.SphereGeometry(0.04, 14, 14);
+  readonly #hitMaterial = new THREE.MeshBasicMaterial({ color: '#ef4444' });
+
+  constructor() {
+    this.root.name = 'sensor-beams-group';
+  }
+
+  sync(beams: readonly RenderedBeamData[]): void {
+    const activeKeys = new Set<string>();
+
+    for (const beam of beams) {
+      activeKeys.add(beam.key);
+      let slot = this.#slots.get(beam.key);
+      if (!slot) {
+        const positions = new Float32Array(6);
+        const positionAttr = new THREE.BufferAttribute(positions, 3);
+        const lineGeometry = new THREE.BufferGeometry();
+        lineGeometry.setAttribute('position', positionAttr);
+        const lineMaterial = new THREE.LineBasicMaterial({
+          color: beam.hitPoint ? '#f97316' : '#38bdf8',
+        });
+        const line = new THREE.Line(lineGeometry, lineMaterial);
+        line.name = `sensor-beam:${beam.key}`;
+
+        const hitMesh = new THREE.Mesh(this.#hitGeometry, this.#hitMaterial);
+        hitMesh.name = `beam-hit:${beam.key}`;
+
+        const group = new THREE.Group();
+        group.name = `sensor-beam-group:${beam.key}`;
+        group.add(line);
+        group.add(hitMesh);
+        this.root.add(group);
+
+        slot = {
+          group,
+          line,
+          lineGeometry,
+          positionAttr,
+          lineMaterial,
+          hitMesh,
+        };
+        this.#slots.set(beam.key, slot);
+      }
+
+      // Update endpoints in-place without allocating new BufferGeometry
+      slot.positionAttr.setXYZ(0, beam.origin[0], beam.origin[1], beam.origin[2]);
+      slot.positionAttr.setXYZ(1, beam.endPoint[0], beam.endPoint[1], beam.endPoint[2]);
+      slot.positionAttr.needsUpdate = true;
+      slot.lineMaterial.color.set(beam.hitPoint ? '#f97316' : '#38bdf8');
+
+      if (beam.hitPoint) {
+        slot.hitMesh.visible = true;
+        slot.hitMesh.position.set(beam.hitPoint[0], beam.hitPoint[1], beam.hitPoint[2]);
+      } else {
+        slot.hitMesh.visible = false;
+      }
+    }
+
+    for (const [key, slot] of this.#slots) {
+      if (!activeKeys.has(key)) {
+        this.root.remove(slot.group);
+        slot.lineGeometry.dispose();
+        slot.lineMaterial.dispose();
+        this.#slots.delete(key);
+      }
+    }
+  }
+
+  dispose(): void {
+    for (const [, slot] of this.#slots) {
+      this.root.remove(slot.group);
+      slot.lineGeometry.dispose();
+      slot.lineMaterial.dispose();
+    }
+    this.#slots.clear();
+    this.#hitGeometry.dispose();
+    this.#hitMaterial.dispose();
+  }
+}
+
+export interface WorldR3FSceneProps {
   readonly sceneData: WorldSceneData;
   readonly cameraMode: CameraMode;
   readonly orbitState: OrbitCameraState;
   readonly interpolator: SnapshotInterpolator;
-}): ReactNode {
+  readonly onCameraReady?: (camera: THREE.Camera) => void;
+}
+
+export function WorldR3FScene({
+  sceneData,
+  cameraMode,
+  orbitState,
+  interpolator,
+  onCameraReady,
+}: WorldR3FSceneProps): ReactNode {
   const { camera } = useThree();
   const carGroupRef = useRef<THREE.Group>(null);
   const wheelGroupRefs = useRef<(THREE.Group | null)[]>([null, null, null, null]);
+  const obstacleGroupRefs = useRef<Map<string, THREE.Group>>(new Map());
+  const beamsPool = useMemo(() => new SensorBeamsPool(), []);
+
+  useEffect(() => {
+    onCameraReady?.(camera);
+  }, [camera, onCameraReady]);
+
+  useEffect(() => {
+    return () => {
+      beamsPool.dispose();
+    };
+  }, [beamsPool]);
 
   const surfaceGeometry = useMemo(
     () => buildTrackSurfaceGeometry(sceneData.trackMesh),
     [sceneData.trackMesh],
   );
 
+  useEffect(() => {
+    return () => {
+      surfaceGeometry.dispose();
+    };
+  }, [surfaceGeometry]);
+
   const centreLineObject = useMemo(() => {
     const pts = sceneData.trackMesh.centrePoints.map((p) => new THREE.Vector3(p.x, 0.006, p.z));
     if (pts.length > 0 && pts[0]) pts.push(pts[0].clone());
     const geom = new THREE.BufferGeometry().setFromPoints(pts);
-    return new THREE.Line(geom, new THREE.LineBasicMaterial({ color: '#64748b' }));
+    const mat = new THREE.LineBasicMaterial({ color: '#64748b' });
+    const line = new THREE.Line(geom, mat);
+    line.name = 'track-centreline';
+    return line;
   }, [sceneData.trackMesh]);
 
   const leftBorderObject = useMemo(() => {
     const pts = sceneData.trackMesh.leftEdgePoints.map((p) => new THREE.Vector3(p.x, 0.007, p.z));
     if (pts.length > 0 && pts[0]) pts.push(pts[0].clone());
     const geom = new THREE.BufferGeometry().setFromPoints(pts);
-    return new THREE.Line(geom, new THREE.LineBasicMaterial({ color: '#cbd5e1' }));
+    const mat = new THREE.LineBasicMaterial({ color: '#cbd5e1' });
+    const line = new THREE.Line(geom, mat);
+    line.name = 'track-left-border';
+    return line;
   }, [sceneData.trackMesh]);
 
   const rightBorderObject = useMemo(() => {
     const pts = sceneData.trackMesh.rightEdgePoints.map((p) => new THREE.Vector3(p.x, 0.007, p.z));
     if (pts.length > 0 && pts[0]) pts.push(pts[0].clone());
     const geom = new THREE.BufferGeometry().setFromPoints(pts);
-    return new THREE.Line(geom, new THREE.LineBasicMaterial({ color: '#cbd5e1' }));
+    const mat = new THREE.LineBasicMaterial({ color: '#cbd5e1' });
+    const line = new THREE.Line(geom, mat);
+    line.name = 'track-right-border';
+    return line;
   }, [sceneData.trackMesh]);
 
   useEffect(() => {
-    const transform = computeCameraTransform(
-      cameraMode,
-      sceneData.carPose,
-      sceneData.trackMesh,
-      orbitState,
-    );
-    camera.position.set(...transform.position);
-    camera.up.set(...transform.up);
-    camera.lookAt(...transform.target);
-    camera.updateMatrixWorld();
-  }, [camera, cameraMode, orbitState, sceneData.carPose, sceneData.trackMesh]);
+    return () => {
+      centreLineObject.geometry.dispose();
+      (centreLineObject.material as THREE.Material).dispose();
+      leftBorderObject.geometry.dispose();
+      (leftBorderObject.material as THREE.Material).dispose();
+      rightBorderObject.geometry.dispose();
+      (rightBorderObject.material as THREE.Material).dispose();
+    };
+  }, [centreLineObject, leftBorderObject, rightBorderObject]);
 
-  // 60 Hz render loop: interpolate between the last two snapshots and update car, wheels, and camera
-  useFrame(() => {
-    const sampled = interpolator.sample(performance.now());
+  const applySampledSnapshot = (sampled = interpolator.sample(performance.now())): void => {
     const activePose = sampled ? sampled.car.pose : sceneData.carPose;
     if (carGroupRef.current) {
       carGroupRef.current.position.set(...activePose.position);
@@ -324,7 +452,18 @@ function WorldR3FScene({
           ref.quaternion.set(...w.rotation);
         }
       });
+      for (const obs of sampled.obstacles) {
+        const obsGroup = obstacleGroupRefs.current.get(obs.id);
+        if (obsGroup) {
+          obsGroup.position.set(...obs.pose.position);
+          obsGroup.quaternion.set(...obs.pose.rotation);
+        }
+      }
+      beamsPool.sync(extractRenderedBeams(sampled));
+    } else {
+      beamsPool.sync(sceneData.sensorBeams);
     }
+
     const camTransform = computeCameraTransform(
       cameraMode,
       activePose,
@@ -334,6 +473,16 @@ function WorldR3FScene({
     camera.position.set(...camTransform.position);
     camera.up.set(...camTransform.up);
     camera.lookAt(...camTransform.target);
+    camera.updateMatrixWorld();
+  };
+
+  useEffect(() => {
+    applySampledSnapshot();
+  });
+
+  // 60 Hz render loop: interpolate between the last two snapshots and update car, wheels, obstacles, beams, and camera in place
+  useFrame(() => {
+    applySampledSnapshot(interpolator.sample(performance.now()));
   });
 
   const { bodyWidthM, bodyHeightM, bodyLengthM, bodyClearanceM, wheelRadiusM, wheelWidthM } =
@@ -456,34 +605,21 @@ function WorldR3FScene({
 
       {/* Obstacles */}
       {sceneData.obstacles.map((obs) => (
-        <ObstacleMesh key={obs.id} obstacle={obs} />
+        <ObstacleMesh
+          key={obs.id}
+          obstacle={obs}
+          groupRef={(el) => {
+            if (el) {
+              obstacleGroupRefs.current.set(obs.id, el);
+            } else {
+              obstacleGroupRefs.current.delete(obs.id);
+            }
+          }}
+        />
       ))}
 
-      {/* Sensor beams and hit markers */}
-      {sceneData.sensorBeams.map((beam) => {
-        const lineGeom = new THREE.BufferGeometry().setFromPoints([
-          new THREE.Vector3(...beam.origin),
-          new THREE.Vector3(...beam.endPoint),
-        ]);
-        const beamLine = new THREE.Line(
-          lineGeom,
-          new THREE.LineBasicMaterial({ color: beam.hitPoint ? '#f97316' : '#38bdf8' }),
-        );
-        return (
-          <group key={beam.key} name={`sensor-beam-group:${beam.key}`}>
-            <primitive object={beamLine} />
-            {beam.hitPoint && (
-              <mesh
-                name={`beam-hit:${beam.key}`}
-                position={[beam.hitPoint[0], beam.hitPoint[1], beam.hitPoint[2]]}
-              >
-                <sphereGeometry args={[0.04, 14, 14]} />
-                <meshBasicMaterial color="#ef4444" />
-              </mesh>
-            )}
-          </group>
-        );
-      })}
+      {/* Pooled in-place sensor beams and hit markers */}
+      <primitive object={beamsPool.root} />
     </group>
   );
 }
@@ -504,8 +640,14 @@ export interface WorldSceneProps {
   readonly onMoveObstacleTo: (
     id: string,
     point: { readonly x: number; readonly z: number },
+    options?: { readonly dragging?: boolean },
   ) => void;
-  readonly onRotateObstacleTo: (id: string, yawDeg: number) => void;
+  readonly onRotateObstacleTo: (
+    id: string,
+    yawDeg: number,
+    options?: { readonly dragging?: boolean },
+  ) => void;
+  readonly onObstacleDragEnd?: (id: string) => void;
 }
 
 export function WorldScene({
@@ -521,8 +663,15 @@ export function WorldScene({
   onPlaceObstacleAt,
   onMoveObstacleTo,
   onRotateObstacleTo,
+  onObstacleDragEnd,
 }: WorldSceneProps): ReactNode {
   const viewportRef = useRef<HTMLDivElement>(null);
+  const liveCameraRef = useRef<THREE.Camera | null>(null);
+  const [canvasReady, setCanvasReady] = useState(false);
+  const [viewportSize, setViewportSize] = useState<{
+    readonly width: number;
+    readonly height: number;
+  }>({ width: 800, height: 600 });
   const [dragState, setDragState] = useState<
     | { readonly kind: 'move-obstacle'; readonly id: string }
     | { readonly kind: 'rotate-obstacle'; readonly id: string }
@@ -537,22 +686,87 @@ export function WorldScene({
 
   const webglAvailable = canUseWebGL();
 
-  const cameraTransform = useMemo(
-    () => computeCameraTransform(cameraMode, sceneData.carPose, sceneData.trackMesh, orbitState),
-    [cameraMode, orbitState, sceneData.carPose, sceneData.trackMesh],
-  );
+  // Observe real viewport aspect ratio changes
+  useEffect(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+    const updateSize = (): void => {
+      const rect = el.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        setViewportSize((prev) =>
+          Math.abs(prev.width - rect.width) < 0.5 && Math.abs(prev.height - rect.height) < 0.5
+            ? prev
+            : { width: rect.width, height: rect.height },
+        );
+      }
+    };
+    updateSize();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => updateSize());
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  const cameraTransform = useMemo(() => {
+    const sampled = interpolator.latest();
+    const activePose = sampled ? sampled.car.pose : sceneData.carPose;
+    return computeCameraTransform(cameraMode, activePose, sceneData.trackMesh, orbitState);
+  }, [cameraMode, interpolator, orbitState, sceneData.carPose, sceneData.trackMesh]);
+
+  const getViewportRect = (): {
+    readonly left: number;
+    readonly top: number;
+    readonly width: number;
+    readonly height: number;
+  } => {
+    const el = viewportRef.current;
+    const rawRect = el?.getBoundingClientRect();
+    if (rawRect && rawRect.width > 0 && rawRect.height > 0) {
+      return rawRect;
+    }
+    return { left: 0, top: 0, width: viewportSize.width, height: viewportSize.height };
+  };
 
   const getGroundPointFromEvent = (
     clientX: number,
     clientY: number,
   ): { readonly x: number; readonly z: number } | null => {
-    const el = viewportRef.current;
-    const rawRect = el?.getBoundingClientRect();
-    const rect =
-      rawRect && rawRect.width > 0 && rawRect.height > 0
-        ? rawRect
-        : { left: 0, top: 0, width: 800, height: 600 };
-    return screenToGroundPoint(clientX, clientY, rect, cameraTransform);
+    const rect = getViewportRect();
+    return screenToGroundPoint(clientX, clientY, rect, cameraTransform, 48, liveCameraRef.current);
+  };
+
+  const capturePointer = (target: Element, pointerId: number): void => {
+    try {
+      if (typeof target.setPointerCapture === 'function') {
+        target.setPointerCapture(pointerId);
+      }
+    } catch {
+      // Synthetic pointer events in unit tests may not have an active pointerId
+    }
+  };
+
+  const releasePointer = (target: Element, pointerId: number): void => {
+    try {
+      if (
+        typeof target.hasPointerCapture === 'function' &&
+        target.hasPointerCapture(pointerId) &&
+        typeof target.releasePointerCapture === 'function'
+      ) {
+        target.releasePointerCapture(pointerId);
+      }
+    } catch {
+      // Ignore synthetic pointer event errors
+    }
+  };
+
+  const finishDrag = (target?: Element | null, pointerId?: number): void => {
+    if (target && pointerId !== undefined) {
+      releasePointer(target, pointerId);
+    }
+    if (dragState && (dragState.kind === 'move-obstacle' || dragState.kind === 'rotate-obstacle')) {
+      onObstacleDragEnd?.(dragState.id);
+    }
+    setDragState(null);
   };
 
   const handleGroundPointerDown = (event: ReactPointerEvent<HTMLDivElement>): void => {
@@ -580,6 +794,7 @@ export function WorldScene({
       if (nearestId) {
         onSelectObstacle(nearestId);
         if (editable) {
+          capturePointer(event.currentTarget, event.pointerId);
           setDragState({ kind: 'move-obstacle', id: nearestId });
         }
         return;
@@ -588,6 +803,7 @@ export function WorldScene({
 
     onSelectObstacle(null);
     if (cameraMode === 'orbit') {
+      capturePointer(event.currentTarget, event.pointerId);
       setDragState({
         kind: 'orbit',
         startX: event.clientX,
@@ -618,7 +834,7 @@ export function WorldScene({
     if (!point) return;
 
     if (dragState.kind === 'move-obstacle') {
-      onMoveObstacleTo(dragState.id, point);
+      onMoveObstacleTo(dragState.id, point, { dragging: true });
     } else if (dragState.kind === 'rotate-obstacle') {
       const obs = sceneData.obstacles.find((o) => o.id === dragState.id);
       if (!obs) return;
@@ -626,12 +842,12 @@ export function WorldScene({
       const dz = point.z - obs.pose.position[2];
       // Yaw 0 faces -Z; positive yaw turns left (-X)
       const yawDeg = Math.round(((Math.atan2(-dx, -dz) * 180) / Math.PI) * 10) / 10;
-      onRotateObstacleTo(dragState.id, yawDeg);
+      onRotateObstacleTo(dragState.id, yawDeg, { dragging: true });
     }
   };
 
-  const handleGroundPointerUp = (): void => {
-    setDragState(null);
+  const handleGroundPointerUp = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    finishDrag(event.currentTarget, event.pointerId);
   };
 
   const handleWheel = (event: ReactWheelEvent<HTMLDivElement>): void => {
@@ -640,117 +856,34 @@ export function WorldScene({
     onOrbitChange({ ...orbitState, distanceM: nextDist });
   };
 
-  const carYawDeg = quatToYawDeg(sceneData.carPose.rotation);
-  const { bounds } = sceneData.trackMesh;
-  const pad = 1.6;
-  const viewMinX = bounds.minX - pad;
-  const viewMinZ = bounds.minZ - pad;
-  const viewWidth = Math.max(bounds.maxX - bounds.minX + pad * 2, 4);
-  const viewHeight = Math.max(bounds.maxZ - bounds.minZ + pad * 2, 4);
-
-  const svgOverlayFallback = (
-    <svg
-      data-testid="world-svg-scene"
-      viewBox={`${viewMinX} ${viewMinZ} ${viewWidth} ${viewHeight}`}
+  const nonWebglFallback = (
+    <div
+      data-testid="webgl-unavailable"
       style={{
         width: '100%',
         height: '100%',
-        display: 'block',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
         background: '#0f1722',
-        pointerEvents: 'none',
+        color: '#9dafbe',
+        fontSize: 13,
       }}
     >
-      {/* Track surface polygon */}
-      <path
-        d={[
-          ...sceneData.trackMesh.leftEdgePoints.map(
-            (p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.z}`,
-          ),
-          'Z',
-          ...sceneData.trackMesh.rightEdgePoints.map(
-            (p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.z}`,
-          ),
-          'Z',
-        ].join(' ')}
-        fill="#273545"
-        fillRule="evenodd"
-        stroke="#94a3b8"
-        strokeWidth={0.04}
-      />
-      {/* Start/finish line */}
-      <g
-        transform={`translate(${sceneData.trackMesh.startFinish.position[0]}, ${sceneData.trackMesh.startFinish.position[2]}) rotate(${(-sceneData.trackMesh.startFinish.yawRad * 180) / Math.PI})`}
-      >
-        <rect
-          x={-sceneData.trackMesh.startFinish.widthM / 2}
-          y={-sceneData.trackMesh.startFinish.depthM / 2}
-          width={sceneData.trackMesh.startFinish.widthM}
-          height={sceneData.trackMesh.startFinish.depthM}
-          fill="#f8fafc"
-        />
-      </g>
-      {/* Obstacles */}
-      {sceneData.obstacles.map((obs) => (
-        <g
-          key={obs.id}
-          transform={`translate(${obs.pose.position[0]}, ${obs.pose.position[2]}) rotate(${-obs.yawDeg})`}
-        >
-          {obs.type === 'cone' ? (
-            <circle
-              r={OBSTACLE_DIMENSIONS.cone.radius * 1.4}
-              fill="#f97316"
-              stroke={obs.selected ? '#84ddbf' : '#f8fafc'}
-              strokeWidth={obs.selected ? 0.04 : 0.02}
-            />
-          ) : (
-            <rect
-              x={-0.15}
-              y={-0.15}
-              width={0.3}
-              height={0.3}
-              fill={obs.type === 'box' ? '#eab308' : obs.type === 'wall' ? '#94a3b8' : '#06b6d4'}
-              stroke={obs.selected ? '#84ddbf' : 'none'}
-              strokeWidth={0.04}
-            />
-          )}
-        </g>
-      ))}
-      {/* Sensor beams */}
-      {sceneData.sensorBeams.map((beam) => (
-        <g key={beam.key}>
-          <line
-            x1={beam.origin[0]}
-            y1={beam.origin[2]}
-            x2={beam.endPoint[0]}
-            y2={beam.endPoint[2]}
-            stroke={beam.hitPoint ? '#f97316' : '#38bdf8'}
-            strokeWidth={0.03}
-          />
-          {beam.hitPoint && (
-            <circle cx={beam.hitPoint[0]} cy={beam.hitPoint[2]} r={0.06} fill="#ef4444" />
-          )}
-        </g>
-      ))}
-      {/* Car body */}
-      <g
-        transform={`translate(${sceneData.carPose.position[0]}, ${sceneData.carPose.position[2]}) rotate(${-carYawDeg})`}
-      >
-        <rect
-          x={-DEFAULT_CAR_GEOMETRY.bodyWidthM / 2}
-          y={-DEFAULT_CAR_GEOMETRY.bodyLengthM / 2}
-          width={DEFAULT_CAR_GEOMETRY.bodyWidthM}
-          height={DEFAULT_CAR_GEOMETRY.bodyLengthM}
-          fill="#10b981"
-          rx={0.04}
-        />
-      </g>
-    </svg>
+      WebGL unavailable
+    </div>
   );
+
+  const liveAspect =
+    viewportSize.width > 0 && viewportSize.height > 0
+      ? viewportSize.width / viewportSize.height
+      : 4 / 3;
 
   return (
     <div
       ref={viewportRef}
       data-testid="world-viewport"
+      data-ready={webglAvailable ? (canvasReady ? 'true' : 'false') : 'true'}
       style={{
         position: 'relative',
         flex: 1,
@@ -763,21 +896,28 @@ export function WorldScene({
     >
       <div style={{ position: 'absolute', inset: 0 }}>
         {webglAvailable ? (
-          <CanvasErrorBoundary fallback={svgOverlayFallback}>
+          <CanvasErrorBoundary fallback={nonWebglFallback}>
             <Canvas
               gl={{ preserveDrawingBuffer: true, antialias: true }}
               camera={{ position: [...cameraTransform.position], fov: 48, near: 0.05, far: 500 }}
+              onCreated={({ camera }) => {
+                liveCameraRef.current = camera;
+                setCanvasReady(true);
+              }}
             >
               <WorldR3FScene
                 sceneData={sceneData}
                 cameraMode={cameraMode}
                 orbitState={orbitState}
                 interpolator={interpolator}
+                onCameraReady={(cam) => {
+                  liveCameraRef.current = cam;
+                }}
               />
             </Canvas>
           </CanvasErrorBoundary>
         ) : (
-          svgOverlayFallback
+          nonWebglFallback
         )}
       </div>
 
@@ -788,6 +928,8 @@ export function WorldScene({
         onPointerDown={handleGroundPointerDown}
         onPointerMove={handleGroundPointerMove}
         onPointerUp={handleGroundPointerUp}
+        onPointerCancel={handleGroundPointerUp}
+        onLostPointerCapture={() => finishDrag()}
         onWheel={handleWheel}
         style={{
           position: 'absolute',
@@ -800,8 +942,9 @@ export function WorldScene({
         {sceneData.obstacles.map((obs) => {
           const uv = groundPointToViewportUV(
             { x: obs.pose.position[0], z: obs.pose.position[2] },
-            4 / 3,
+            liveAspect,
             cameraTransform,
+            48,
           );
           const isSelected = obs.id === selectedObstacleId;
           return (
@@ -817,6 +960,12 @@ export function WorldScene({
                 e.stopPropagation();
                 onSelectObstacle(obs.id);
                 if (editable) {
+                  if (viewportRef.current) {
+                    const groundEl = viewportRef.current.querySelector(
+                      '[data-testid="world-ground"]',
+                    );
+                    if (groundEl) capturePointer(groundEl, e.pointerId);
+                  }
                   setDragState({ kind: 'move-obstacle', id: obs.id });
                 }
               }}
@@ -841,6 +990,12 @@ export function WorldScene({
                   data-testid={`obstacle-rotate-handle-${obs.id}`}
                   onPointerDown={(e) => {
                     e.stopPropagation();
+                    if (viewportRef.current) {
+                      const groundEl = viewportRef.current.querySelector(
+                        '[data-testid="world-ground"]',
+                      );
+                      if (groundEl) capturePointer(groundEl, e.pointerId);
+                    }
                     setDragState({ kind: 'rotate-obstacle', id: obs.id });
                   }}
                   onClick={(e) => {
@@ -872,53 +1027,6 @@ export function WorldScene({
             </div>
           );
         })}
-      </div>
-
-      {/* Scene state telemetry attributes for deterministic component test inspection */}
-      <div
-        hidden
-        data-testid="world-scene-telemetry"
-        data-track-id={sceneData.trackMesh.trackId}
-        data-track-walls={sceneData.trackMesh.walls.length}
-        data-camera-mode={cameraMode}
-      >
-        <div
-          data-testid="car-mesh-pose"
-          data-position-x={sceneData.carPose.position[0]}
-          data-position-y={sceneData.carPose.position[1]}
-          data-position-z={sceneData.carPose.position[2]}
-          data-quat-x={sceneData.carPose.rotation[0]}
-          data-quat-y={sceneData.carPose.rotation[1]}
-          data-quat-z={sceneData.carPose.rotation[2]}
-          data-quat-w={sceneData.carPose.rotation[3]}
-        />
-        {sceneData.wheels.map((w) => (
-          <div
-            key={w.name}
-            data-testid={`wheel-mesh-pose-${w.name}`}
-            data-position-x={w.position[0]}
-            data-position-y={w.position[1]}
-            data-position-z={w.position[2]}
-            data-quat-x={w.rotation[0]}
-            data-quat-y={w.rotation[1]}
-            data-quat-z={w.rotation[2]}
-            data-quat-w={w.rotation[3]}
-            data-steer-rad={w.steerRad}
-            data-spin-rad={w.spinRad}
-          />
-        ))}
-        {sceneData.sensorBeams.map((b) => (
-          <div
-            key={b.key}
-            data-testid={`sensor-beam-${b.key}`}
-            data-instance-id={b.instanceId}
-            data-hit-m={b.hitM ?? ''}
-            data-end-x={b.endPoint[0]}
-            data-end-y={b.endPoint[1]}
-            data-end-z={b.endPoint[2]}
-            data-has-hit={b.hitPoint !== null ? 'true' : 'false'}
-          />
-        ))}
       </div>
     </div>
   );

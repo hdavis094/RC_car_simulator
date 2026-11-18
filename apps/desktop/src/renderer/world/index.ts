@@ -1,17 +1,26 @@
 export {
   WorldRoot,
   createWorldDockTabs,
-  getWorldThreeScene,
+  generateUniqueObstacleId,
+  normalizeLayoutPath,
   type WorldRootProps,
 } from './WorldRoot.tsx';
 export { NetworkConsole, formatIncomingLine, type RawConsoleEntry } from './NetworkConsole.tsx';
-export { WorldScene, canUseWebGL, type EditorTool, type WorldSceneProps } from './WorldScene.tsx';
+export {
+  WorldR3FScene,
+  WorldScene,
+  canUseWebGL,
+  type EditorTool,
+  type WorldR3FSceneProps,
+  type WorldSceneProps,
+} from './WorldScene.tsx';
 export {
   SnapshotInterpolator,
   interpolatePose,
   interpolateSnapshots,
   lerpNumber,
   lerpVec3,
+  normalizeVec3,
   slerpQuat,
 } from './interpolation.ts';
 export {
@@ -22,11 +31,11 @@ export {
   buildWorldSceneData,
   computeCameraTransform,
   defaultSnapshotForWorld,
+  extractRenderedBeams,
   groundPointToViewportUV,
   quatToYawDeg,
   rotateVec3ByQuat,
   screenToGroundPoint,
-  syncThreeSceneGraph,
   yawDegToQuat,
   type CameraMode,
   type CameraTransform,

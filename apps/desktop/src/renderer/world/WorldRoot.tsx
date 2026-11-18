@@ -3,12 +3,12 @@ import {
   SCHEMA_VERSION,
   World,
   type Obstacle,
+  type ObstacleType,
   type Track,
   type World as WorldFile,
 } from '@rcsim/schema';
 import type { StateSnapshot } from '@rcsim/sim-core/api';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { createPortal } from 'react-dom';
 import {
   RUN_SPEEDS,
   parseIpcError,
@@ -18,7 +18,6 @@ import {
 } from '../../shared/ipc.ts';
 import { BottomPanel, type DockTab } from '../shell/BottomPanel.tsx';
 import { useEnvironmentStore } from '../shell/environment-store.ts';
-import { useSessionStore } from '../shell/session.ts';
 import {
   DRIVE_INTERVAL_MS,
   isEditableEventTarget,
@@ -34,13 +33,11 @@ import {
   DEFAULT_ORBIT_CAMERA,
   buildWorldSceneData,
   defaultSnapshotForWorld,
-  syncThreeSceneGraph,
   type CameraMode,
   type OrbitCameraState,
 } from './scene-data.ts';
 import { BUILTIN_OVAL_TRACK, BUILTIN_TRACKS } from './track-mesh.ts';
 import { WorldScene, type EditorTool } from './WorldScene.tsx';
-import * as THREE from 'three';
 
 const DEFAULT_WORLD_FILE: WorldFile = {
   schemaVersion: SCHEMA_VERSION,
@@ -64,17 +61,66 @@ const PALETTE_TOOLS: readonly { readonly id: EditorTool; readonly label: string 
   { id: 'ramp', label: 'Ramp' },
 ];
 
-function normalizeLayoutPath(raw: string): string {
+const CONNECT_RETRY_BACKOFF_MS = 2000;
+
+/**
+ * Validates and normalizes a relative layout file path inside `worlds/`.
+ * Rejects `..`, backslashes, drive letters, absolute paths, and anything outside `worlds/`.
+ */
+export function normalizeLayoutPath(raw: string): string {
   const trimmed = raw.trim() || 'worlds/oval-cones.json';
-  const withPrefix = trimmed.startsWith('worlds/') ? trimmed : `worlds/${trimmed}`;
-  return withPrefix.endsWith('.json') ? withPrefix : `${withPrefix}.json`;
+  if (trimmed.includes('\\')) {
+    throw new Error('Invalid layout path: backslashes are not allowed.');
+  }
+  if (trimmed.startsWith('/') || /^[a-zA-Z]:/.test(trimmed)) {
+    throw new Error('Invalid layout path: path must be relative to worlds/.');
+  }
+  const segments = trimmed.split('/');
+  if (segments.some((seg) => seg === '..' || seg === '.' || seg.length === 0)) {
+    throw new Error('Invalid layout path: path traversal is not allowed.');
+  }
+  if (segments.length > 1 && segments[0] !== 'worlds') {
+    throw new Error('Invalid layout path: path must be inside worlds/.');
+  }
+  const withPrefix = segments[0] === 'worlds' ? trimmed : `worlds/${trimmed}`;
+  const normalized = withPrefix.endsWith('.json') ? withPrefix : `${withPrefix}.json`;
+  const finalSegments = normalized.split('/');
+  if (
+    finalSegments[0] !== 'worlds' ||
+    finalSegments.length < 2 ||
+    finalSegments.slice(1).some((s) => s.length === 0 || s === '.json')
+  ) {
+    throw new Error('Invalid layout path: must specify a filename inside worlds/.');
+  }
+  return normalized;
 }
 
-/** Shared latest Three.js scene graph for test inspection. */
-let latestThreeSceneGraph: THREE.Group = new THREE.Group();
-
-export function getWorldThreeScene(): THREE.Group {
-  return latestThreeSceneGraph;
+/**
+ * Generates an obstacle ID of the form `<type>-<n>` that is guaranteed unique
+ * against `existingObstacles` (taking the max existing numeric suffix for `<type>` + 1).
+ */
+export function generateUniqueObstacleId(
+  type: ObstacleType,
+  existingObstacles: readonly Obstacle[],
+): string {
+  const usedIds = new Set(existingObstacles.map((o) => o.id).filter(Boolean));
+  const prefix = `${type}-`;
+  let maxSuffix = 0;
+  for (const obs of existingObstacles) {
+    if (!obs.id) continue;
+    if (obs.id.startsWith(prefix)) {
+      const rest = obs.id.slice(prefix.length);
+      if (/^\d+$/.test(rest)) {
+        const n = Number.parseInt(rest, 10);
+        if (n > maxSuffix) maxSuffix = n;
+      }
+    }
+  }
+  let candidateNum = maxSuffix + 1;
+  while (usedIds.has(`${prefix}${candidateNum}`)) {
+    candidateNum++;
+  }
+  return `${prefix}${candidateNum}`;
 }
 
 export function createWorldDockTabs(api?: RcsimApi): readonly DockTab[] {
@@ -90,17 +136,31 @@ export function createWorldDockTabs(api?: RcsimApi): readonly DockTab[] {
 export interface WorldRootProps {
   readonly api?: RcsimApi;
   readonly initialWorld?: WorldFile;
+  /**
+   * When true, mounts a standalone `BottomPanel` containing `createWorldDockTabs(api)`.
+   * Defaults to true when a custom/fake `api` is passed (standalone tests), and false
+   * when using the global `window.rcsim` inside `App.tsx`.
+   */
+  readonly showDock?: boolean;
 }
 
 /** Root of the 3D World environment (P1-F). */
-export function WorldRoot({ api = window.rcsim, initialWorld }: WorldRootProps = {}): ReactNode {
-  const rootRef = useRef<HTMLElement>(null);
-  const threeSceneRef = useRef<THREE.Group>(new THREE.Group());
+export function WorldRoot({ api, initialWorld, showDock }: WorldRootProps = {}): ReactNode {
+  const resolvedApi = api ?? window.rcsim;
+  const shouldRenderDock =
+    showDock ?? (typeof window === 'undefined' || resolvedApi !== window.rcsim);
+
   const [interpolator] = useState<SnapshotInterpolator>(() => new SnapshotInterpolator());
+  const latestSnapshotRef = useRef<StateSnapshot | null>(null);
+  const simTimeRef = useRef<HTMLSpanElement>(null);
+  const lapCounterRef = useRef<HTMLSpanElement>(null);
+  const collisionCountRef = useRef<HTMLSpanElement>(null);
 
   const [trackIds, setTrackIds] = useState<readonly string[]>(['oval', 'technical']);
   const [track, setTrack] = useState<Track>(BUILTIN_OVAL_TRACK);
   const [worldFile, setWorldFile] = useState<WorldFile>(initialWorld ?? DEFAULT_WORLD_FILE);
+  const worldFileRef = useRef<WorldFile>(worldFile);
+
   const [layoutPaths, setLayoutPaths] = useState<readonly string[]>([]);
   const [layoutPath, setLayoutPath] = useState('worlds/oval-cones.json');
   const [statusMessage, setStatusMessage] = useState('');
@@ -108,20 +168,32 @@ export function WorldRoot({ api = window.rcsim, initialWorld }: WorldRootProps =
 
   // Run state
   const [runInfo, setRunInfo] = useState<RunInfo | null>(null);
+  const runInfoRef = useRef<RunInfo | null>(null);
   const [speed, setSpeed] = useState<RunSpeed>(1);
   const [seed, setSeed] = useState<number>((initialWorld ?? DEFAULT_WORLD_FILE).seed);
-  const [latestSnapshot, setLatestSnapshot] = useState<StateSnapshot | null>(null);
 
   // Camera & scene editor state
   const [cameraMode, setCameraMode] = useState<CameraMode>('orbit');
   const [orbitState, setOrbitState] = useState<OrbitCameraState>(DEFAULT_ORBIT_CAMERA);
   const [activeTool, setActiveTool] = useState<EditorTool>('select');
   const [selectedObstacleId, setSelectedObstacleId] = useState<string | null>(null);
+  const selectedObstacleIdRef = useRef<string | null>(selectedObstacleId);
   const [placementX, setPlacementX] = useState<number>(2.4);
   const [placementZ, setPlacementZ] = useState<number>(-1.5);
   const [placementYawDeg, setPlacementYawDeg] = useState<number>(0);
   const [placementCoordsTouched, setPlacementCoordsTouched] = useState(false);
-  const nextObstacleCounterRef = useRef(1);
+
+  useEffect(() => {
+    worldFileRef.current = worldFile;
+  }, [worldFile]);
+
+  useEffect(() => {
+    runInfoRef.current = runInfo;
+  }, [runInfo]);
+
+  useEffect(() => {
+    selectedObstacleIdRef.current = selectedObstacleId;
+  }, [selectedObstacleId]);
 
   // Driving state
   const [driveMode, setDriveMode] = useState<Mode>('manual');
@@ -133,21 +205,19 @@ export function WorldRoot({ api = window.rcsim, initialWorld }: WorldRootProps =
   const pressedKeysRef = useRef<Set<string>>(new Set());
   const driveActiveRef = useRef(false);
   const controlConnectedRef = useRef(false);
+  const connectInFlightRef = useRef<Promise<boolean> | null>(null);
+  const lastConnectFailAtMsRef = useRef<number>(-Infinity);
 
-  // Shared bottom panel detection (when hosted inside App with an open project)
+  // Environment tracking for releasing drive when switching away from 3D World
   const currentEnv = useEnvironmentStore((state) => state.current);
-  const panel = useSessionStore((state) => state.panel);
-  const panelOpen = useSessionStore((state) => state.panelOpen);
-  const showPanel = useSessionStore((state) => state.showPanel);
-  const [isHostedInApp, setIsHostedInApp] = useState<boolean>(
-    () => typeof document !== 'undefined' && document.querySelector('.app-shell') !== null,
-  );
-  const [outerDockTargets, setOuterDockTargets] = useState<{
-    readonly tablist: Element;
-    readonly content: Element;
-  } | null>(null);
+  const [hasVisitedWorld, setHasVisitedWorld] = useState<boolean>(currentEnv === 'world');
+  if (currentEnv === 'world' && !hasVisitedWorld) {
+    setHasVisitedWorld(true);
+  }
 
-  const isWorldActive = !isHostedInApp || currentEnv === 'world';
+  // In standalone unit tests (where show('world') was not called yet), treat as active
+  // until the environment store has visited 'world' and then switched away.
+  const isWorldActive = currentEnv === 'world' || (!hasVisitedWorld && shouldRenderDock);
 
   const reportError = useCallback((err: unknown): void => {
     const parsed = parseIpcError(err);
@@ -155,14 +225,29 @@ export function WorldRoot({ api = window.rcsim, initialWorld }: WorldRootProps =
     setErrorMessage(parsed.message);
   }, []);
 
+  const updateReadoutsDom = useCallback((snapshot: StateSnapshot): void => {
+    const simTimeSeconds = (snapshot.timeUs / 1_000_000).toFixed(3);
+    if (simTimeRef.current) {
+      simTimeRef.current.innerHTML = `<strong>Sim time:</strong> ${simTimeSeconds} s`;
+    }
+    if (lapCounterRef.current) {
+      lapCounterRef.current.innerHTML = `<strong>Laps:</strong> ${snapshot.laps.count}`;
+    }
+    if (collisionCountRef.current) {
+      const lastSuffix = snapshot.collisions.last ? ` (${snapshot.collisions.last})` : '';
+      collisionCountRef.current.innerHTML = `<strong>Collisions:</strong> ${snapshot.collisions.count}${lastSuffix}`;
+    }
+  }, []);
+
   const loadTrackById = useCallback(
     async (id: string): Promise<Track> => {
       try {
-        const loaded = await api.worldEdit.loadTrack(id);
+        const loaded = await resolvedApi.worldEdit.loadTrack(id);
         setTrack(loaded);
         return loaded;
       } catch (err) {
         const parsed = parseIpcError(err);
+        // TODO(P2-01): remove when worldEdit is wired
         const fallback = BUILTIN_TRACKS[id] ?? BUILTIN_OVAL_TRACK;
         if (parsed.code === 'not-implemented') {
           setTrack(fallback);
@@ -173,35 +258,76 @@ export function WorldRoot({ api = window.rcsim, initialWorld }: WorldRootProps =
         return fallback;
       }
     },
-    [api],
+    [resolvedApi],
+  );
+
+  const ensureControlConnected = useCallback(
+    async (options?: { readonly force?: boolean }): Promise<boolean> => {
+      if (controlConnectedRef.current) return true;
+      if (connectInFlightRef.current) return connectInFlightRef.current;
+
+      const now = performance.now();
+      const hasActiveRun =
+        runInfoRef.current !== null &&
+        (runInfoRef.current.state === 'running' ||
+          runInfoRef.current.state === 'starting' ||
+          runInfoRef.current.state === 'paused');
+
+      if (
+        !options?.force &&
+        !hasActiveRun &&
+        now - lastConnectFailAtMsRef.current < CONNECT_RETRY_BACKOFF_MS
+      ) {
+        return false;
+      }
+
+      const promise = (async () => {
+        try {
+          await resolvedApi.control.connect({ kind: 'run' });
+          controlConnectedRef.current = true;
+          lastConnectFailAtMsRef.current = -Infinity;
+          return true;
+        } catch {
+          controlConnectedRef.current = false;
+          lastConnectFailAtMsRef.current = performance.now();
+          return false;
+        } finally {
+          connectInFlightRef.current = null;
+        }
+      })();
+      connectInFlightRef.current = promise;
+      return promise;
+    },
+    [resolvedApi],
   );
 
   // Discover tracks, layouts, and initial run state
   useEffect(() => {
     let alive = true;
-    void api.worldEdit
+    void resolvedApi.worldEdit
       .listTracks()
       .then((ids) => {
         if (alive && ids.length > 0) setTrackIds(ids);
       })
       .catch(() => {});
 
-    void api.worldEdit
-      .loadTrack(worldFile.trackId)
+    void resolvedApi.worldEdit
+      .loadTrack(worldFileRef.current.trackId)
       .then((loaded) => {
         if (alive) setTrack(loaded);
       })
       .catch((err) => {
         if (!alive) return;
         const parsed = parseIpcError(err);
-        const fallback = BUILTIN_TRACKS[worldFile.trackId] ?? BUILTIN_OVAL_TRACK;
+        // TODO(P2-01): remove when worldEdit is wired
+        const fallback = BUILTIN_TRACKS[worldFileRef.current.trackId] ?? BUILTIN_OVAL_TRACK;
         setTrack(fallback);
         if (parsed.code !== 'not-implemented') {
           setErrorMessage(parsed.message);
         }
       });
 
-    void api.worldEdit
+    void resolvedApi.worldEdit
       .listLayouts()
       .then((paths) => {
         if (alive) {
@@ -211,35 +337,53 @@ export function WorldRoot({ api = window.rcsim, initialWorld }: WorldRootProps =
       })
       .catch(() => {});
 
-    void api.run
+    void resolvedApi.run
       .info()
       .then((info) => {
         if (alive && info) {
+          runInfoRef.current = info;
           setRunInfo(info);
           setSpeed(info.speed);
           setSeed(info.seed);
+          if (info.state === 'running' || info.state === 'starting' || info.state === 'paused') {
+            void ensureControlConnected({ force: true });
+          }
         }
       })
       .catch(() => {});
 
-    const offStatus = api.run.onStatus((info) => {
+    const offStatus = resolvedApi.run.onStatus((info) => {
       if (!alive) return;
+      const prevState = runInfoRef.current?.state;
+      runInfoRef.current = info;
       setRunInfo(info);
       setSpeed(info.speed);
       setSeed(info.seed);
       if (info.trackId) {
         void loadTrackById(info.trackId);
       }
+      if (
+        (info.state === 'running' || info.state === 'starting' || info.state === 'paused') &&
+        prevState !== info.state
+      ) {
+        lastConnectFailAtMsRef.current = -Infinity;
+        void ensureControlConnected({ force: true });
+      }
     });
 
-    const offSnapshot = api.run.onSnapshot((snapshot) => {
+    // Keep snapshots out of React state so snapshot arrival never re-renders WorldRoot
+    const offSnapshot = resolvedApi.run.onSnapshot((snapshot) => {
       if (!alive) return;
+      latestSnapshotRef.current = snapshot;
       interpolator.push(snapshot, performance.now());
-      setLatestSnapshot(snapshot);
+      updateReadoutsDom(snapshot);
     });
 
-    const offControlState = api.control.onState((state) => {
+    const offControlState = resolvedApi.control.onState((state) => {
       controlConnectedRef.current = state === 'connected';
+      if (state === 'connected') {
+        lastConnectFailAtMsRef.current = -Infinity;
+      }
     });
 
     return () => {
@@ -248,91 +392,204 @@ export function WorldRoot({ api = window.rcsim, initialWorld }: WorldRootProps =
       offSnapshot();
       offControlState();
     };
-  }, [api, interpolator, loadTrackById, worldFile.trackId]);
-
-  // Detect whether App has already mounted an outer Shared bottom panel
-  useEffect(() => {
-    const hosted = Boolean(rootRef.current?.closest('.app-shell'));
-    setIsHostedInApp(hosted);
-    const allDocks = Array.from(document.querySelectorAll('[aria-label="Shared bottom panel"]'));
-    const outer = allDocks.find((el) => !rootRef.current?.contains(el));
-    if (!outer) {
-      setOuterDockTargets((prev) => (prev === null ? prev : null));
-      return;
-    }
-    const tablist = outer.querySelector('[role="tablist"][aria-label="Panel tabs"]');
-    const content = outer.querySelector('.dock-content');
-    if (tablist && content) {
-      setOuterDockTargets((prev) =>
-        prev && prev.tablist === tablist && prev.content === content ? prev : { tablist, content },
-      );
-    } else {
-      setOuterDockTargets((prev) => (prev === null ? prev : null));
-    }
-  }, []);
+  }, [ensureControlConnected, interpolator, loadTrackById, resolvedApi, updateReadoutsDom]);
 
   const isRunning = runInfo?.state === 'running' || runInfo?.state === 'starting';
   const isPaused = runInfo?.state === 'paused';
   const editable = !isRunning;
 
-  // Build effective snapshot for rendering: live snapshot when present, merged with editor obstacles while stopped
-  const effectiveSnapshot = useMemo<StateSnapshot>(() => {
-    const fallback = defaultSnapshotForWorld(worldFile, track);
-    if (!latestSnapshot) return fallback;
-    if (!runInfo || runInfo.state === 'ended') {
-      // When stopped after a run or when snapshots are fed externally in tests:
-      // if the user placed obstacles in the editor that aren't in the snapshot yet, include them
-      if (worldFile.obstacles.length > 0 && latestSnapshot.obstacles.length === 0) {
-        return {
-          ...latestSnapshot,
-          obstacles: fallback.obstacles,
-        };
-      }
-    }
-    return latestSnapshot;
-  }, [latestSnapshot, runInfo, track, worldFile]);
-
-  const sceneData = useMemo(
-    () => buildWorldSceneData(effectiveSnapshot, track, selectedObstacleId),
-    [effectiveSnapshot, selectedObstacleId, track],
+  // Build structural scene data from editor worldFile and track (does not depend on 60 Hz snapshots)
+  const baseSnapshot = useMemo<StateSnapshot>(
+    () => defaultSnapshotForWorld(worldFile, track),
+    [track, worldFile],
   );
 
-  // Keep the real Three.js scene graph synchronized with sceneData
-  useEffect(() => {
-    syncThreeSceneGraph(threeSceneRef.current, sceneData);
-    latestThreeSceneGraph = threeSceneRef.current;
-  }, [sceneData]);
-
-  const ensureControlConnected = useCallback(async (): Promise<void> => {
-    if (controlConnectedRef.current) return;
-    try {
-      await api.control.connect({ kind: 'run' });
-      controlConnectedRef.current = true;
-    } catch {
-      // Ignore if main control stub is not implemented yet
-    }
-  }, [api]);
+  const sceneData = useMemo(
+    () => buildWorldSceneData(baseSnapshot, track, selectedObstacleId),
+    [baseSnapshot, selectedObstacleId, track],
+  );
 
   const sendDriveCommand = useCallback(
     (command: DriveCommandInput): void => {
-      setLastDriveCommand(command);
+      setLastDriveCommand((prev) =>
+        prev.throttle === command.throttle && prev.steer === command.steer ? prev : command,
+      );
       void (async () => {
-        await ensureControlConnected();
-        await api.control.drive(command).catch(() => {});
+        const connected = await ensureControlConnected();
+        if (!connected) return;
+        await resolvedApi.control.drive(command).catch(() => {});
       })();
     },
-    [api, ensureControlConnected],
+    [ensureControlConnected, resolvedApi],
   );
+
+  const releaseActiveDrive = useCallback(
+    (alwaysRelease = false): void => {
+      const hadKeys = pressedKeysRef.current.size > 0;
+      const wasActive = driveActiveRef.current;
+      pressedKeysRef.current.clear();
+      driveActiveRef.current = false;
+      setLastDriveCommand((prev) =>
+        prev.throttle === 0 && prev.steer === 0 ? prev : { throttle: 0, steer: 0 },
+      );
+      if (wasActive || hadKeys || alwaysRelease) {
+        void (async () => {
+          if (wasActive || hadKeys) {
+            await resolvedApi.control.drive({ throttle: 0, steer: 0 }).catch(() => {});
+          }
+          await resolvedApi.control.releaseDrive().catch(() => {});
+        })();
+      }
+    },
+    [resolvedApi],
+  );
+
+  // Release drive when leaving manual mode or when 3D World stops being the active environment
+  const prevManualActiveRef = useRef<boolean>(isWorldActive && driveMode === 'manual');
+  useEffect(() => {
+    const nowManualActive = isWorldActive && driveMode === 'manual';
+    if (prevManualActiveRef.current && !nowManualActive) {
+      releaseActiveDrive(true);
+    }
+    prevManualActiveRef.current = nowManualActive;
+  }, [driveMode, isWorldActive, releaseActiveDrive]);
+
+  // Release drive and disconnect control on WorldRoot unmount
+  useEffect(() => {
+    const pressedKeys = pressedKeysRef.current;
+    return () => {
+      const hadKeys = pressedKeys.size > 0;
+      pressedKeys.clear();
+      const wasDriving = driveActiveRef.current || hadKeys;
+      driveActiveRef.current = false;
+      void (async () => {
+        if (wasDriving) {
+          await resolvedApi.control.drive({ throttle: 0, steer: 0 }).catch(() => {});
+        }
+        await resolvedApi.control.releaseDrive().catch(() => {});
+        await resolvedApi.control.disconnect().catch(() => {});
+      })();
+    };
+  }, [resolvedApi]);
+
+  // Clear pressed keys and release drive on window blur or document visibilitychange to hidden
+  useEffect(() => {
+    const onBlur = (): void => {
+      releaseActiveDrive(driveActiveRef.current || pressedKeysRef.current.size > 0);
+    };
+    const onVisibilityChange = (): void => {
+      if (document.hidden || document.visibilityState === 'hidden') {
+        releaseActiveDrive(driveActiveRef.current || pressedKeysRef.current.size > 0);
+      }
+    };
+    window.addEventListener('blur', onBlur);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      window.removeEventListener('blur', onBlur);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [releaseActiveDrive]);
+
+  // Throttled paused drag state (at most one IPC call per animation frame, flushed on pointer-up)
+  const pendingDragMoveRef = useRef<{
+    id: string;
+    positionM: { readonly x: number; readonly z: number };
+    yawDeg: number;
+    rollbackWorld: WorldFile;
+  } | null>(null);
+  const dragRafIdRef = useRef<number | null>(null);
+  const dragOriginalWorldRef = useRef<Map<string, WorldFile>>(new Map());
+
+  const dispatchPausedMoveIpc = useCallback(
+    (
+      id: string,
+      positionM: { readonly x: number; readonly z: number },
+      yawDeg: number,
+      rollbackWorld: WorldFile,
+    ): void => {
+      void resolvedApi.worldEdit.moveObstacle(id, positionM, yawDeg).catch((err) => {
+        const parsed = parseIpcError(err);
+        if (parsed.code !== 'not-implemented') {
+          worldFileRef.current = rollbackWorld;
+          setWorldFile(rollbackWorld);
+          reportError(err);
+        }
+      });
+    },
+    [reportError, resolvedApi.worldEdit],
+  );
+
+  const schedulePausedDragIpc = useCallback(
+    (
+      id: string,
+      positionM: { readonly x: number; readonly z: number },
+      yawDeg: number,
+      rollbackWorld: WorldFile,
+    ): void => {
+      pendingDragMoveRef.current = { id, positionM, yawDeg, rollbackWorld };
+      if (dragRafIdRef.current !== null) return;
+      const schedule =
+        typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function'
+          ? window.requestAnimationFrame.bind(window)
+          : (cb: FrameRequestCallback) => window.setTimeout(() => cb(performance.now()), 16);
+      dragRafIdRef.current = schedule(() => {
+        dragRafIdRef.current = null;
+        const pending = pendingDragMoveRef.current;
+        if (!pending) return;
+        pendingDragMoveRef.current = null;
+        dispatchPausedMoveIpc(pending.id, pending.positionM, pending.yawDeg, pending.rollbackWorld);
+      });
+    },
+    [dispatchPausedMoveIpc],
+  );
+
+  const handleObstacleDragEnd = useCallback(
+    (id: string): void => {
+      if (dragRafIdRef.current !== null && typeof window.cancelAnimationFrame === 'function') {
+        window.cancelAnimationFrame(dragRafIdRef.current);
+        dragRafIdRef.current = null;
+      }
+      const pending = pendingDragMoveRef.current;
+      pendingDragMoveRef.current = null;
+      const rollbackWorld = dragOriginalWorldRef.current.get(id);
+      dragOriginalWorldRef.current.delete(id);
+
+      if (isPaused) {
+        const currentObs = worldFileRef.current.obstacles.find((o) => o.id === id);
+        if (pending && pending.id === id) {
+          dispatchPausedMoveIpc(
+            id,
+            currentObs?.positionM ?? pending.positionM,
+            currentObs?.yawDeg ?? pending.yawDeg,
+            rollbackWorld ?? pending.rollbackWorld,
+          );
+        } else if (currentObs && rollbackWorld) {
+          dispatchPausedMoveIpc(id, currentObs.positionM, currentObs.yawDeg, rollbackWorld);
+        }
+      }
+    },
+    [dispatchPausedMoveIpc, isPaused],
+  );
+
+  useEffect(() => {
+    return () => {
+      if (dragRafIdRef.current !== null && typeof window.cancelAnimationFrame === 'function') {
+        window.cancelAnimationFrame(dragRafIdRef.current);
+      }
+    };
+  }, []);
 
   // Obstacle editing actions
   const handlePlaceObstacleAt = useCallback(
     (groundPoint: { readonly x: number; readonly z: number }): void => {
       if (!editable || activeTool === 'select') return;
+      const prevWorld = worldFileRef.current;
+      const prevSelectedId = selectedObstacleIdRef.current;
       const point = placementCoordsTouched
         ? { x: placementX, z: placementZ }
         : { x: groundPoint.x, z: groundPoint.z };
       const yawDeg = placementYawDeg;
-      const localId = `${activeTool}-${nextObstacleCounterRef.current++}`;
+      const localId = generateUniqueObstacleId(activeTool, prevWorld.obstacles);
       const newObstacle: Obstacle = {
         id: localId,
         type: activeTool,
@@ -340,34 +597,45 @@ export function WorldRoot({ api = window.rcsim, initialWorld }: WorldRootProps =
         yawDeg,
       };
 
+      const nextWorld: WorldFile = {
+        ...prevWorld,
+        obstacles: [...prevWorld.obstacles, newObstacle],
+      };
+      worldFileRef.current = nextWorld;
       setPlacementX(point.x);
       setPlacementZ(point.z);
-      setWorldFile((prev) => ({
-        ...prev,
-        obstacles: [...prev.obstacles, newObstacle],
-      }));
+      setWorldFile(nextWorld);
       setSelectedObstacleId(localId);
 
       if (isPaused) {
-        void api.worldEdit
+        void resolvedApi.worldEdit
           .addObstacle(newObstacle)
           .then((assignedId) => {
             if (assignedId && assignedId !== localId) {
-              setWorldFile((prev) => ({
-                ...prev,
-                obstacles: prev.obstacles.map((o) =>
+              const updated: WorldFile = {
+                ...worldFileRef.current,
+                obstacles: worldFileRef.current.obstacles.map((o) =>
                   o.id === localId ? { ...o, id: assignedId } : o,
                 ),
-              }));
+              };
+              worldFileRef.current = updated;
+              setWorldFile(updated);
               setSelectedObstacleId(assignedId);
             }
           })
-          .catch(reportError);
+          .catch((err) => {
+            const parsed = parseIpcError(err);
+            if (parsed.code !== 'not-implemented') {
+              worldFileRef.current = prevWorld;
+              setWorldFile(prevWorld);
+              setSelectedObstacleId(prevSelectedId);
+              reportError(err);
+            }
+          });
       }
     },
     [
       activeTool,
-      api.worldEdit,
       editable,
       isPaused,
       placementCoordsTouched,
@@ -375,64 +643,103 @@ export function WorldRoot({ api = window.rcsim, initialWorld }: WorldRootProps =
       placementYawDeg,
       placementZ,
       reportError,
+      resolvedApi.worldEdit,
     ],
   );
 
   const handleMoveObstacleTo = useCallback(
-    (id: string, point: { readonly x: number; readonly z: number }): void => {
+    (
+      id: string,
+      point: { readonly x: number; readonly z: number },
+      options?: { readonly dragging?: boolean },
+    ): void => {
       if (!editable) return;
-      let currentYaw = 0;
-      setWorldFile((prev) => ({
-        ...prev,
-        obstacles: prev.obstacles.map((o) => {
-          if (o.id === id) {
-            currentYaw = o.yawDeg;
-            return { ...o, positionM: { x: point.x, z: point.z } };
-          }
-          return o;
-        }),
-      }));
+      const prevWorld = worldFileRef.current;
+      const existing = prevWorld.obstacles.find((o) => o.id === id);
+      if (!existing) return;
+
+      if (options?.dragging && !dragOriginalWorldRef.current.has(id)) {
+        dragOriginalWorldRef.current.set(id, prevWorld);
+      }
+      const rollbackWorld = dragOriginalWorldRef.current.get(id) ?? prevWorld;
+      const currentYaw = existing.yawDeg;
+      const nextPosition = { x: point.x, z: point.z };
+      const nextWorld: WorldFile = {
+        ...prevWorld,
+        obstacles: prevWorld.obstacles.map((o) =>
+          o.id === id ? { ...o, positionM: nextPosition } : o,
+        ),
+      };
+      worldFileRef.current = nextWorld;
+      setWorldFile(nextWorld);
+
       if (isPaused) {
-        void api.worldEdit.moveObstacle(id, point, currentYaw).catch(reportError);
+        if (options?.dragging) {
+          schedulePausedDragIpc(id, nextPosition, currentYaw, rollbackWorld);
+        } else {
+          dispatchPausedMoveIpc(id, nextPosition, currentYaw, rollbackWorld);
+        }
       }
     },
-    [api.worldEdit, editable, isPaused, reportError],
+    [dispatchPausedMoveIpc, editable, isPaused, schedulePausedDragIpc],
   );
 
   const handleRotateObstacleTo = useCallback(
-    (id: string, yawDeg: number): void => {
+    (id: string, yawDeg: number, options?: { readonly dragging?: boolean }): void => {
       if (!editable) return;
-      let currentPos = { x: 0, z: 0 };
-      setWorldFile((prev) => ({
-        ...prev,
-        obstacles: prev.obstacles.map((o) => {
-          if (o.id === id) {
-            currentPos = o.positionM;
-            return { ...o, yawDeg };
-          }
-          return o;
-        }),
-      }));
+      const prevWorld = worldFileRef.current;
+      const existing = prevWorld.obstacles.find((o) => o.id === id);
+      if (!existing) return;
+
+      if (options?.dragging && !dragOriginalWorldRef.current.has(id)) {
+        dragOriginalWorldRef.current.set(id, prevWorld);
+      }
+      const rollbackWorld = dragOriginalWorldRef.current.get(id) ?? prevWorld;
+      const currentPos = existing.positionM;
+      const nextWorld: WorldFile = {
+        ...prevWorld,
+        obstacles: prevWorld.obstacles.map((o) => (o.id === id ? { ...o, yawDeg } : o)),
+      };
+      worldFileRef.current = nextWorld;
+      setWorldFile(nextWorld);
+
       if (isPaused) {
-        void api.worldEdit.moveObstacle(id, currentPos, yawDeg).catch(reportError);
+        if (options?.dragging) {
+          schedulePausedDragIpc(id, currentPos, yawDeg, rollbackWorld);
+        } else {
+          dispatchPausedMoveIpc(id, currentPos, yawDeg, rollbackWorld);
+        }
       }
     },
-    [api.worldEdit, editable, isPaused, reportError],
+    [dispatchPausedMoveIpc, editable, isPaused, schedulePausedDragIpc],
   );
 
   const handleDeleteObstacle = useCallback(
     (id: string): void => {
       if (!editable) return;
-      setWorldFile((prev) => ({
-        ...prev,
-        obstacles: prev.obstacles.filter((o) => o.id !== id),
-      }));
+      const prevWorld = worldFileRef.current;
+      const prevSelectedId = selectedObstacleIdRef.current;
+      const nextWorld: WorldFile = {
+        ...prevWorld,
+        obstacles: prevWorld.obstacles.filter((o) => o.id !== id),
+      };
+      worldFileRef.current = nextWorld;
+      setWorldFile(nextWorld);
       setSelectedObstacleId((prev) => (prev === id ? null : prev));
+
       if (isPaused) {
-        void api.worldEdit.removeObstacle(id).catch(reportError);
+        void resolvedApi.worldEdit.removeObstacle(id).catch((err) => {
+          const parsed = parseIpcError(err);
+          if (parsed.code !== 'not-implemented') {
+            worldFileRef.current = prevWorld;
+            setWorldFile(prevWorld);
+            setSelectedObstacleId(prevSelectedId);
+            reportError(err);
+          }
+        });
       }
     },
-    [api.worldEdit, editable, isPaused, reportError],
+    [editable, isPaused, reportError, resolvedApi.worldEdit],
   );
 
   // Keyboard listener for manual driving (WASD/arrows), E-stop (Space), and obstacle editing keys
@@ -440,6 +747,8 @@ export function WorldRoot({ api = window.rcsim, initialWorld }: WorldRootProps =
     if (!isWorldActive) return;
     const onKeyDown = (event: KeyboardEvent): void => {
       if (isEditableEventTarget(event.target)) return;
+      // Ignore auto-repeated keydown events and any modifier combinations (Cmd/Ctrl/Alt + key)
+      if (event.repeat || event.ctrlKey || event.metaKey || event.altKey) return;
 
       if (isEstopKey(event)) {
         event.preventDefault();
@@ -448,16 +757,16 @@ export function WorldRoot({ api = window.rcsim, initialWorld }: WorldRootProps =
         setEstopLatched(true);
         setLastDriveCommand({ throttle: 0, steer: 0 });
         void (async () => {
-          await ensureControlConnected();
-          await api.control.estop().catch(() => {});
-          await api.control.releaseDrive().catch(() => {});
+          await ensureControlConnected({ force: true });
+          await resolvedApi.control.estop().catch(() => {});
+          await resolvedApi.control.releaseDrive().catch(() => {});
         })();
         return;
       }
 
       // Obstacle rotation & deletion shortcuts when an obstacle is selected and editable
       if (editable && selectedObstacleId) {
-        const selectedObs = worldFile.obstacles.find((o) => o.id === selectedObstacleId);
+        const selectedObs = worldFileRef.current.obstacles.find((o) => o.id === selectedObstacleId);
         if (selectedObs) {
           if (event.key === 'Delete' || event.key === 'Backspace') {
             event.preventDefault();
@@ -507,9 +816,7 @@ export function WorldRoot({ api = window.rcsim, initialWorld }: WorldRootProps =
         if (sampled.active) {
           sendDriveCommand(sampled.command);
         } else if (driveActiveRef.current) {
-          driveActiveRef.current = false;
-          sendDriveCommand({ throttle: 0, steer: 0 });
-          void api.control.releaseDrive().catch(() => {});
+          releaseActiveDrive(true);
         }
       }
     };
@@ -521,7 +828,6 @@ export function WorldRoot({ api = window.rcsim, initialWorld }: WorldRootProps =
       window.removeEventListener('keyup', onKeyUp);
     };
   }, [
-    api.control,
     driveMode,
     editable,
     ensureControlConnected,
@@ -529,9 +835,10 @@ export function WorldRoot({ api = window.rcsim, initialWorld }: WorldRootProps =
     handleDeleteObstacle,
     handleRotateObstacleTo,
     isWorldActive,
+    releaseActiveDrive,
+    resolvedApi.control,
     selectedObstacleId,
     sendDriveCommand,
-    worldFile.obstacles,
   ]);
 
   // 50 Hz manual driving interval for held keyboard keys and the Gamepad API
@@ -543,21 +850,29 @@ export function WorldRoot({ api = window.rcsim, initialWorld }: WorldRootProps =
         driveActiveRef.current = true;
         sendDriveCommand(sampled.command);
       } else if (driveActiveRef.current) {
-        driveActiveRef.current = false;
-        sendDriveCommand({ throttle: 0, steer: 0 });
-        void api.control.releaseDrive().catch(() => {});
+        releaseActiveDrive(true);
       }
     }, DRIVE_INTERVAL_MS);
     return () => window.clearInterval(timer);
-  }, [api.control, driveMode, estopLatched, isWorldActive, sendDriveCommand]);
+  }, [driveMode, estopLatched, isWorldActive, releaseActiveDrive, sendDriveCommand]);
 
   const handleToggleMode = async (nextMode: Mode): Promise<void> => {
-    setDriveMode(nextMode);
-    setEstopLatched(false);
+    const wasDriving = driveActiveRef.current || pressedKeysRef.current.size > 0;
     pressedKeysRef.current.clear();
     driveActiveRef.current = false;
-    await ensureControlConnected();
-    await api.control.setMode(nextMode).catch(reportError);
+    setLastDriveCommand((prev) =>
+      prev.throttle === 0 && prev.steer === 0 ? prev : { throttle: 0, steer: 0 },
+    );
+    setDriveMode(nextMode);
+    setEstopLatched(false);
+    await ensureControlConnected({ force: true });
+    if (driveMode === 'manual' && nextMode !== 'manual') {
+      if (wasDriving) {
+        await resolvedApi.control.drive({ throttle: 0, steer: 0 }).catch(() => {});
+      }
+      await resolvedApi.control.releaseDrive().catch(() => {});
+    }
+    await resolvedApi.control.setMode(nextMode).catch(reportError);
   };
 
   const handleEstop = async (): Promise<void> => {
@@ -565,22 +880,25 @@ export function WorldRoot({ api = window.rcsim, initialWorld }: WorldRootProps =
     driveActiveRef.current = false;
     setEstopLatched(true);
     setLastDriveCommand({ throttle: 0, steer: 0 });
-    await ensureControlConnected();
-    await api.control.estop().catch(reportError);
-    await api.control.releaseDrive().catch(() => {});
+    await ensureControlConnected({ force: true });
+    await resolvedApi.control.estop().catch(reportError);
+    await resolvedApi.control.releaseDrive().catch(() => {});
   };
 
   const handleRunOrPause = async (): Promise<void> => {
     setErrorMessage('');
     try {
       if (!runInfo || runInfo.state === 'ended') {
-        const nextWorld: WorldFile = { ...worldFile, seed };
-        const started = await api.run.start({ world: nextWorld, seed, speed });
+        const nextWorld: WorldFile = { ...worldFileRef.current, seed };
+        const started = await resolvedApi.run.start({ world: nextWorld, seed, speed });
+        runInfoRef.current = started;
         setRunInfo(started);
+        lastConnectFailAtMsRef.current = -Infinity;
+        void ensureControlConnected({ force: true });
       } else if (runInfo.state === 'running') {
-        await api.run.pause();
+        await resolvedApi.run.pause();
       } else if (runInfo.state === 'paused') {
-        await api.run.resume();
+        await resolvedApi.run.resume();
       }
     } catch (err) {
       setErrorMessage(parseIpcError(err).message);
@@ -590,7 +908,7 @@ export function WorldRoot({ api = window.rcsim, initialWorld }: WorldRootProps =
   const handleStopRun = async (): Promise<void> => {
     setErrorMessage('');
     try {
-      await api.run.stop();
+      await resolvedApi.run.stop();
     } catch (err) {
       setErrorMessage(parseIpcError(err).message);
     }
@@ -599,7 +917,7 @@ export function WorldRoot({ api = window.rcsim, initialWorld }: WorldRootProps =
   const handleStepRun = async (): Promise<void> => {
     setErrorMessage('');
     try {
-      await api.run.step(1);
+      await resolvedApi.run.step(1);
     } catch (err) {
       setErrorMessage(parseIpcError(err).message);
     }
@@ -609,7 +927,7 @@ export function WorldRoot({ api = window.rcsim, initialWorld }: WorldRootProps =
     setSpeed(nextSpeed);
     if (runInfo && runInfo.state !== 'ended') {
       try {
-        await api.run.setSpeed(nextSpeed);
+        await resolvedApi.run.setSpeed(nextSpeed);
       } catch (err) {
         setErrorMessage(parseIpcError(err).message);
       }
@@ -619,33 +937,40 @@ export function WorldRoot({ api = window.rcsim, initialWorld }: WorldRootProps =
   const handleSaveLayout = async (): Promise<void> => {
     setErrorMessage('');
     setStatusMessage('');
-    const targetPath = normalizeLayoutPath(layoutPath);
-    setLayoutPath(targetPath);
     try {
-      let payload: WorldFile = { ...worldFile, seed };
+      const targetPath = normalizeLayoutPath(layoutPath);
+      setLayoutPath(targetPath);
+      let payload: WorldFile = { ...worldFileRef.current, seed };
       if (isPaused) {
         try {
-          const live = await api.worldEdit.currentLayout();
+          const live = await resolvedApi.worldEdit.currentLayout();
           payload = {
             ...live,
             seed,
-            obstacles: worldFile.obstacles.length > 0 ? worldFile.obstacles : live.obstacles,
+            obstacles:
+              worldFileRef.current.obstacles.length > 0
+                ? worldFileRef.current.obstacles
+                : live.obstacles,
           };
         } catch {
           // Use local worldFile when no active live layout in main
         }
       }
+      const validated = World.parse(payload);
       try {
-        await api.worldEdit.save(targetPath, payload);
+        await resolvedApi.worldEdit.save(targetPath, validated);
       } catch (saveErr) {
         if (parseIpcError(saveErr).code === 'not-implemented') {
-          await api.project.writeFile(targetPath, `${JSON.stringify(payload, null, 2)}\n`);
+          await resolvedApi.project.writeFile(
+            targetPath,
+            `${JSON.stringify(validated, null, 2)}\n`,
+          );
         } else {
           throw saveErr;
         }
       }
       setStatusMessage(`Saved ${targetPath}`);
-      const layouts = await api.worldEdit
+      const layouts = await resolvedApi.worldEdit
         .listLayouts()
         .catch(() =>
           layoutPaths.includes(targetPath) ? layoutPaths : [...layoutPaths, targetPath],
@@ -659,19 +984,20 @@ export function WorldRoot({ api = window.rcsim, initialWorld }: WorldRootProps =
   const handleLoadLayout = async (pathToLoad = layoutPath): Promise<void> => {
     setErrorMessage('');
     setStatusMessage('');
-    const targetPath = normalizeLayoutPath(pathToLoad);
     try {
+      const targetPath = normalizeLayoutPath(pathToLoad);
       let loaded: WorldFile;
       try {
-        loaded = await api.worldEdit.load(targetPath);
+        loaded = World.parse(await resolvedApi.worldEdit.load(targetPath));
       } catch (loadErr) {
         if (parseIpcError(loadErr).code === 'not-implemented') {
-          const raw = await api.project.readFile(targetPath);
+          const raw = await resolvedApi.project.readFile(targetPath);
           loaded = World.parse(JSON.parse(raw));
         } else {
           throw loadErr;
         }
       }
+      worldFileRef.current = loaded;
       setWorldFile(loaded);
       setSeed(loaded.seed);
       setLayoutPath(targetPath);
@@ -684,13 +1010,16 @@ export function WorldRoot({ api = window.rcsim, initialWorld }: WorldRootProps =
   };
 
   const selectedObstacle = worldFile.obstacles.find((o) => o.id === selectedObstacleId) ?? null;
+  const dockTabs = useMemo(() => createWorldDockTabs(resolvedApi), [resolvedApi]);
 
-  const simTimeSeconds = (effectiveSnapshot.timeUs / 1_000_000).toFixed(3);
-  const dockTabs = useMemo(() => createWorldDockTabs(api), [api]);
+  useEffect(() => {
+    if (latestSnapshotRef.current) {
+      updateReadoutsDom(latestSnapshotRef.current);
+    }
+  });
 
   return (
     <section
-      ref={rootRef}
       className="world-environment"
       aria-label="3D World environment"
       style={{
@@ -782,14 +1111,18 @@ export function WorldRoot({ api = window.rcsim, initialWorld }: WorldRootProps =
                   ? Math.max(0, Math.min(0xffff_ffff, parsed))
                   : 0;
                 setSeed(nextSeed);
-                setWorldFile((prev) => ({ ...prev, seed: nextSeed }));
+                setWorldFile((prev) => {
+                  const next = { ...prev, seed: nextSeed };
+                  worldFileRef.current = next;
+                  return next;
+                });
               }}
               style={{ width: 72, padding: '4px 6px' }}
             />
           </label>
         </div>
 
-        {/* Sim readouts: time, laps, collisions */}
+        {/* Sim readouts: time, laps, collisions (updated imperatively on snapshot arrival) */}
         <div
           data-testid="world-sim-readouts"
           style={{
@@ -803,15 +1136,14 @@ export function WorldRoot({ api = window.rcsim, initialWorld }: WorldRootProps =
             borderRadius: 4,
           }}
         >
-          <span data-testid="sim-time-display">
-            <strong>Sim time:</strong> {simTimeSeconds} s
+          <span ref={simTimeRef} data-testid="sim-time-display">
+            <strong>Sim time:</strong> 0.000 s
           </span>
-          <span data-testid="lap-counter">
-            <strong>Laps:</strong> {effectiveSnapshot.laps.count}
+          <span ref={lapCounterRef} data-testid="lap-counter">
+            <strong>Laps:</strong> 0
           </span>
-          <span data-testid="collision-count">
-            <strong>Collisions:</strong> {effectiveSnapshot.collisions.count}
-            {effectiveSnapshot.collisions.last ? ` (${effectiveSnapshot.collisions.last})` : ''}
+          <span ref={collisionCountRef} data-testid="collision-count">
+            <strong>Collisions:</strong> 0
           </span>
         </div>
 
@@ -898,7 +1230,11 @@ export function WorldRoot({ api = window.rcsim, initialWorld }: WorldRootProps =
             value={worldFile.trackId}
             onChange={(e) => {
               const nextTrackId = e.target.value;
-              setWorldFile((prev) => ({ ...prev, trackId: nextTrackId }));
+              setWorldFile((prev) => {
+                const next = { ...prev, trackId: nextTrackId };
+                worldFileRef.current = next;
+                return next;
+              });
               void loadTrackById(nextTrackId);
             }}
           >
@@ -1228,32 +1564,12 @@ export function WorldRoot({ api = window.rcsim, initialWorld }: WorldRootProps =
         onPlaceObstacleAt={handlePlaceObstacleAt}
         onMoveObstacleTo={handleMoveObstacleTo}
         onRotateObstacleTo={handleRotateObstacleTo}
+        onObstacleDragEnd={handleObstacleDragEnd}
       />
 
-      {/* Shared bottom dock: portal Network Console into App's BottomPanel if present, else render BottomPanel when standalone */}
-      {outerDockTargets ? (
-        <>
-          {createPortal(
-            <button
-              type="button"
-              role="tab"
-              data-testid="bottom-tab-network-console"
-              aria-selected={panelOpen && panel === 'network'}
-              onClick={() => showPanel('network')}
-            >
-              Network Console
-            </button>,
-            outerDockTargets.tablist,
-          )}
-          {createPortal(
-            <div hidden={panel !== 'network'} className="panel-page">
-              <NetworkConsole api={api} visible={panelOpen && panel === 'network'} />
-            </div>,
-            outerDockTargets.content,
-          )}
-        </>
-      ) : !isHostedInApp ? (
-        <BottomPanel api={api} projectDir="/project" jump={() => {}} tabs={dockTabs} />
+      {/* Standalone BottomPanel for unit/component tests; App.tsx passes createWorldDockTabs(api) to its shared BottomPanel */}
+      {shouldRenderDock ? (
+        <BottomPanel api={resolvedApi} projectDir="/project" jump={() => {}} tabs={dockTabs} />
       ) : null}
     </section>
   );

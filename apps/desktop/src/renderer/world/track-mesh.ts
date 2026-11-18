@@ -3,6 +3,7 @@ import * as THREE from 'three';
 
 const WALL_THICKNESS_M = 0.04;
 
+// TODO(P2-01): remove when worldEdit is wired
 /**
  * Built-in track fallbacks matching `packages/sim-core/assets/tracks/*.json`.
  * Used only when `window.rcsim.worldEdit.loadTrack` rejects with `not-implemented`
@@ -43,6 +44,7 @@ export const BUILTIN_OVAL_TRACK: Track = Track.parse({
   },
 });
 
+// TODO(P2-01): remove when worldEdit is wired
 export const BUILTIN_TECHNICAL_TRACK: Track = Track.parse({
   $schema: '../../../schema/json-schema/track.schema.json',
   schemaVersion: 1,
@@ -88,6 +90,7 @@ export const BUILTIN_TECHNICAL_TRACK: Track = Track.parse({
   },
 });
 
+// TODO(P2-01): remove when worldEdit is wired
 export const BUILTIN_TRACKS: Readonly<Record<string, Track>> = {
   oval: BUILTIN_OVAL_TRACK,
   technical: BUILTIN_TECHNICAL_TRACK,
@@ -213,8 +216,9 @@ export interface GeneratedTrackMeshData {
   };
 }
 
-/** Generates the 3D track surface ribbon, left/right walls, and start/finish line from Track data. */
-export function generateTrackMeshData(track: Track, stepM = 0.12): GeneratedTrackMeshData {
+const trackMeshCache = new Map<string, GeneratedTrackMeshData>();
+
+function computeTrackMeshData(track: Track, stepM = 0.12): GeneratedTrackMeshData {
   const sampled = sampleTrackCentreline(track, stepM);
   const halfWidth = track.widthM / 2;
   const leftEdge = offsetTrackLoop(sampled.points, halfWidth);
@@ -334,6 +338,19 @@ export function generateTrackMeshData(track: Track, stepM = 0.12): GeneratedTrac
       spanM,
     },
   };
+}
+
+/**
+ * Generates (and memoizes per `track.id` and `stepM`) the 3D track surface ribbon,
+ * left/right walls, and start/finish line from Track data.
+ */
+export function generateTrackMeshData(track: Track, stepM = 0.12): GeneratedTrackMeshData {
+  const key = `${track.id}:${stepM}:${track.widthM}:${track.wallHeightM}:${track.centreline.pointsM.length}`;
+  const cached = trackMeshCache.get(key);
+  if (cached) return cached;
+  const generated = computeTrackMeshData(track, stepM);
+  trackMeshCache.set(key, generated);
+  return generated;
 }
 
 /** Builds a Three.js BufferGeometry for the track surface ribbon. */

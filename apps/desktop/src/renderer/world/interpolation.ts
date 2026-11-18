@@ -1,4 +1,12 @@
-import type { Pose, Quat, StateSnapshot, Vec3, WheelState } from '@rcsim/sim-core/api';
+import type {
+  ObstacleState,
+  Pose,
+  Quat,
+  SensorBeam,
+  StateSnapshot,
+  Vec3,
+  WheelState,
+} from '@rcsim/sim-core/api';
 
 const clamp01 = (t: number): number => Math.min(1, Math.max(0, t));
 
@@ -8,6 +16,11 @@ export function lerpNumber(a: number, b: number, t: number): number {
 
 export function lerpVec3(a: Vec3, b: Vec3, t: number): Vec3 {
   return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+}
+
+export function normalizeVec3(v: Vec3): Vec3 {
+  const len = Math.hypot(v[0], v[1], v[2]) || 1;
+  return [v[0] / len, v[1] / len, v[2] / len];
 }
 
 /** Spherical linear interpolation between two unit quaternions (shortest path). */
@@ -67,9 +80,29 @@ function interpolateWheel(a: WheelState, b: WheelState, t: number): WheelState {
   };
 }
 
+function interpolateBeam(a: SensorBeam, b: SensorBeam, t: number): SensorBeam {
+  const origin = lerpVec3(a.origin, b.origin, t);
+  const direction = normalizeVec3(lerpVec3(a.direction, b.direction, t));
+  const maxRangeM = lerpNumber(a.maxRangeM, b.maxRangeM, t);
+  let hitM: number | null;
+  if (a.hitM !== null && b.hitM !== null) {
+    hitM = lerpNumber(a.hitM, b.hitM, t);
+  } else {
+    hitM = b.hitM;
+  }
+  return {
+    origin,
+    direction,
+    maxRangeM,
+    hitM,
+  };
+}
+
 /**
  * Interpolates between two `StateSnapshot`s (`alpha` in `[0, 1]`).
  * At `alpha = 0` returns `prev`'s continuous pose/state; at `alpha = 1` returns `curr`.
+ * Interpolates car pose, wheels, sensor beams, and obstacle poses with the same `alpha`
+ * so beams and obstacles never lead or lag the car.
  */
 export function interpolateSnapshots(
   prev: StateSnapshot,
@@ -83,6 +116,29 @@ export function interpolateSnapshots(
   const wheels: WheelState[] = curr.car.wheels.map((currWheel, i) => {
     const prevWheel = prev.car.wheels[i];
     return prevWheel ? interpolateWheel(prevWheel, currWheel, t) : currWheel;
+  });
+
+  const prevSensorsById = new Map(prev.sensors.map((s) => [s.instanceId, s]));
+  const sensors = curr.sensors.map((currSensor) => {
+    const prevSensor = prevSensorsById.get(currSensor.instanceId);
+    if (!prevSensor) return currSensor;
+    return {
+      instanceId: currSensor.instanceId,
+      beams: currSensor.beams.map((currBeam, i) => {
+        const prevBeam = prevSensor.beams[i];
+        return prevBeam ? interpolateBeam(prevBeam, currBeam, t) : currBeam;
+      }),
+    };
+  });
+
+  const prevObstaclesById = new Map(prev.obstacles.map((o) => [o.id, o]));
+  const obstacles: ObstacleState[] = curr.obstacles.map((currObs) => {
+    const prevObs = prevObstaclesById.get(currObs.id);
+    if (!prevObs) return currObs;
+    return {
+      ...currObs,
+      pose: interpolatePose(prevObs.pose, currObs.pose, t),
+    };
   });
 
   return {
@@ -103,8 +159,8 @@ export function interpolateSnapshots(
       },
       wheels,
     },
-    sensors: curr.sensors,
-    obstacles: curr.obstacles,
+    sensors,
+    obstacles,
     laps: curr.laps,
     collisions: curr.collisions,
   };

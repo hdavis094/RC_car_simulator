@@ -9,11 +9,7 @@ import {
   type WheelState,
 } from '@rcsim/sim-core/api';
 import * as THREE from 'three';
-import {
-  buildTrackSurfaceGeometry,
-  generateTrackMeshData,
-  type GeneratedTrackMeshData,
-} from './track-mesh.ts';
+import { generateTrackMeshData, type GeneratedTrackMeshData } from './track-mesh.ts';
 
 export type CameraMode = 'follow' | 'orbit' | 'top-down';
 
@@ -178,28 +174,7 @@ export function defaultSnapshotForWorld(world: WorldFile, track: Track): StateSn
   };
 }
 
-/**
- * Converts a `StateSnapshot` and `Track` into `WorldSceneData` for rendering
- * and scene inspection.
- */
-export function buildWorldSceneData(
-  snapshot: StateSnapshot,
-  track: Track,
-  selectedObstacleId: string | null = null,
-): WorldSceneData {
-  const trackMesh = generateTrackMeshData(track);
-  const wheels: RenderedWheelData[] = WHEEL_ORDER.map((name, i) => {
-    const w = snapshot.car.wheels[i];
-    return {
-      name,
-      position: w?.position ?? snapshot.car.pose.position,
-      rotation: w?.rotation ?? snapshot.car.pose.rotation,
-      steerRad: w?.steerRad ?? 0,
-      spinRad: w?.spinRad ?? 0,
-      inContact: w?.inContact ?? false,
-    };
-  });
-
+export function extractRenderedBeams(snapshot: StateSnapshot): RenderedBeamData[] {
   const sensorBeams: RenderedBeamData[] = [];
   for (const sensor of snapshot.sensors) {
     sensor.beams.forEach((beam, beamIndex) => {
@@ -223,6 +198,31 @@ export function buildWorldSceneData(
       });
     });
   }
+  return sensorBeams;
+}
+
+/**
+ * Converts a `StateSnapshot` and `Track` into `WorldSceneData` for rendering.
+ */
+export function buildWorldSceneData(
+  snapshot: StateSnapshot,
+  track: Track,
+  selectedObstacleId: string | null = null,
+): WorldSceneData {
+  const trackMesh = generateTrackMeshData(track);
+  const wheels: RenderedWheelData[] = WHEEL_ORDER.map((name, i) => {
+    const w = snapshot.car.wheels[i];
+    return {
+      name,
+      position: w?.position ?? snapshot.car.pose.position,
+      rotation: w?.rotation ?? snapshot.car.pose.rotation,
+      steerRad: w?.steerRad ?? 0,
+      spinRad: w?.spinRad ?? 0,
+      inContact: w?.inContact ?? false,
+    };
+  });
+
+  const sensorBeams = extractRenderedBeams(snapshot);
 
   const obstacles: RenderedObstacleData[] = snapshot.obstacles.map((obs) => ({
     id: obs.id,
@@ -293,10 +293,25 @@ export function computeCameraTransform(
   };
 }
 
+function buildPerspectiveCamera(
+  aspect: number,
+  cameraTransform: CameraTransform,
+  fovDeg = 48,
+): THREE.PerspectiveCamera {
+  const safeAspect = Number.isFinite(aspect) && aspect > 0 ? aspect : 16 / 9;
+  const camera = new THREE.PerspectiveCamera(fovDeg, safeAspect, 0.05, 500);
+  camera.position.set(...cameraTransform.position);
+  camera.up.set(...cameraTransform.up);
+  camera.lookAt(...cameraTransform.target);
+  camera.updateProjectionMatrix();
+  camera.updateMatrixWorld(true);
+  return camera;
+}
+
 /**
  * Raycasts a 2D viewport screen coordinate `(clientX, clientY)` onto the `Y = 0` ground plane
  * using Three.js math (`THREE.PerspectiveCamera` + `THREE.Raycaster` + `THREE.Plane`).
- * Works identically in WebGL and headless jsdom tests.
+ * If a live Three.js `camera` is provided, projects directly through that camera.
  */
 export function screenToGroundPoint(
   clientX: number,
@@ -309,18 +324,23 @@ export function screenToGroundPoint(
   },
   cameraTransform: CameraTransform,
   fovDeg = 48,
+  liveCamera?: THREE.Camera | null,
 ): { readonly x: number; readonly z: number } | null {
   const width = rect.width > 0 ? rect.width : 800;
   const height = rect.height > 0 ? rect.height : 600;
   const ndcX = ((clientX - rect.left) / width) * 2 - 1;
   const ndcY = -((clientY - rect.top) / height) * 2 + 1;
 
-  const camera = new THREE.PerspectiveCamera(fovDeg, width / height, 0.05, 500);
-  camera.position.set(...cameraTransform.position);
-  camera.up.set(...cameraTransform.up);
-  camera.lookAt(...cameraTransform.target);
-  camera.updateProjectionMatrix();
-  camera.updateMatrixWorld(true);
+  const camera = liveCamera ?? buildPerspectiveCamera(width / height, cameraTransform, fovDeg);
+  if (liveCamera && 'aspect' in liveCamera) {
+    const persp = liveCamera as THREE.PerspectiveCamera;
+    const expectedAspect = width / height;
+    if (Math.abs(persp.aspect - expectedAspect) > 1e-4) {
+      persp.aspect = expectedAspect;
+      persp.updateProjectionMatrix();
+    }
+    persp.updateMatrixWorld(true);
+  }
 
   const raycaster = new THREE.Raycaster();
   raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
@@ -339,162 +359,29 @@ export function screenToGroundPoint(
 /**
  * Projects a ground point `(x, z)` (`y = 0`) to normalized `[0..1, 0..1]` viewport coordinates
  * for interactive overlay markers and testing.
+ * If a live Three.js `camera` is provided, projects directly through that camera.
  */
 export function groundPointToViewportUV(
   point: { readonly x: number; readonly z: number },
   aspect: number,
   cameraTransform: CameraTransform,
   fovDeg = 48,
+  liveCamera?: THREE.Camera | null,
 ): { readonly u: number; readonly v: number } {
-  const camera = new THREE.PerspectiveCamera(fovDeg, aspect > 0 ? aspect : 4 / 3, 0.05, 500);
-  camera.position.set(...cameraTransform.position);
-  camera.up.set(...cameraTransform.up);
-  camera.lookAt(...cameraTransform.target);
-  camera.updateProjectionMatrix();
-  camera.updateMatrixWorld(true);
+  const safeAspect = Number.isFinite(aspect) && aspect > 0 ? aspect : 16 / 9;
+  const camera = liveCamera ?? buildPerspectiveCamera(safeAspect, cameraTransform, fovDeg);
+  if (liveCamera && 'aspect' in liveCamera) {
+    const persp = liveCamera as THREE.PerspectiveCamera;
+    if (Math.abs(persp.aspect - safeAspect) > 1e-4) {
+      persp.aspect = safeAspect;
+      persp.updateProjectionMatrix();
+    }
+    persp.updateMatrixWorld(true);
+  }
 
   const projected = new THREE.Vector3(point.x, 0, point.z).project(camera);
   return {
     u: (projected.x + 1) * 0.5,
     v: (-projected.y + 1) * 0.5,
   };
-}
-
-/**
- * Synchronizes a real Three.js `THREE.Group` scene graph with `WorldSceneData`.
- * Poses `car-body` and the four `wheel:<name>` nodes in world frame from `StateSnapshot`.
- */
-export function syncThreeSceneGraph(root: THREE.Group, sceneData: WorldSceneData): THREE.Group {
-  root.name = 'world-scene-root';
-
-  // 1. Track surface, walls, and start/finish line
-  let trackGroup = root.getObjectByName('track-group') as THREE.Group | undefined;
-  if (!trackGroup) {
-    trackGroup = new THREE.Group();
-    trackGroup.name = 'track-group';
-    root.add(trackGroup);
-  }
-  if (trackGroup.userData['trackId'] !== sceneData.trackMesh.trackId) {
-    trackGroup.clear();
-    trackGroup.userData['trackId'] = sceneData.trackMesh.trackId;
-
-    const surfaceMesh = new THREE.Mesh(
-      buildTrackSurfaceGeometry(sceneData.trackMesh),
-      new THREE.MeshStandardMaterial({ color: '#1e293b', side: THREE.DoubleSide }),
-    );
-    surfaceMesh.name = 'track-surface';
-    trackGroup.add(surfaceMesh);
-
-    const wallsGroup = new THREE.Group();
-    wallsGroup.name = 'track-walls';
-    sceneData.trackMesh.walls.forEach((wall, idx) => {
-      const wallMesh = new THREE.Mesh(
-        new THREE.BoxGeometry(wall.thicknessM, wall.heightM, wall.lengthM),
-        new THREE.MeshStandardMaterial({ color: '#94a3b8' }),
-      );
-      wallMesh.name = `track-wall:${wall.edge}:${idx}`;
-      wallMesh.position.set(...wall.position);
-      wallMesh.rotation.set(0, wall.yawRad, 0);
-      wallsGroup.add(wallMesh);
-    });
-    trackGroup.add(wallsGroup);
-
-    const sf = sceneData.trackMesh.startFinish;
-    const sfMesh = new THREE.Mesh(
-      new THREE.BoxGeometry(sf.widthM, 0.004, sf.depthM),
-      new THREE.MeshStandardMaterial({ color: '#f8fafc' }),
-    );
-    sfMesh.name = 'track-start-finish';
-    sfMesh.position.set(...sf.position);
-    sfMesh.rotation.set(0, sf.yawRad, 0);
-    trackGroup.add(sfMesh);
-  }
-
-  // 2. Car body posed from StateSnapshot
-  let carBody = root.getObjectByName('car-body') as THREE.Group | undefined;
-  if (!carBody) {
-    carBody = new THREE.Group();
-    carBody.name = 'car-body';
-    const { bodyWidthM, bodyHeightM, bodyLengthM, bodyClearanceM } = DEFAULT_CAR_GEOMETRY;
-    const boxHeight = Math.max(bodyHeightM - bodyClearanceM, 0.01);
-    const chassisMesh = new THREE.Mesh(
-      new THREE.BoxGeometry(bodyWidthM, boxHeight, bodyLengthM),
-      new THREE.MeshStandardMaterial({ color: '#10b981' }),
-    );
-    chassisMesh.name = 'car-chassis-mesh';
-    chassisMesh.position.set(0, bodyClearanceM + boxHeight / 2, 0);
-    carBody.add(chassisMesh);
-    root.add(carBody);
-  }
-  carBody.position.set(...sceneData.carPose.position);
-  carBody.quaternion.set(...sceneData.carPose.rotation);
-
-  // 3. Four wheels posed directly in world frame from StateSnapshot
-  for (const wheel of sceneData.wheels) {
-    const wheelNodeName = `wheel:${wheel.name}`;
-    let wheelGroup = root.getObjectByName(wheelNodeName) as THREE.Group | undefined;
-    if (!wheelGroup) {
-      wheelGroup = new THREE.Group();
-      wheelGroup.name = wheelNodeName;
-      const { wheelRadiusM, wheelWidthM } = DEFAULT_CAR_GEOMETRY;
-      const cylinder = new THREE.Mesh(
-        new THREE.CylinderGeometry(wheelRadiusM, wheelRadiusM, wheelWidthM, 18),
-        new THREE.MeshStandardMaterial({ color: '#0f172a' }),
-      );
-      cylinder.rotation.set(0, 0, Math.PI / 2);
-      wheelGroup.add(cylinder);
-      root.add(wheelGroup);
-    }
-    wheelGroup.position.set(...wheel.position);
-    wheelGroup.quaternion.set(...wheel.rotation);
-  }
-
-  // 4. Obstacles
-  let obstaclesGroup = root.getObjectByName('obstacles-group') as THREE.Group | undefined;
-  if (!obstaclesGroup) {
-    obstaclesGroup = new THREE.Group();
-    obstaclesGroup.name = 'obstacles-group';
-    root.add(obstaclesGroup);
-  }
-  obstaclesGroup.clear();
-  for (const obs of sceneData.obstacles) {
-    const obsNode = new THREE.Group();
-    obsNode.name = `obstacle:${obs.id}`;
-    obsNode.userData = { id: obs.id, type: obs.type, yawDeg: obs.yawDeg, selected: obs.selected };
-    obsNode.position.set(...obs.pose.position);
-    obsNode.quaternion.set(...obs.pose.rotation);
-    obstaclesGroup.add(obsNode);
-  }
-
-  // 5. Sensor beams and hit markers
-  let beamsGroup = root.getObjectByName('sensor-beams-group') as THREE.Group | undefined;
-  if (!beamsGroup) {
-    beamsGroup = new THREE.Group();
-    beamsGroup.name = 'sensor-beams-group';
-    root.add(beamsGroup);
-  }
-  beamsGroup.clear();
-  for (const beam of sceneData.sensorBeams) {
-    const points = [new THREE.Vector3(...beam.origin), new THREE.Vector3(...beam.endPoint)];
-    const lineGeom = new THREE.BufferGeometry().setFromPoints(points);
-    const line = new THREE.Line(
-      lineGeom,
-      new THREE.LineBasicMaterial({ color: beam.hitPoint ? '#f97316' : '#38bdf8' }),
-    );
-    line.name = `sensor-beam:${beam.key}`;
-    beamsGroup.add(line);
-
-    if (beam.hitPoint) {
-      const hitMarker = new THREE.Mesh(
-        new THREE.SphereGeometry(0.035, 12, 12),
-        new THREE.MeshBasicMaterial({ color: '#ef4444' }),
-      );
-      hitMarker.name = `beam-hit:${beam.key}`;
-      hitMarker.position.set(...beam.hitPoint);
-      beamsGroup.add(hitMarker);
-    }
-  }
-
-  root.updateMatrixWorld(true);
-  return root;
 }

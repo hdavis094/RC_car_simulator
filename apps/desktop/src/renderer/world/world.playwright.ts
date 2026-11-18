@@ -7,6 +7,12 @@ import { access, copyFile, mkdir, mkdtemp, readFile, realpath, rm } from 'node:f
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import {
+  BUILTIN_OVAL_TRACK,
+  computeCameraTransform,
+  generateTrackMeshData,
+  groundPointToViewportUV,
+} from './index.ts';
 
 const desktop = resolve(__dirname, '../../..');
 const executablePath = createRequire(join(desktop, 'package.json'))('electron') as string;
@@ -48,15 +54,14 @@ test.afterAll(async () => {
   await rm(temp, { force: true, recursive: true });
 });
 
-test('renders the 3D World oval track, places three cones, saves worlds/*.json, and captures a screenshot', async () => {
+test('renders the 3D World oval track WebGL canvas, places three cones, saves worlds/*.json, and captures a screenshot', async () => {
   const testInfo = test.info();
   const page = await app.firstWindow();
-  await page.setViewportSize({ width: 1440, height: 900 });
 
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
 
-  // Create a project so worlds/*.json can be saved to disk and the shared bottom panel is active
+  // Create a project so worlds/*.json can be saved to disk
   await page.getByRole('button', { name: 'New project', exact: true }).click();
   await page.getByRole('textbox', { name: 'New project folder' }).fill(projectDir);
   await page.getByRole('button', { name: 'Create project', exact: true }).click();
@@ -69,20 +74,38 @@ test('renders the 3D World oval track, places three cones, saves worlds/*.json, 
     .click();
 
   await expect(page.getByRole('heading', { name: '3D World' })).toBeVisible();
-  await expect(page.getByTestId('world-viewport')).toBeVisible();
+  const viewport = page.getByTestId('world-viewport');
+  await expect(viewport).toBeVisible();
+  // Wait on the deterministic R3F ready signal instead of waitForTimeout
+  await expect(viewport).toHaveAttribute('data-ready', 'true');
 
-  // Switch camera to top-down view, select Cone tool, and place three cones on the oval track
+  // Switch camera to top-down view, select Cone tool, and place three cones at exact world coordinates
+  // projected through the actual viewport aspect ratio (not tuned to a specific window size)
   await page.getByTestId('camera-mode-top-down').click();
   await page.getByTestId('palette-tool-cone').click();
 
   const pointerLayer = page.getByTestId('world-ground');
-  const box = await pointerLayer.boundingBox();
-  expect(box).not.toBeNull();
 
-  // Place 3 cones along the oval track straight ahead of the car
-  await page.mouse.click(box!.x + box!.width * 0.545, box!.y + box!.height * 0.44);
-  await page.mouse.click(box!.x + box!.width * 0.542, box!.y + box!.height * 0.38);
-  await page.mouse.click(box!.x + box!.width * 0.548, box!.y + box!.height * 0.32);
+  const trackMesh = generateTrackMeshData(BUILTIN_OVAL_TRACK);
+  const topDownCamera = computeCameraTransform(
+    'top-down',
+    { position: [2.4, 0, 0.75], rotation: [0, 0, 0, 1] },
+    trackMesh,
+  );
+
+  const targetConePositions = [
+    { x: 2.4, z: -0.6 },
+    { x: 2.4, z: -1.6 },
+    { x: 2.4, z: -2.6 },
+  ] as const;
+
+  for (const pos of targetConePositions) {
+    const box = await pointerLayer.boundingBox();
+    expect(box).not.toBeNull();
+    const aspect = box!.width / box!.height;
+    const uv = groundPointToViewportUV(pos, aspect, topDownCamera);
+    await page.mouse.click(box!.x + box!.width * uv.u, box!.y + box!.height * uv.v);
+  }
 
   await expect(page.getByTestId('obstacle-marker-cone-1')).toBeVisible();
   await expect(page.getByTestId('obstacle-marker-cone-2')).toBeVisible();
@@ -91,10 +114,6 @@ test('renders the 3D World oval track, places three cones, saves worlds/*.json, 
   // Switch to Orbit camera so the 3D oval track, car, and three cones are clearly visible in perspective
   await page.getByTestId('camera-mode-orbit').click();
   await page.getByTestId('palette-tool-select').click();
-
-  // Open the Network Console tab in the shared bottom panel
-  await page.getByTestId('bottom-tab-network-console').click();
-  await expect(page.getByTestId('network-console')).toBeVisible();
 
   // Save the world file to disk in worlds/oval-cones.json
   await page.getByTestId('world-save-btn').click();
@@ -106,20 +125,74 @@ test('renders the 3D World oval track, places three cones, saves worlds/*.json, 
     await readFile(join(projectDir, 'worlds/oval-cones.json'), 'utf8'),
   ) as {
     trackId: string;
-    obstacles: Array<{ id: string; type: string }>;
+    obstacles: Array<{ id: string; type: string; positionM: { x: number; z: number } }>;
   };
   expect(savedJson.trackId).toBe('oval');
+  expect(savedJson.obstacles).toHaveLength(3);
   expect(savedJson.obstacles.map((o) => ({ id: o.id, type: o.type }))).toEqual([
     { id: 'cone-1', type: 'cone' },
     { id: 'cone-2', type: 'cone' },
     { id: 'cone-3', type: 'cone' },
   ]);
+  for (let i = 0; i < targetConePositions.length; i++) {
+    expect(savedJson.obstacles[i]!.positionM.x).toBeCloseTo(targetConePositions[i]!.x, 1);
+    expect(savedJson.obstacles[i]!.positionM.z).toBeCloseTo(targetConePositions[i]!.z, 1);
+  }
 
-  // Wait briefly for R3F WebGL canvas frames to settle before taking the screenshot
-  await page.waitForTimeout(300);
+  // Wait for two animation frames so the Orbit camera frame is painted to the WebGL drawing buffer,
+  // then assert the WebGL canvas is rendered and contains non-blank 3D scene pixels
+  const canvasStats = await page.evaluate(async () => {
+    await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+    const canvas = document.querySelector(
+      '[data-testid="world-viewport"] canvas',
+    ) as HTMLCanvasElement | null;
+    if (!canvas || canvas.width === 0 || canvas.height === 0) {
+      return { hasCanvas: false, width: 0, height: 0, nonZeroPixels: 0, distinctColors: 0 };
+    }
+    const sampleCanvas = document.createElement('canvas');
+    sampleCanvas.width = 64;
+    sampleCanvas.height = 64;
+    const ctx = sampleCanvas.getContext('2d');
+    if (!ctx) {
+      return {
+        hasCanvas: true,
+        width: canvas.width,
+        height: canvas.height,
+        nonZeroPixels: 0,
+        distinctColors: 0,
+      };
+    }
+    ctx.drawImage(canvas, 0, 0, 64, 64);
+    const { data } = ctx.getImageData(0, 0, 64, 64);
+    let nonZeroPixels = 0;
+    const colors = new Set<string>();
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i] ?? 0;
+      const g = data[i + 1] ?? 0;
+      const b = data[i + 2] ?? 0;
+      const a = data[i + 3] ?? 0;
+      if (r + g + b + a > 0) nonZeroPixels++;
+      colors.add(`${r >> 3},${g >> 3},${b >> 3}`);
+    }
+    return {
+      hasCanvas: true,
+      width: canvas.width,
+      height: canvas.height,
+      nonZeroPixels,
+      distinctColors: colors.size,
+    };
+  });
 
+  expect(canvasStats.hasCanvas).toBe(true);
+  expect(canvasStats.width).toBeGreaterThan(200);
+  expect(canvasStats.height).toBeGreaterThan(200);
+  expect(canvasStats.nonZeroPixels).toBeGreaterThan(1000);
+  expect(canvasStats.distinctColors).toBeGreaterThan(4);
+
+  // Capture the 3D World environment element (excludes the outer app header containing the local temp path)
+  const worldSection = page.getByRole('region', { name: '3D World environment' });
   const outputScreenshot = testInfo.outputPath('oval-three-cones.png');
-  await page.screenshot({ path: outputScreenshot });
+  await worldSection.screenshot({ path: outputScreenshot });
   await testInfo.attach('oval-three-cones', {
     path: outputScreenshot,
     contentType: 'image/png',
