@@ -1,6 +1,6 @@
 # P1-C — hal: Arduino/ESP32 layer for desktop builds
 
-Status: in-progress
+Status: in-review
 Agent: Codex (gpt-6.1-sol)
 Branch: ws/p1-c
 Depends on: P0 (all)
@@ -48,15 +48,15 @@ The starter firmware and similar sketches compile unchanged with the system C++ 
 
 ## Acceptance
 
-- [ ] `pnpm verify` passes
-- [ ] every `sim-protocol/vectors/` file decodes and re-encodes byte-identically in C++
-- [ ] `delay(100)` in `loop()` advances sim time by exactly 100 ms per iteration (plus the configured call cost)
-- [ ] a busy-wait `while (millis() - t < 50) {}` terminates
-- [ ] three VL53L0X instances brought up with the XSHUT sequence get distinct addresses, and read distinct fake-sim readings
-- [ ] a `WiFiServer` on port 3333 is reachable on the reported host port from a test client
-- [ ] a sketch with a compile error yields the compiler's `file:line:col: error:` output and a non-zero exit from `build-sim`
-- [ ] hal and its tests build warning-free at `-Wall -Wextra` with both GCC and Clang
-- [ ] socket paths stay under 100 bytes, checked by a test
+- [x] `pnpm verify` passes
+- [x] every `sim-protocol/vectors/` file decodes and re-encodes byte-identically in C++
+- [x] `delay(100)` in `loop()` advances sim time by exactly 100 ms per iteration (plus the configured call cost)
+- [x] a busy-wait `while (millis() - t < 50) {}` terminates
+- [x] three VL53L0X instances brought up with the XSHUT sequence get distinct addresses, and read distinct fake-sim readings
+- [x] a `WiFiServer` on port 3333 is reachable on the reported host port from a test client
+- [x] a sketch with a compile error yields the compiler's `file:line:col: error:` output and a non-zero exit from `build-sim`
+- [x] hal and its tests build warning-free at `-Wall -Wextra` with both GCC and Clang
+- [x] socket paths stay under 100 bytes, checked by a test
 
 ## Out of scope
 
@@ -65,6 +65,44 @@ FreeRTOS tasks, `attachInterrupt`, BLE, the sim-side bridge (P1-H), PlatformIO r
 ## Handoff
 
 - **Built**:
+  - Arduino/ESP32 core surface, serial/Print/Stream/String helpers, GPIO/ADC/LEDC, and Servo, Wire, VL53L0X and Electronic Cats MPU6050 shims.
+  - Nanosecond lockstep runtime with carried advances, boot-relative uptime, timestamped GPIO edges, CONFIG/STEP validation, framed Unix socket transport, clean BYE handling and socket-loss diagnostics.
+  - C++ sim-protocol codec: all 17 valid vectors match their JSON and round-trip byte-identically in both directions; all 16 malformed vectors are rejected.
+  - Nonblocking IPv4 TCP/UDP sockets with ephemeral host-port mappings, connection lifecycle events, bounded queues, sim-time latency, seeded loss and dropout.
+  - Vendored unmodified ArduinoJson 7.4.2 single header and MIT licence; Arduino String input/output/conversion compatibility is covered.
+  - Executable `packages/hal/bin/build-sim`, compiler-aware static-library cache, HAL-first includes, project paths containing spaces/quotes/metacharacters, and unchanged compiler diagnostics/exit status.
+  - 42 doctest cases / 1,951 assertions pass with GCC 16.2.1 and Clang 23.1.3 under `-Wall -Wextra -Wpedantic -Werror`. Includes a real built firmware process driven by a C++ fake sim for 400 ticks, TCP JSON exchange, precise delay/busy-wait/pulse tests, three-sensor XSHUT sequencing, network faults, compile errors, socket loss and socket-path limits.
+  - Final `pnpm verify` passed: formatting, lint, typecheck, 312 TypeScript tests, both HAL compiler runs, scenario command and Electron smoke test.
 - **Deviations from the brief**:
-- **Contract change requests**:
-- **Open questions**:
+  - The process integration fixture is under `packages/hal/test/fixtures/firmware/`; the starter firmware is still the P0 scaffold and belongs to P1-G. No files in that package were changed.
+  - ADC uses a linear 12-bit 0–3.3 V conversion, without hardware calibration/nonlinearity. Network destinations support numeric IPv4 and `localhost`; DNS, IPv6 and radio/authentication behaviour are not modelled. Injected TCP segment loss discards bytes at the HAL boundary without simulating TCP retransmission. These limits are documented in `packages/hal/README.md`.
+- **Contract change requests**: None.
+- **Open questions**: None blocking. Apple clang and macOS runtime portability still need macOS CI. The repository scenario command currently passes through its P0 placeholder; the complete v1 vehicle scenario remains P2-01 work.
+
+- **macOS CI** (run 41529553473, head `04e6e5f`):
+  - Cause: the Wi-Fi tests assumed a successful peer `send` meant the receiving socket was already readable. TCP's first `available()` returned zero while the following peek/read succeeded. UDP's injected latency starts when HAL receives the datagram, so spending 2 ms of sim time immediately after peer send could expire before macOS delivered it; the failed receive then left no valid reply peer and caused the reply timeout.
+  - Fix: bounded, EINTR-aware `poll` barriers on borrowed native descriptors, without fixed sleeps or wall-clock waits inside HAL. TCP waits for the full expected byte count; UDP waits for kernel readability before measuring the configured sim-time latency, loss and dropout. Added observation-only `fd()` accessors and made the UDP receive a prerequisite for the reply assertions.
+  - BSD audit: created and accepted sockets already set `O_NONBLOCK`/`FD_CLOEXEC` explicitly and use `SO_NOSIGPIPE` where supported; firmware ignores SIGPIPE before opening sockets and does not depend on Linux `MSG_NOSIGNAL`. New checks inspect socket flags/options on listeners, accepted clients, outgoing clients and UDP. Pending connects retain the descriptor until `getpeername` confirms completion; tests now poll writability before asserting completion. XNU copies the supplied sockaddr length into `sa_len`, so a zero-initialized `sin_len` is not this failure. Empty nonblocking TCP/UDP receives remain retryable and are exercised before later successful delivery.
+  - Validation: 100 consecutive focused Wi-Fi runs passed; full `pnpm verify` passed locally, including 23 HAL cases / 1,739 assertions with each of GCC and Clang. macOS execution remains for CI; no local macOS result is claimed. Status remains in-review.
+
+- **Review round 1**:
+  - XSHUT release now honours the Pololu OUTPUT/LOW → INPUT (or INPUT_PULLUP) sequence, including the carrier pull-up and distinct sensor re-addressing. `shims_test.cpp` covers both release modes and all three readings.
+  - Added Printable/IPAddress printing and length-delimited character writes, numeric String `+=`/`concat`, String edits, Stream `parseInt`/`readString`, two-argument Serial `begin`, seeded Arduino random functions, analog PWM/ADC resolution, math helpers/constants and common-type `constrain`. Explicit Serial/client bool conversions are retained and checked at compile time. `compatibility_test.cpp` covers the added APIs and deterministic reseeding; the TCP test also writes a character buffer to a real peer.
+  - Server CONNECT/DISCONNECT events now apply only to accepted clients. Outbound `connect()` resolves success/refusal before returning using a bounded, EINTR-aware host `poll` (one second maximum), without spending sim time beyond the normal HAL call cost. `wifi_test.cpp` checks refusal, successful connection, clock cost and explicit/RAII outbound closes. Client `fd()` remains; simulator-only server/UDP descriptors and mapped ports moved to `rcsim::hal::socketFd`/`hostPort` in `rcsim/network.h`, with compile-time checks that the Arduino-facing classes no longer expose them.
+  - LEDC pulse conversion rounds to nearest; the 50 Hz / 16-bit neutral regression now expects 1500 µs. Serial accumulation keeps a count and protocol array traversal is linear. `runtime_test.cpp` reproduced the old 16 KiB performance failure, then passed with the linear implementation (the full serial regression takes about 2 ms locally, with a 250 ms guard), while checking exact bytes and overflow into the following tick.
+  - An `atexit` hook sends BYE(firmware-exit), with its descriptor cleared on the ordinary return/error paths. Integration tests call `exit(7)` from setup and loop, verify exactly one BYE with reason 5, and preserve the exit code.
+  - Firmware library builds allow compiler warnings; HAL's own tests continue to compile the library and tests under `-Werror`. `build-sim` accepts compiler/launcher words and quoted paths without evaluating shell expansions. Its cache is content-addressed by compiler command/version, flags and HAL inputs, built privately and published by atomic directory rename. Integration tests use a launcher that rejects `-Werror`, a quoted path containing spaces and metacharacters, and concurrent cold builds that must produce both executables and exactly one complete shared cache entry with no temporary directory left over.
+  - Servo defaults are unchanged: ESP32Servo **3.2.1** defines `DEFAULT_uS_LOW = 544` and `DEFAULT_uS_HIGH = 2400`, and `attach(pin)` passes those values. The 500/2500 constants are allowed limits, not defaults. Sources: [header](https://github.com/madhephaestus/ESP32Servo/blob/3.2.1/src/ESP32Servo.h#L80-L104), [attach implementation](https://github.com/madhephaestus/ESP32Servo/blob/3.2.1/src/ESP32Servo.cpp#L71-L74). `shims_test.cpp` pins the resulting 544/1472/2400 µs outputs at 0/90/180 degrees.
+  - **P2-01 / packaging**: `#!/usr/bin/env node` still needs Node on PATH, which a Finder-launched macOS app lacks. Packaging must provide an explicit runtime and relocate the package-local build cache to a writable app cache, since bundled package files are read-only. `build-sim` does not call `process.chdir`: it spawns Make with cwd set to the HAL package and the firmware compiler with cwd set to the car project. Firmware source arguments are absolute; relative firmware diagnostics resolve against the project directory as P1-D expects. Relative internal HAL diagnostics from Make resolve against the HAL package.
+  - Validation: final `pnpm verify` passed, including 36 HAL cases / 1,914 assertions with both GCC and Clang under strict warnings, 273 TypeScript tests and Electron smoke coverage. Each requested fix has regression coverage under `packages/hal/test/`.
+  - No contract changes. Status remains in-review. macOS CI was green at baseline `9b221f4`; these review changes still need the next macOS CI run.
+
+- **Review round 2**:
+  - Blocking connect fix: the former one-second allowance per attempt is now a **shared 100 ms host-wait budget per STEP across all WiFiClient instances**. Actual poll time is charged to the current step; exhausted budgets permit only zero-time readiness checks, and STEP resets the budget. Sim time still advances only by the configured HAL call cost. The reproduced eight-attempt retry loop dropped from about 8,008 ms wall time to about 100 ms while staying within one tick (8 µs sim time). Tests retain loopback acceptance/refusal checks and verify that the allowance resets on the next STEP. README now states that results depend on host routes, firewall, peer availability and delivery timing.
+  - Added arithmetic/char String addition overloads. Tests cover lvalues, temporaries and chained additions for int, unsigned, long, unsigned long, float, double and char, compiled in the normal GCC/Clang matrix. Also added the small `TWO_PI`, `degrees`, `lastIndexOf` and `equalsIgnoreCase` helpers and coverage.
+  - INPUT_PULLUP defaults a line high only when no sim edge has driven it. Sim-driven state persists across steps and resets with the run; the regression drives LOW/HIGH/LOW, reapplies pinMode and crosses a tick without losing the LOW. The XSHUT carrier pull-up remains available when the line has no sim-driven level.
+  - `build-sim` tokenizes CXXFLAGS/CPPFLAGS consistently for both Make's library build and the firmware compile/link. The integration regression first failed because the firmware could not find a header named through CPPFLAGS; it now compiles and links with AddressSanitizer, a required define, and a quoted include path containing spaces/metacharacters. Cold builds remove only `.hal-*` directories older than an hour, preserving recent builders. Added both a cold-build integration check and cheap Node tests for cleanup/compiler-word parsing; the HAL test script runs them before the compiler matrix.
+  - Confirmed Arduino ESP32 **3.x timeout units are milliseconds**: NetworkClient inherits Stream::setTimeout; the HAL already matched. Added source comments and a 3 ms simulated-read regression. Sources: [3.3.0 NetworkClient](https://github.com/espressif/arduino-esp32/blob/3.3.0/libraries/Network/src/NetworkClient.h), [3.3.0 Stream timeout](https://github.com/espressif/arduino-esp32/blob/3.3.0/cores/esp32/Stream.h#L58-L61); the 3.0.0 headers agree.
+  - Confirmed `randomSeed(0)` is a no-op in the target core. The existing HAL behavior is retained, cited in code and tested both before the first random draw and midway through an explicitly seeded sequence. Source: [Arduino ESP32 3.3.0 WMath.cpp](https://github.com/espressif/arduino-esp32/blob/3.3.0/cores/esp32/WMath.cpp#L40-L45), also checked against 3.0.0. The simulator continues deriving its initial deterministic state from CONFIG.seed.
+  - Validation: final `pnpm verify` passed: 42 HAL cases / 1,951 assertions with each of GCC and Clang, two Node script tests, 312 TypeScript tests and seven Electron tests.
+  - No contract changes. Status remains in-review. Both-OS CI was green at baseline `fa65363`; the new changes still need the next macOS CI run. No rebase or push was performed.
