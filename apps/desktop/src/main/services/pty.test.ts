@@ -6,68 +6,82 @@ import { join } from 'node:path';
 import { ProjectService } from './project.ts';
 import { PtyService } from './pty.ts';
 
-it('runs a real login shell in the project, resizes, and exits', async () => {
-  const dir = await realpath(await mkdtemp(join(tmpdir(), 'rcsim-pty-')));
-  const project = new ProjectService({
-    templateDir: '',
-    recentFile: join(dir, 'recent.json'),
-    pickFolder: async () => null,
-  });
-  const service = new PtyService(project);
-  try {
-    await project.open(dir);
-    let output = '';
-    let exit: number | undefined;
-    service.onData((_id, data) => {
-      output += data;
-    });
-    service.onExit((_id, code) => {
-      exit = code;
-    });
-    const { ptyId } = await service.spawn({ cols: 80, rows: 24 });
-    await service.resize(ptyId, 90, 30);
-    await service.write(ptyId, 'pwd\r');
-    await expect.poll(() => output).toContain(dir);
-    await service.write(ptyId, 'exit 7\r');
-    await expect.poll(() => exit).toBe(7);
-    await expect(service.spawn({ cols: 0, rows: 24 })).rejects.toThrow('[rcsim:invalid]');
-  } finally {
-    service.dispose();
-    await project.dispose();
-    await rm(dir, { force: true, recursive: true });
-  }
-});
+// A login shell can take seconds to start on a loaded CI runner; poll's 1 s default flaked there.
+const SHELL_TIMEOUT_MS = 10_000;
+const TEST_TIMEOUT_MS = 30_000;
 
-it('falls back to an executable login shell and cancels a pending spawn on disposal', async () => {
-  const dir = await realpath(await mkdtemp(join(tmpdir(), 'rcsim-pty-fallback-')));
-  const project = new ProjectService({
-    templateDir: '',
-    recentFile: join(dir, 'recent.json'),
-    pickFolder: async () => null,
-  });
-  const service = new PtyService(project);
-  vi.stubEnv('SHELL', '/not-an-executable-shell');
-  try {
-    await project.open(dir);
-    let output = '';
-    service.onData((_id, text) => {
-      output += text;
+it(
+  'runs a real login shell in the project, resizes, and exits',
+  { timeout: TEST_TIMEOUT_MS },
+  async () => {
+    const dir = await realpath(await mkdtemp(join(tmpdir(), 'rcsim-pty-')));
+    const project = new ProjectService({
+      templateDir: '',
+      recentFile: join(dir, 'recent.json'),
+      pickFolder: async () => null,
     });
-    const { ptyId } = await service.spawn({ cols: 80, rows: 24 });
-    await service.write(ptyId, "printf '__RCSIM_%s__\\n' FALLBACK\r");
-    await expect.poll(() => output).toContain('__RCSIM_FALLBACK__');
-    service.dispose();
-    await expect(service.write(ptyId, 'pwd\r')).rejects.toThrow('[rcsim:not-found]');
-    const pending = service.spawn({ cols: 80, rows: 24 });
-    service.dispose();
-    await expect(pending).rejects.toThrow('cancelled by renderer navigation');
-  } finally {
-    vi.unstubAllEnvs();
-    service.dispose();
-    await project.dispose();
-    await rm(dir, { recursive: true, force: true });
-  }
-});
+    const service = new PtyService(project);
+    try {
+      await project.open(dir);
+      let output = '';
+      let exit: number | undefined;
+      service.onData((_id, data) => {
+        output += data;
+      });
+      service.onExit((_id, code) => {
+        exit = code;
+      });
+      const { ptyId } = await service.spawn({ cols: 80, rows: 24 });
+      await service.resize(ptyId, 90, 30);
+      await service.write(ptyId, 'pwd\r');
+      await expect.poll(() => output, { timeout: SHELL_TIMEOUT_MS }).toContain(dir);
+      await service.write(ptyId, 'exit 7\r');
+      await expect.poll(() => exit, { timeout: SHELL_TIMEOUT_MS }).toBe(7);
+      await expect(service.spawn({ cols: 0, rows: 24 })).rejects.toThrow('[rcsim:invalid]');
+    } finally {
+      service.dispose();
+      await project.dispose();
+      await rm(dir, { force: true, recursive: true });
+    }
+  },
+);
+
+it(
+  'falls back to an executable login shell and cancels a pending spawn on disposal',
+  { timeout: TEST_TIMEOUT_MS },
+  async () => {
+    const dir = await realpath(await mkdtemp(join(tmpdir(), 'rcsim-pty-fallback-')));
+    const project = new ProjectService({
+      templateDir: '',
+      recentFile: join(dir, 'recent.json'),
+      pickFolder: async () => null,
+    });
+    const service = new PtyService(project);
+    vi.stubEnv('SHELL', '/not-an-executable-shell');
+    try {
+      await project.open(dir);
+      let output = '';
+      service.onData((_id, text) => {
+        output += text;
+      });
+      const { ptyId } = await service.spawn({ cols: 80, rows: 24 });
+      await service.write(ptyId, "printf '__RCSIM_%s__\\n' FALLBACK\r");
+      await expect
+        .poll(() => output, { timeout: SHELL_TIMEOUT_MS })
+        .toContain('__RCSIM_FALLBACK__');
+      service.dispose();
+      await expect(service.write(ptyId, 'pwd\r')).rejects.toThrow('[rcsim:not-found]');
+      const pending = service.spawn({ cols: 80, rows: 24 });
+      service.dispose();
+      await expect(pending).rejects.toThrow('cancelled by renderer navigation');
+    } finally {
+      vi.unstubAllEnvs();
+      service.dispose();
+      await project.dispose();
+      await rm(dir, { recursive: true, force: true });
+    }
+  },
+);
 
 it('includes shell, cwd and the selected helper when native spawn throws', async () => {
   const dir = await realpath(await mkdtemp(join(tmpdir(), 'rcsim-pty-error-')));
