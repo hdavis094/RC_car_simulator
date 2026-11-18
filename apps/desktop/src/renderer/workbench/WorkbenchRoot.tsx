@@ -24,6 +24,8 @@ export function WorkbenchRoot({ api }: WorkbenchRootProps = {}): ReactNode {
   const saveStatus = useWorkbenchStore((s) => s.saveStatus);
   const loadError = useWorkbenchStore((s) => s.loadError);
   const loadErrorRaw = useWorkbenchStore((s) => s.loadErrorRaw);
+  const diskReadError = useWorkbenchStore((s) => s.diskReadError);
+  const diskReadErrorRaw = useWorkbenchStore((s) => s.diskReadErrorRaw);
   const externalChange = useWorkbenchStore((s) => s.externalChange);
   const load = useWorkbenchStore((s) => s.load);
   const startFromExampleCar = useWorkbenchStore((s) => s.startFromExampleCar);
@@ -225,22 +227,24 @@ export function WorkbenchRoot({ api }: WorkbenchRootProps = {}): ReactNode {
             }}
           >
             <span>{loadError}</span>
-            <button
-              type="button"
-              onClick={startFromExampleCar}
-              style={{
-                fontSize: 12,
-                fontWeight: 600,
-                padding: '4px 10px',
-                background: '#ffffff',
-                color: '#b91c1c',
-                border: '1px solid #fca5a5',
-                borderRadius: 4,
-                cursor: 'pointer',
-              }}
-            >
-              Start from the example car
-            </button>
+            {!(loaded && dirty) && (
+              <button
+                type="button"
+                onClick={startFromExampleCar}
+                style={{
+                  fontSize: 12,
+                  fontWeight: 600,
+                  padding: '4px 10px',
+                  background: '#ffffff',
+                  color: '#b91c1c',
+                  border: '1px solid #fca5a5',
+                  borderRadius: 4,
+                  cursor: 'pointer',
+                }}
+              >
+                Start from the example car
+              </button>
+            )}
           </div>
           {loadErrorRaw && (
             <pre
@@ -257,6 +261,43 @@ export function WorkbenchRoot({ api }: WorkbenchRootProps = {}): ReactNode {
               }}
             >
               {loadErrorRaw}
+            </pre>
+          )}
+        </div>
+      )}
+
+      {diskReadError && (
+        <div
+          role="alert"
+          data-testid="workbench-disk-read-error"
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 8,
+            padding: '10px 12px',
+            borderRadius: 4,
+            background: '#fffbeb',
+            border: '1px solid #fcd34d',
+            color: '#b45309',
+            fontSize: 12,
+          }}
+        >
+          <span>{diskReadError}</span>
+          {diskReadErrorRaw && (
+            <pre
+              data-testid="workbench-disk-read-error-raw"
+              style={{
+                margin: 0,
+                padding: 8,
+                background: '#0f172a',
+                color: '#e2e8f0',
+                borderRadius: 4,
+                overflowX: 'auto',
+                fontSize: 11,
+                maxHeight: 160,
+              }}
+            >
+              {diskReadErrorRaw}
             </pre>
           )}
         </div>

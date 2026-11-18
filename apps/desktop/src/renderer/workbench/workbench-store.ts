@@ -98,6 +98,8 @@ const UNLOADED_CAR: Car = {
 };
 
 let nextRowKeyCounter = 1;
+let projectGenerationCounter = 0;
+
 function buildRowKeys(
   car: Car,
   existing: Readonly<Record<string, string>> = {},
@@ -166,6 +168,7 @@ export interface SaveStatus {
 export interface WorkbenchState {
   api: RcsimApi | null;
   projectDir: string | null;
+  projectGeneration: number;
   noProject: boolean;
   car: Car;
   partRowKeys: Readonly<Record<string, string>>;
@@ -181,6 +184,8 @@ export interface WorkbenchState {
   saveStatus: SaveStatus | null;
   loadError: string | null;
   loadErrorRaw: string | null;
+  diskReadError: string | null;
+  diskReadErrorRaw: string | null;
   searchQuery: string;
   selectedInstanceId: string | null;
   selectedPartId: string | null;
@@ -257,6 +262,7 @@ function createInitialState(): Omit<
   return {
     api: null,
     projectDir: null,
+    projectGeneration: ++projectGenerationCounter,
     noProject: false,
     car,
     partRowKeys: buildRowKeys(car),
@@ -272,6 +278,8 @@ function createInitialState(): Omit<
     saveStatus: null,
     loadError: null,
     loadErrorRaw: null,
+    diskReadError: null,
+    diskReadErrorRaw: null,
     searchQuery: '',
     selectedInstanceId: null,
     selectedPartId: null,
@@ -297,16 +305,28 @@ export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
         loaded: false,
         loadError: 'rcsim API unavailable',
         loadErrorRaw: null,
+        diskReadError: null,
+        diskReadErrorRaw: null,
       });
       return;
     }
 
-    set({ api });
+    const prevApi = get().api;
+    const apiChanged = explicitApi !== undefined && prevApi !== null && prevApi !== api;
+    if (apiChanged) {
+      set({ api, projectGeneration: ++projectGenerationCounter });
+    } else {
+      set({ api });
+    }
 
+    const genBeforeCurrent = get().projectGeneration;
     let currentProjectDir: string | null = null;
     if (typeof api.project.current === 'function') {
       try {
         const currentProject = await api.project.current();
+        if (get().api !== api || get().projectGeneration !== genBeforeCurrent) {
+          return;
+        }
         if (currentProject === null) {
           set({
             ...createInitialState(),
@@ -318,13 +338,18 @@ export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
         }
         currentProjectDir = currentProject.dir;
       } catch {
-        // Proceed to catalog.list / project.readCar if current() fails unexpectedly.
+        if (get().api !== api || get().projectGeneration !== genBeforeCurrent) {
+          return;
+        }
       }
     }
 
     const prevProjectDir = get().projectDir;
     const isProjectSwitch =
-      currentProjectDir !== null && prevProjectDir !== null && prevProjectDir !== currentProjectDir;
+      (currentProjectDir !== null &&
+        prevProjectDir !== null &&
+        prevProjectDir !== currentProjectDir) ||
+      (apiChanged && currentProjectDir === null);
 
     if (isProjectSwitch) {
       set({
@@ -337,10 +362,22 @@ export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
       set({ projectDir: currentProjectDir, noProject: false });
     }
 
+    const loadGeneration = get().projectGeneration;
+    const expectedProjectDir = get().projectDir;
+
     const [catalogSettled, carSettled] = await Promise.allSettled([
       api.catalog.list(),
       api.project.readCar(),
     ]);
+
+    const after = get();
+    if (
+      after.api !== api ||
+      after.projectGeneration !== loadGeneration ||
+      after.projectDir !== expectedProjectDir
+    ) {
+      return;
+    }
 
     if (
       (carSettled.status === 'rejected' &&
@@ -357,17 +394,15 @@ export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
       return;
     }
 
-    const after = get();
-
     // If the store was already dirty on the same project on remount, or became dirty while awaiting IPC,
-    // never overwrite unsaved edits; compare disk against what was last saved if readable, or report a read failure.
+    // never overwrite unsaved edits; compare disk against what was last saved if readable, or report a non-blocking diskReadError.
     if (!options?.force && !isProjectSwitch && after.dirty) {
       if (catalogSettled.status === 'rejected') {
         const parsed = parseIpcError(catalogSettled.reason);
         set({
           noProject: false,
-          loadError: `Failed to load catalog: ${parsed.message}`,
-          loadErrorRaw: null,
+          diskReadError: `Failed to load catalog: ${parsed.message}`,
+          diskReadErrorRaw: null,
         });
         return;
       }
@@ -382,8 +417,8 @@ export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
           catalog: nextCatalog,
           issues: checkWiring(after.car, nextCatalog),
           noProject: false,
-          loadError: `Failed to read car.json: ${parsed.message}`,
-          loadErrorRaw: null,
+          diskReadError: `Failed to read car.json: ${parsed.message}`,
+          diskReadErrorRaw: null,
         });
         return;
       }
@@ -394,8 +429,8 @@ export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
           catalog: nextCatalog,
           issues: checkWiring(after.car, nextCatalog),
           noProject: false,
-          loadError: `Failed to read car.json: ${carSettled.value.error}`,
-          loadErrorRaw: carSettled.value.raw,
+          diskReadError: `Failed to read car.json: ${carSettled.value.error}`,
+          diskReadErrorRaw: carSettled.value.raw,
         });
         return;
       }
@@ -411,6 +446,8 @@ export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
         noProject: false,
         loadError: null,
         loadErrorRaw: null,
+        diskReadError: null,
+        diskReadErrorRaw: null,
         ...(after.lastSavedCarJson === null ? { lastSavedCarJson: diskCanonical } : {}),
         ...(changedOnDisk ? { externalChange: true, latestDiskCarJson: diskCanonical } : {}),
       });
@@ -427,6 +464,8 @@ export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
         externalChange: false,
         loadError: `Failed to load catalog: ${parsed.message}`,
         loadErrorRaw: null,
+        diskReadError: null,
+        diskReadErrorRaw: null,
       });
       return;
     }
@@ -446,6 +485,8 @@ export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
         externalChange: false,
         loadError: `Failed to read car.json: ${parsed.message}`,
         loadErrorRaw: null,
+        diskReadError: null,
+        diskReadErrorRaw: null,
       });
       return;
     }
@@ -482,6 +523,8 @@ export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
         externalChange: false,
         loadError: null,
         loadErrorRaw: null,
+        diskReadError: null,
+        diskReadErrorRaw: null,
         selectedInstanceId: nextSelected,
         selectedPartId: selectedPart?.partId ?? car.controller.partId,
       });
@@ -496,6 +539,8 @@ export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
         externalChange: false,
         loadError: `Failed to read car.json: ${carResult.error}`,
         loadErrorRaw: carResult.raw,
+        diskReadError: null,
+        diskReadErrorRaw: null,
       });
     }
   },
@@ -509,11 +554,13 @@ export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
       externalChange: false,
       lastSavedCarJson: state.latestDiskCarJson ?? state.lastSavedCarJson,
       latestDiskCarJson: null,
+      diskReadError: null,
+      diskReadErrorRaw: null,
     }));
   },
 
   async handleExternalCarFileChange() {
-    const { api, saving } = get();
+    const { api, saving, projectGeneration, projectDir } = get();
     if (!api || saving) return;
 
     let raw: string;
@@ -521,7 +568,14 @@ export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
       raw = await api.project.readFile('car.json');
     } catch (error) {
       const afterErr = get();
-      if (afterErr.saving) return;
+      if (
+        afterErr.saving ||
+        afterErr.api !== api ||
+        afterErr.projectGeneration !== projectGeneration ||
+        afterErr.projectDir !== projectDir
+      ) {
+        return;
+      }
       const parsed = parseIpcError(error);
       if (parsed.code === 'no-project') {
         set({
@@ -534,8 +588,8 @@ export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
       }
       if (afterErr.dirty) {
         set({
-          loadError: `Failed to read car.json: ${parsed.message}`,
-          loadErrorRaw: null,
+          diskReadError: `Failed to read car.json: ${parsed.message}`,
+          diskReadErrorRaw: null,
         });
         return;
       }
@@ -544,7 +598,14 @@ export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
     }
 
     const afterRead = get();
-    if (afterRead.saving) return;
+    if (
+      afterRead.saving ||
+      afterRead.api !== api ||
+      afterRead.projectGeneration !== projectGeneration ||
+      afterRead.projectDir !== projectDir
+    ) {
+      return;
+    }
 
     let diskCanonical: string | null = null;
     let parseErrorMsg: string | null = null;
@@ -562,8 +623,8 @@ export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
     if (diskCanonical === null) {
       if (afterRead.dirty) {
         set({
-          loadError: `Failed to read car.json: ${parseErrorMsg ?? 'invalid car.json'}`,
-          loadErrorRaw: raw,
+          diskReadError: `Failed to read car.json: ${parseErrorMsg ?? 'invalid car.json'}`,
+          diskReadErrorRaw: raw,
         });
         return;
       }
@@ -573,7 +634,14 @@ export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
 
     const baselineCanonical = afterRead.lastSavedCarJson ?? canonicalCarJson(afterRead.car);
     if (diskCanonical === baselineCanonical) {
-      // Ignore the file-watcher echo of our own writeCar call, or a formatting-only / touch change.
+      // Clear any previous diskReadError notice and ignore the file-watcher echo of our own writeCar call
+      // or a formatting-only / touch / repaired-to-baseline change.
+      if (afterRead.diskReadError !== null || afterRead.diskReadErrorRaw !== null) {
+        set({
+          diskReadError: null,
+          diskReadErrorRaw: null,
+        });
+      }
       return;
     }
 
@@ -581,6 +649,8 @@ export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
       set({
         externalChange: true,
         latestDiskCarJson: diskCanonical,
+        diskReadError: null,
+        diskReadErrorRaw: null,
       });
       return;
     }
@@ -600,6 +670,8 @@ export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
       externalChange: false,
       loadError: null,
       loadErrorRaw: null,
+      diskReadError: null,
+      diskReadErrorRaw: null,
       saveStatus: null,
       selectedInstanceId: car.controller.instanceId,
       selectedPartId: car.controller.partId,
@@ -913,7 +985,7 @@ export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
   },
 
   async saveCar() {
-    const { car, loaded, loadError, noProject } = get();
+    const { car, loaded, loadError, noProject, projectGeneration, projectDir } = get();
     if (!loaded || loadError !== null || noProject) {
       return false;
     }
@@ -952,6 +1024,13 @@ export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
     try {
       await api.project.writeCar(savedCar);
       const latest = get();
+      if (
+        latest.api !== api ||
+        latest.projectGeneration !== projectGeneration ||
+        latest.projectDir !== projectDir
+      ) {
+        return false;
+      }
       const editedDuringSave = latest.car !== car || !isSameCar(latest.car, savedCar);
       const savedIssues = checkWiring(savedCar, latest.catalog);
       const activeIssues = editedDuringSave ? checkWiring(latest.car, latest.catalog) : savedIssues;
@@ -966,6 +1045,8 @@ export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
         lastSavedCarJson: savedCanonical,
         latestDiskCarJson: savedCanonical,
         externalChange: false,
+        diskReadError: null,
+        diskReadErrorRaw: null,
         issues: activeIssues,
         saveStatus: {
           ok: true,
@@ -975,6 +1056,14 @@ export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
       });
       return true;
     } catch (error) {
+      const latest = get();
+      if (
+        latest.api !== api ||
+        latest.projectGeneration !== projectGeneration ||
+        latest.projectDir !== projectDir
+      ) {
+        return false;
+      }
       const ipcErr = parseIpcError(error);
       set({
         saving: false,
@@ -1029,15 +1118,23 @@ export const useWorkbenchStore = create<WorkbenchState>()((set, get) => ({
       };
     }
 
+    const { projectGeneration, projectDir } = get();
     try {
       const { path } = await api.catalog.saveCustomPart(parsed.data);
       const listing = await api.catalog.list();
+      const latest = get();
+      if (
+        latest.api !== api ||
+        latest.projectGeneration !== projectGeneration ||
+        latest.projectDir !== projectDir
+      ) {
+        return { ok: true, path };
+      }
       const catalog = catalogFromListing(listing);
-      const { car } = get();
       set({
         listing,
         catalog,
-        issues: checkWiring(car, catalog),
+        issues: checkWiring(latest.car, catalog),
         selectedPartId: parsed.data.id,
         selectedInstanceId: null,
         newPartOpen: false,

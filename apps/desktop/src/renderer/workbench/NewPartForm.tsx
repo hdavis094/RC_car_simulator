@@ -1178,6 +1178,11 @@ export function NewPartForm(): ReactNode {
                         aria-label={`Param ${field.key}`}
                         value={listStr}
                         onChange={(e) => {
+                          setDraftErrors((prev) => {
+                            if (!(field.key in prev)) return prev;
+                            const { [field.key]: _removedErr, ...rest } = prev;
+                            return rest;
+                          });
                           patchForm({
                             paramDrafts: { ...paramDrafts, [field.key]: e.target.value },
                           });
@@ -1218,6 +1223,11 @@ export function NewPartForm(): ReactNode {
                         aria-label={`Param ${field.key}`}
                         value={curveStr}
                         onChange={(e) => {
+                          setDraftErrors((prev) => {
+                            if (!(field.key in prev)) return prev;
+                            const { [field.key]: _removedErr, ...rest } = prev;
+                            return rest;
+                          });
                           patchForm({
                             paramDrafts: { ...paramDrafts, [field.key]: e.target.value },
                           });

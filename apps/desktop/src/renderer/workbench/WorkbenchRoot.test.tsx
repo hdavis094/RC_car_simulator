@@ -314,6 +314,10 @@ describe('Workbench environment (P1-E)', () => {
       /accelRangesG.*invalid number "abc"/i,
     );
 
+    // Editing the draft immediately clears its draft validation message before the next blur or submit
+    fireEvent.change(accelInput, { target: { value: '2, 4' } });
+    expect(screen.queryByTestId('new-part-errors')).toBeNull();
+
     // Typing negative numbers works in the input, and schema validation flags negative accelRangesG on submit
     await user.clear(accelInput);
     await user.type(accelInput, '-2, 4, 8');
@@ -389,6 +393,10 @@ describe('Workbench environment (P1-E)', () => {
     expect(screen.getByTestId('new-part-errors').textContent).toMatch(
       /throttleCurve.*invalid throttle curve point "bad"/i,
     );
+
+    // Editing the throttleCurve draft immediately clears its draft validation message
+    fireEvent.change(curveInput, { target: { value: '0:0, 1:1' } });
+    expect(screen.queryByTestId('new-part-errors')).toBeNull();
 
     // Edit throttleCurve WITHOUT blurring to cover on-submit parsing of unblurred throttle-curve drafts
     await user.clear(curveInput);
@@ -1335,8 +1343,8 @@ describe('Workbench environment (P1-E)', () => {
     expect(projectB.files.get('car.json')).not.toContain('"Unsaved Project A Car"');
   });
 
-  it('renders a plain no-project state without an example-car button, and reports a failed read while dirty as a read error rather than an external change (Items 5 & 6)', async () => {
-    // Item 5: Mounted when no project is open
+  it('renders a plain no-project state without an example-car button, and reports a failed read while dirty in a non-blocking notice keeping Save enabled without an example-car button (Round 4 Item 1)', async () => {
+    // 1. Mounted when no project is open
     const baseFake = createFakeRcsimApi();
     const noProjApi: RcsimApi = {
       ...baseFake.api,
@@ -1356,7 +1364,7 @@ describe('Workbench environment (P1-E)', () => {
     expect(screen.queryByRole('button', { name: 'Start from the example car' })).toBeNull();
     unmountNoProj();
 
-    // Item 6: Failed read while dirty reports a load error, not an external change banner
+    // 2. Watcher path while dirty: dirty -> corrupt file -> Save still enabled and no example-car button -> repaired file -> notice gone
     resetWorkbenchStore();
     const fake = createFakeRcsimApi();
     const { unmount } = render(<WorkbenchRoot api={fake.api} />);
@@ -1370,22 +1378,164 @@ describe('Workbench environment (P1-E)', () => {
     });
     expect(useWorkbenchStore.getState().dirty).toBe(true);
 
-    // Corrupt car.json on disk while unmounted, then remount
-    unmount();
+    // External tool writes truncated/corrupt car.json while dirty (watcher path)
     const brokenRaw = '{ "name": "Corrupted", bad json';
     fake.files.set('car.json', brokenRaw);
-
-    render(<WorkbenchRoot api={fake.api} />);
+    await act(async () => {
+      await useWorkbenchStore.getState().handleExternalCarFileChange();
+    });
 
     await waitFor(() => {
-      expect(screen.getByTestId('workbench-load-error')).toBeTruthy();
+      expect(screen.getByTestId('workbench-disk-read-error')).toBeTruthy();
     });
-    expect(screen.getByTestId('workbench-load-error').textContent).toMatch(
+    expect(screen.getByTestId('workbench-disk-read-error').textContent).toMatch(
       /Failed to read car\.json/i,
     );
-    expect(screen.getByTestId('workbench-load-error-raw').textContent).toBe(brokenRaw);
+    expect(screen.getByTestId('workbench-disk-read-error-raw').textContent).toBe(brokenRaw);
+    // Blocking loadError is NOT set, Save remains enabled, and "Start from the example car" is NOT shown
+    expect(useWorkbenchStore.getState().loadError).toBeNull();
+    expect(screen.queryByTestId('workbench-load-error')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Start from the example car' })).toBeNull();
+    expect((screen.getByRole('button', { name: /^Save/ }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
     expect(screen.queryByTestId('workbench-external-change')).toBeNull();
-    expect(useWorkbenchStore.getState().externalChange).toBe(false);
+
+    // File is repaired back to equal to the baseline -> notice clears and no externalChange banner
+    fake.files.set('car.json', JSON.stringify(exampleCar, null, 2));
+    await act(async () => {
+      await useWorkbenchStore.getState().handleExternalCarFileChange();
+    });
+    expect(useWorkbenchStore.getState().diskReadError).toBeNull();
+    expect(screen.queryByTestId('workbench-disk-read-error')).toBeNull();
+    expect(screen.queryByTestId('workbench-external-change')).toBeNull();
+
+    // Corrupt again, then repair to a DIFFERENT valid car -> notice clears and externalChange banner appears
+    fake.files.set('car.json', brokenRaw);
+    await act(async () => {
+      await useWorkbenchStore.getState().handleExternalCarFileChange();
+    });
+    expect(screen.getByTestId('workbench-disk-read-error')).toBeTruthy();
+
+    fake.files.set(
+      'car.json',
+      JSON.stringify({ ...exampleCar, name: 'Repaired To Different Car' }, null, 2),
+    );
+    await act(async () => {
+      await useWorkbenchStore.getState().handleExternalCarFileChange();
+    });
+    expect(useWorkbenchStore.getState().diskReadError).toBeNull();
+    expect(screen.queryByTestId('workbench-disk-read-error')).toBeNull();
+    expect(screen.getByTestId('workbench-external-change')).toBeTruthy();
+
+    // "Keep mine" also ensures any diskReadError notice is cleared
+    fireEvent.click(screen.getByRole('button', { name: 'Keep mine' }));
+    expect(screen.queryByTestId('workbench-external-change')).toBeNull();
+    expect(useWorkbenchStore.getState().diskReadError).toBeNull();
+
+    // 3. Catalog failure while dirty on remount/load: shows non-blocking diskReadError and keeps Save enabled
+    unmount();
+    const failingCatalogWhileDirtyApi: RcsimApi = {
+      ...fake.api,
+      catalog: {
+        ...fake.api.catalog,
+        list: () => Promise.reject(new Error('Catalog read failed while dirty')),
+      },
+    };
+    render(<WorkbenchRoot api={failingCatalogWhileDirtyApi} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workbench-disk-read-error')).toBeTruthy();
+    });
+    expect(screen.getByTestId('workbench-disk-read-error').textContent).toContain(
+      'Failed to load catalog: Catalog read failed while dirty',
+    );
+    expect(useWorkbenchStore.getState().loadError).toBeNull();
+    expect((screen.getByRole('button', { name: /^Save/ }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+    expect(screen.queryByRole('button', { name: 'Start from the example car' })).toBeNull();
     expect(useWorkbenchStore.getState().car.name).toBe('Dirty Car Before Read Failure');
+  });
+
+  it('drops stale in-flight writeCar and load results after switching projects (Round 4 Item 2)', async () => {
+    const projectA = createFakeRcsimApi({ dir: '/projects/car-a' });
+    const projectB = createFakeRcsimApi({ dir: '/projects/car-b' });
+    const carB: Car = { ...exampleCar, name: 'Project B Car' };
+    await projectB.api.project.writeCar(carB);
+
+    let resolveWriteA!: () => void;
+    let resolveReadCarA!: () => void;
+    let interceptReadCarA = false;
+
+    const delayedApiA: RcsimApi = {
+      ...projectA.api,
+      project: {
+        ...projectA.api.project,
+        writeCar: async (carToWrite: Car) => {
+          await new Promise<void>((resolve) => {
+            resolveWriteA = resolve;
+          });
+          await projectA.api.project.writeCar(carToWrite);
+        },
+        readCar: async () => {
+          if (interceptReadCarA) {
+            await new Promise<void>((resolve) => {
+              resolveReadCarA = resolve;
+            });
+          }
+          return projectA.api.project.readCar();
+        },
+      },
+    };
+
+    const { unmount } = render(<WorkbenchRoot api={delayedApiA} />);
+    await waitFor(() => {
+      expect(useWorkbenchStore.getState().loaded).toBe(true);
+    });
+
+    // Edit in project A and start saving (writeCar stays pending)
+    fireEvent.change(screen.getByLabelText('Car name'), {
+      target: { value: 'Saving In Project A' },
+    });
+    let savePromiseA!: Promise<boolean>;
+    act(() => {
+      savePromiseA = useWorkbenchStore.getState().saveCar();
+    });
+    expect(useWorkbenchStore.getState().saving).toBe(true);
+
+    // Also start a stale load for project A whose readCar stays pending
+    interceptReadCarA = true;
+    let staleLoadPromiseA!: Promise<void>;
+    act(() => {
+      staleLoadPromiseA = useWorkbenchStore.getState().load(delayedApiA, { force: true });
+    });
+    await waitFor(() => {
+      expect(typeof resolveReadCarA).toBe('function');
+    });
+
+    // Switch to project B before project A's writeCar or load resolves
+    unmount();
+    render(<WorkbenchRoot api={projectB.api} />);
+    await waitFor(() => {
+      expect(useWorkbenchStore.getState().projectDir).toBe('/projects/car-b');
+      expect(useWorkbenchStore.getState().car.name).toBe('Project B Car');
+    });
+    const canonicalB = useWorkbenchStore.getState().lastSavedCarJson;
+
+    // Now resolve project A's in-flight writeCar and load
+    await act(async () => {
+      resolveWriteA();
+      resolveReadCarA();
+      await savePromiseA;
+      await staleLoadPromiseA;
+    });
+
+    // Project B's state must be untouched by project A's late completions
+    expect(useWorkbenchStore.getState().projectDir).toBe('/projects/car-b');
+    expect(useWorkbenchStore.getState().car.name).toBe('Project B Car');
+    expect(useWorkbenchStore.getState().lastSavedCarJson).toBe(canonicalB);
+    expect(useWorkbenchStore.getState().saveStatus).toBeNull();
+    expect(screen.queryByTestId('workbench-save-status')).toBeNull();
   });
 });
