@@ -75,6 +75,10 @@ size_t HardwareSerial::write(const uint8_t* data, size_t size) {
   runtime().serial(data, size);
   return size;
 }
+int HardwareSerial::availableForWrite() {
+  runtime().call();
+  return static_cast<int>(runtime().serialTxAvailable());
+}
 int HardwareSerial::available() {
   runtime().call();
   return static_cast<int>(runtime().serialRx().size());

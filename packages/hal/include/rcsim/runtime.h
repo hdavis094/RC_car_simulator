@@ -37,6 +37,9 @@ class Runtime {
   bool read(uint8_t pin);
   void pwm(uint8_t pin, uint32_t periodUs, uint32_t pulseUs);
   void serial(const uint8_t* data, size_t size);
+  // Room left in the current tick's serial TX frame before serial() must wait.
+  size_t serialTxAvailable() const { return kSerialTxFrame - serialCount_; }
+  static constexpr size_t kSerialTxFrame = 16384;
   std::deque<uint8_t>& serialRx() { return rx_; }
   JsonVariantConst config() const { return config_["message"]; }
   JsonVariantConst reading(size_t device) const { return readings_[device]; }

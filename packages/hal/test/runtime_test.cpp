@@ -30,3 +30,28 @@ TEST_CASE("full serial frames build and encode within a fraction of the stall ti
   CHECK(sim.done[0]["message"]["serialTx"].size() == 16384);
   CHECK(sim.done[1]["message"]["serialTx"].size() == 1);
 }
+TEST_CASE("Serial.availableForWrite reports room left in the tick's TX frame without waiting") {
+  hal_test::FakeSim sim;
+  sim.start();
+  CHECK(Serial.availableForWrite() == 16384);
+  Serial.write("hello\r\n");
+  CHECK(Serial.availableForWrite() == 16384 - 7);
+  Bytes bytes(16384 - 7, 'x');
+  const auto before = micros();
+  Serial.write(bytes.data(), bytes.size());
+  CHECK(Serial.availableForWrite() == 0);
+  // Querying never waits: no tick boundary was crossed.
+  CHECK(micros() - before < 1000);
+  CHECK(sim.done.empty());
+  // The next tick starts with an empty frame.
+  delay(1);
+  REQUIRE(sim.done.size() == 1);
+  CHECK(sim.done[0]["message"]["serialTx"].size() == 16384);
+  sim.start();
+  CHECK(Serial.availableForWrite() == 16384);
+  // Print's Arduino-ESP32 default is 0 ("unknown") for other writers.
+  struct Sink : Print {
+    size_t write(const uint8_t*, size_t size) override { return size; }
+  } sink;
+  CHECK(sink.availableForWrite() == 0);
+}

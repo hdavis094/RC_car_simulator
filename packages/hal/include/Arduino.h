@@ -180,6 +180,9 @@ class Print {
  public:
   virtual ~Print() = default;
   virtual size_t write(const uint8_t* data, size_t size) = 0;
+  // Arduino-ESP32 3.2.1 Print default: 0 means "unknown". NetworkClient keeps it.
+  // https://github.com/espressif/arduino-esp32/blob/3.2.1/cores/esp32/Print.h
+  virtual int availableForWrite() { return 0; }
   size_t write(uint8_t b) { return write(&b, 1); }
   size_t write(const char* s) {
     return s ? write(reinterpret_cast<const uint8_t*>(s), std::strlen(s)) : 0;
@@ -242,6 +245,11 @@ class HardwareSerial : public Stream {
   using Print::write;
   using Stream::read;
   size_t write(const uint8_t* data, size_t size) override;
+  // Bytes a write can take without waiting: what is left of this tick's serial
+  // TX frame. Past it, write() waits for the tick to end, as a full UART ring
+  // waits for drain on the board.
+  // https://github.com/espressif/arduino-esp32/blob/3.2.1/cores/esp32/HardwareSerial.cpp#L519-L521
+  int availableForWrite() override;
   int available() override;
   int read() override;
   int peek() override;

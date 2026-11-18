@@ -205,7 +205,7 @@ void Runtime::pwm(uint8_t pin, uint32_t period, uint32_t pulse) {
 void Runtime::serial(const uint8_t* data, size_t size) {
   auto a = done_["message"]["serialTx"].as<JsonArray>();
   for (size_t i = 0; i < size; ++i) {
-    if (serialCount_ == 16384) {
+    if (serialCount_ == kSerialTxFrame) {
       advance(end_ - now_);
       a = done_["message"]["serialTx"].as<JsonArray>();
     }
