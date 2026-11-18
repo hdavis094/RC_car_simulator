@@ -1,6 +1,6 @@
 # P1-F — app: 3D World environment
 
-Status: in-progress
+Status: in-review
 Agent: Antigravity
 Branch: ws/p1-f
 Depends on: P1-A
@@ -40,12 +40,12 @@ The 3D World shows a run as it happens, lets the user lay out obstacles, and hos
 
 ## Acceptance
 
-- [ ] `pnpm verify` passes
-- [ ] component tests, fed from a real `sim-core` `Run` with a scripted `ActuatorSource` (running in the test, not the renderer):
-  - [ ] the car mesh pose matches snapshot poses
-  - [ ] a placed cone appears in the next world-edit save payload with the right position and yaw
-- [ ] keyboard input while in manual produces `drive` commands with the expected throttle and steer signs, sent through a fake control IPC
-- [ ] a Playwright screenshot of the oval with three cones is attached to the Handoff
+- [x] `pnpm verify` passes
+- [x] component tests, fed from a real `sim-core` `Run` with a scripted `ActuatorSource` (running in the test, not the renderer):
+  - [x] the car mesh pose matches snapshot poses
+  - [x] a placed cone appears in the next world-edit save payload with the right position and yaw
+- [x] keyboard input while in manual produces `drive` commands with the expected throttle and steer signs, sent through a fake control IPC
+- [x] a Playwright screenshot of the oval with three cones is attached to the Handoff
 
 ## Out of scope
 
@@ -54,6 +54,19 @@ Run wiring in the main process (P2-01), track editing, the camera sensor, networ
 ## Handoff
 
 - **Built**:
+  - `apps/desktop/src/renderer/world/track-mesh.ts`: centripetal Catmull-Rom & polyline track sampling, track surface ribbon `BufferGeometry`, inner/outer wall segments, start/finish line geometry, and built-in fallback `oval` and `technical` track data when `main`'s P1-D `worldEdit.loadTrack` stub returns `not-implemented`.
+  - `apps/desktop/src/renderer/world/interpolation.ts`: `lerpVec3`, `slerpQuat`, `interpolateSnapshots`, and `SnapshotInterpolator` for smooth 60 Hz display between the last two `StateSnapshot`s.
+  - `apps/desktop/src/renderer/world/scene-data.ts`: scene data builder (`buildWorldSceneData`), camera transforms (`follow`, `orbit`, `top-down`), ground plane raycasting (`screenToGroundPoint`), and Three.js scene graph synchronization (`syncThreeSceneGraph` for `car-body`, `wheel:front-left`..`wheel:rear-right`, `track-surface`, `track-walls`, `track-start-finish`, `obstacle:<id>`, `sensor-beam:<id>:<i>`, `beam-hit:<id>:<i>`).
+  - `apps/desktop/src/renderer/world/driving-controller.ts`: 50 Hz (`20 ms`) keyboard (`WASD`/arrow keys) and Gamepad API (`navigator.getGamepads()`) input sampling, `Space` E-stop detection, and editable target filtering.
+  - `apps/desktop/src/renderer/world/NetworkConsole.tsx`: control-protocol JSON-lines console with live telemetry strip (`mode`, `throttle`, `steer`, `ToF` distances, `battery`), pretty-printed incoming JSON messages, and raw line sender via `api.control.sendRaw`.
+  - `apps/desktop/src/renderer/world/WorldScene.tsx`: `@react-three/fiber` `<Canvas>` 3D scene with `useFrame` 60 Hz snapshot interpolation, track/car/wheels/obstacles/sensor-beams rendering, SVG fallback for headless jsdom tests, and interactive ground/obstacle/rotation-handle pointer layer.
+  - `apps/desktop/src/renderer/world/WorldRoot.tsx`: full 3D World environment integrating run controls, driving controls (ADR 0004 control IPC), obstacle palette & layout save/load (`worlds/*.json`), camera selector, and shared bottom dock integration (reusing `BottomPanel` or portaling the `Network Console` tab into `App`'s outer `BottomPanel` when hosted inside `App`).
+  - `apps/desktop/src/renderer/world/WorldRoot.test.tsx`: component tests fed from a real `sim-core` `Run` with a scripted `ActuatorSource`, obstacle placement/rotation/save payload verification, 50 Hz manual driving & E-stop control IPC tests, and sensor beam & Network Console tests.
+  - `apps/desktop/src/renderer/world/world.playwright.ts` & `apps/desktop/src/renderer/world/oval-three-cones.png`: Playwright e2e test and screenshot of the oval track with three cones (`![Oval track with three cones](../../apps/desktop/src/renderer/world/oval-three-cones.png)`).
 - **Deviations from the brief**:
+  - When hosted inside `App` with an open project (`App.tsx` renders `<BottomPanel />` without passing `tabs` from `WorldRoot`), `WorldRoot` portals the `Network Console` tab and panel into `App`'s shared `BottomPanel` so there is a single `[aria-label="Shared bottom panel"]` across the shell; when rendered standalone in component tests, `WorldRoot` mounts `BottomPanel` directly with `createWorldDockTabs()`.
+  - While `main`'s `worldEdit` handlers are P1-A `not-implemented` stubs (until P1-D/P2-01 merge), `WorldRoot` falls back to built-in track definitions for `oval`/`technical` and `api.project.writeFile`/`readFile` for `worlds/*.json` when `worldEdit` rejects with `not-implemented`.
 - **Contract change requests**:
+  - None.
 - **Open questions**:
+  - None.
