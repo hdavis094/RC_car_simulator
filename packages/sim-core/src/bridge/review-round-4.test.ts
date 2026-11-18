@@ -81,7 +81,8 @@ describe('startup has its own deadline', () => {
     const err = await source.start(setup).catch((e: unknown) => e);
     expect(err).toMatchObject({ end: { kind: 'stalled' } });
     const afterMs = (err as { end: { afterMs: number } }).end.afterMs;
-    expect(afterMs).toBeGreaterThanOrEqual(300);
+    // Node timers may fire ~1 ms early relative to performance.now().
+    expect(afterMs).toBeGreaterThanOrEqual(298);
     expect(afterMs).toBeLessThan(5000);
     await source.stop();
   });

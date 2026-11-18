@@ -107,7 +107,8 @@ describe('a firmware that misbehaves', () => {
     const end = (err as ActuatorSourceEnded).end;
     expect(end.kind).toBe('stalled');
     // the real elapsed time since spawn, not the nominal timeout
-    expect((end as { afterMs: number }).afterMs).toBeGreaterThanOrEqual(300);
+    // Node timers may fire ~1 ms early relative to performance.now().
+    expect((end as { afterMs: number }).afterMs).toBeGreaterThanOrEqual(298);
     expect((end as { afterMs: number }).afterMs).toBeLessThan(5000);
   });
 
