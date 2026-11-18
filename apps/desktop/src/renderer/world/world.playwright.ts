@@ -37,7 +37,18 @@ test.beforeAll(async () => {
   app = await electron.launch({
     executablePath,
     env,
-    args: [...(process.platform === 'linux' ? ['--no-sandbox'] : []), desktop],
+    args: [
+      ...(process.platform === 'linux'
+        ? [
+            '--no-sandbox',
+            process.env['DISPLAY'] ? '--ozone-platform=x11' : '--ozone-platform=headless',
+          ]
+        : []),
+      '--use-gl=angle',
+      '--use-angle=swiftshader',
+      '--enable-unsafe-swiftshader',
+      desktop,
+    ],
   });
 });
 
@@ -76,11 +87,24 @@ test('renders the 3D World oval track WebGL canvas, places three cones, saves wo
   await expect(page.getByRole('heading', { name: '3D World' })).toBeVisible();
   const viewport = page.getByTestId('world-viewport');
   await expect(viewport).toBeVisible();
-  // Wait on the deterministic R3F ready signal instead of waitForTimeout
-  await expect(viewport).toHaveAttribute('data-ready', 'true');
 
-  // Switch camera to top-down view, select Cone tool, and place three cones at exact world coordinates
-  // projected through the actual viewport aspect ratio (not tuned to a specific window size)
+  // Wait for the viewport ready state to settle ('true' or 'fallback') and fail with a clear message if fallback rendered
+  await expect.poll(async () => await viewport.getAttribute('data-ready')).not.toBe('false');
+  const readyState = await viewport.getAttribute('data-ready');
+  if (readyState === 'fallback' || (await page.getByTestId('webgl-unavailable').count()) > 0) {
+    throw new Error(
+      `Expected 3D World WebGL scene to render (data-ready="true"), but the non-WebGL fallback was rendered instead (data-ready="${String(readyState)}").`,
+    );
+  }
+  expect(readyState).toBe('true');
+
+  // Read the car pose from the rendered scene rather than hard-coding it
+  const carX = Number(await viewport.getAttribute('data-car-x'));
+  const carZ = Number(await viewport.getAttribute('data-car-z'));
+  expect(Number.isFinite(carX)).toBe(true);
+  expect(Number.isFinite(carZ)).toBe(true);
+
+  // Switch camera to top-down view, select Cone tool, and place three cones ahead of the car's start pose
   await page.getByTestId('camera-mode-top-down').click();
   await page.getByTestId('palette-tool-cone').click();
 
@@ -89,14 +113,14 @@ test('renders the 3D World oval track WebGL canvas, places three cones, saves wo
   const trackMesh = generateTrackMeshData(BUILTIN_OVAL_TRACK);
   const topDownCamera = computeCameraTransform(
     'top-down',
-    { position: [2.4, 0, 0.75], rotation: [0, 0, 0, 1] },
+    { position: [carX, 0, carZ], rotation: [0, 0, 0, 1] },
     trackMesh,
   );
 
   const targetConePositions = [
-    { x: 2.4, z: -0.6 },
-    { x: 2.4, z: -1.6 },
-    { x: 2.4, z: -2.6 },
+    { x: carX, z: carZ - 1.35 },
+    { x: carX, z: carZ - 2.35 },
+    { x: carX, z: carZ - 3.35 },
   ] as const;
 
   for (const pos of targetConePositions) {
@@ -139,55 +163,106 @@ test('renders the 3D World oval track WebGL canvas, places three cones, saves wo
     expect(savedJson.obstacles[i]!.positionM.z).toBeCloseTo(targetConePositions[i]!.z, 1);
   }
 
-  // Wait for two animation frames so the Orbit camera frame is painted to the WebGL drawing buffer,
-  // then assert the WebGL canvas is rendered and contains non-blank 3D scene pixels
+  // Wait for two animation frames so the Orbit camera frame and live marker projections are painted,
+  // then sample pixels at each projected cone position and assert orange cone colour (#f97316) is present
   const canvasStats = await page.evaluate(async () => {
     await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
     const canvas = document.querySelector(
       '[data-testid="world-viewport"] canvas',
     ) as HTMLCanvasElement | null;
     if (!canvas || canvas.width === 0 || canvas.height === 0) {
-      return { hasCanvas: false, width: 0, height: 0, nonZeroPixels: 0, distinctColors: 0 };
+      return {
+        hasCanvas: false,
+        width: 0,
+        height: 0,
+        distinctColors: 0,
+        coneHits: [] as Array<{ id: string; orangePixels: number; maxRed: number }>,
+      };
     }
+
     const sampleCanvas = document.createElement('canvas');
-    sampleCanvas.width = 64;
-    sampleCanvas.height = 64;
+    sampleCanvas.width = canvas.width;
+    sampleCanvas.height = canvas.height;
     const ctx = sampleCanvas.getContext('2d');
     if (!ctx) {
       return {
         hasCanvas: true,
         width: canvas.width,
         height: canvas.height,
-        nonZeroPixels: 0,
         distinctColors: 0,
+        coneHits: [] as Array<{ id: string; orangePixels: number; maxRed: number }>,
       };
     }
-    ctx.drawImage(canvas, 0, 0, 64, 64);
-    const { data } = ctx.getImageData(0, 0, 64, 64);
-    let nonZeroPixels = 0;
+
+    ctx.drawImage(canvas, 0, 0, canvas.width, canvas.height);
+    const { data, width, height } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
     const colors = new Set<string>();
-    for (let i = 0; i < data.length; i += 4) {
+    const stride = Math.max(1, Math.floor((width * height) / 4096)) * 4;
+    for (let i = 0; i < data.length; i += stride) {
       const r = data[i] ?? 0;
       const g = data[i + 1] ?? 0;
       const b = data[i + 2] ?? 0;
-      const a = data[i + 3] ?? 0;
-      if (r + g + b + a > 0) nonZeroPixels++;
       colors.add(`${r >> 3},${g >> 3},${b >> 3}`);
     }
+
+    const coneIds = ['cone-1', 'cone-2', 'cone-3'];
+    const coneHits: Array<{ id: string; orangePixels: number; maxRed: number }> = [];
+
+    for (const id of coneIds) {
+      const marker = document.querySelector(`[data-testid="obstacle-marker-${id}"]`);
+      const u = Number(marker?.getAttribute('data-u') ?? NaN);
+      const v = Number(marker?.getAttribute('data-v') ?? NaN);
+      if (!Number.isFinite(u) || !Number.isFinite(v)) {
+        coneHits.push({ id, orangePixels: 0, maxRed: 0 });
+        continue;
+      }
+      const cx = Math.round(u * width);
+      const cy = Math.round(v * height);
+      const radius = Math.max(14, Math.round(Math.min(width, height) * 0.03));
+      let orangePixels = 0;
+      let maxRed = 0;
+
+      for (let dy = -radius; dy <= radius; dy++) {
+        const py = cy + dy;
+        if (py < 0 || py >= height) continue;
+        for (let dx = -radius; dx <= radius; dx++) {
+          const px = cx + dx;
+          if (px < 0 || px >= width) continue;
+          const idx = (py * width + px) * 4;
+          const r = data[idx] ?? 0;
+          const g = data[idx + 1] ?? 0;
+          const b = data[idx + 2] ?? 0;
+          if (r > maxRed) maxRed = r;
+          // Traffic cone mesh uses warm orange (#f97316 shaded by directional light): R >> G > B
+          if (r > 130 && r > g + 25 && g > b + 10) {
+            orangePixels++;
+          }
+        }
+      }
+      coneHits.push({ id, orangePixels, maxRed });
+    }
+
     return {
       hasCanvas: true,
       width: canvas.width,
       height: canvas.height,
-      nonZeroPixels,
       distinctColors: colors.size,
+      coneHits,
     };
   });
 
   expect(canvasStats.hasCanvas).toBe(true);
   expect(canvasStats.width).toBeGreaterThan(200);
   expect(canvasStats.height).toBeGreaterThan(200);
-  expect(canvasStats.nonZeroPixels).toBeGreaterThan(1000);
-  expect(canvasStats.distinctColors).toBeGreaterThan(4);
+  expect(canvasStats.distinctColors).toBeGreaterThan(6);
+  expect(canvasStats.coneHits).toHaveLength(3);
+  for (const hit of canvasStats.coneHits) {
+    expect(
+      hit.orangePixels,
+      `Expected warm orange cone pixels at projected screen position of ${hit.id} (maxRed=${hit.maxRed})`,
+    ).toBeGreaterThan(0);
+  }
 
   // Capture the 3D World environment element (excludes the outer app header containing the local temp path)
   const worldSection = page.getByRole('region', { name: '3D World environment' });

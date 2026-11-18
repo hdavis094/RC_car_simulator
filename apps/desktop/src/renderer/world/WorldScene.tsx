@@ -1,5 +1,6 @@
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import type { ObstacleType } from '@rcsim/schema';
+import type { Pose, StateSnapshot } from '@rcsim/sim-core/api';
 import {
   Component,
   useEffect,
@@ -19,6 +20,7 @@ import {
   computeCameraTransform,
   extractRenderedBeams,
   groundPointToViewportUV,
+  quatToYawDeg,
   screenToGroundPoint,
   type CameraMode,
   type OrbitCameraState,
@@ -28,39 +30,38 @@ import {
 } from './scene-data.ts';
 import { buildTrackSurfaceGeometry } from './track-mesh.ts';
 
-let cachedWebGLSupport: boolean | undefined;
-
 export function canUseWebGL(): boolean {
-  if (cachedWebGLSupport !== undefined) return cachedWebGLSupport;
   if (typeof document === 'undefined' || typeof window === 'undefined') {
-    cachedWebGLSupport = false;
-    return false;
-  }
-  if (typeof ResizeObserver === 'undefined') {
-    cachedWebGLSupport = false;
     return false;
   }
   try {
     const canvas = document.createElement('canvas');
     const gl = canvas.getContext('webgl2') ?? canvas.getContext('webgl');
     if (!gl) {
-      cachedWebGLSupport = false;
       return false;
     }
-    gl.getExtension('WEBGL_lose_context')?.loseContext();
-    cachedWebGLSupport = true;
+    if (typeof gl.getExtension === 'function') {
+      gl.getExtension('WEBGL_lose_context')?.loseContext();
+    }
     return true;
   } catch {
-    cachedWebGLSupport = false;
     return false;
   }
 }
 
 class CanvasErrorBoundary extends Component<
-  { readonly children: ReactNode; readonly fallback: ReactNode },
+  {
+    readonly children: ReactNode;
+    readonly fallback: ReactNode;
+    readonly onError?: () => void;
+  },
   { readonly hasError: boolean }
 > {
-  constructor(props: { readonly children: ReactNode; readonly fallback: ReactNode }) {
+  constructor(props: {
+    readonly children: ReactNode;
+    readonly fallback: ReactNode;
+    readonly onError?: () => void;
+  }) {
     super(props);
     this.state = { hasError: false };
   }
@@ -70,7 +71,7 @@ class CanvasErrorBoundary extends Component<
   }
 
   override componentDidCatch(_error: Error, _info: ErrorInfo): void {
-    // Fallback rendered when environment cannot initialize WebGL.
+    this.props.onError?.();
   }
 
   override render(): ReactNode {
@@ -81,7 +82,6 @@ class CanvasErrorBoundary extends Component<
 
 function buildRampGeometry(): THREE.BufferGeometry {
   const { halfWidth: w, halfLength: l, height: h } = OBSTACLE_DIMENSIONS.ramp;
-  // Wedge rising from y=0 at +l to y=h at -l
   const positions = new Float32Array([
     // Bottom face
     -w,
@@ -187,19 +187,16 @@ function ObstacleMesh({
     >
       {obstacle.type === 'cone' && (
         <group>
-          {/* Traffic cone base */}
           <mesh position={[0, 0.01, 0]}>
             <boxGeometry args={[0.16, 0.02, 0.16]} />
             <meshStandardMaterial color="#ea580c" roughness={0.5} />
           </mesh>
-          {/* Main cone body */}
           <mesh position={[0, OBSTACLE_DIMENSIONS.cone.height / 2, 0]}>
             <coneGeometry
               args={[OBSTACLE_DIMENSIONS.cone.radius * 1.15, OBSTACLE_DIMENSIONS.cone.height, 20]}
             />
             <meshStandardMaterial color="#f97316" roughness={0.4} />
           </mesh>
-          {/* Reflective white collar */}
           <mesh position={[0, OBSTACLE_DIMENSIONS.cone.height * 0.58, 0]}>
             <cylinderGeometry
               args={[
@@ -252,7 +249,6 @@ function ObstacleMesh({
             <ringGeometry args={[0.18, 0.23, 28]} />
             <meshBasicMaterial color="#84ddbf" side={THREE.DoubleSide} />
           </mesh>
-          {/* Forward rotation handle along -Z */}
           <mesh position={[0, 0.02, -0.32]}>
             <sphereGeometry args={[0.04, 14, 14]} />
             <meshBasicMaterial color="#84ddbf" />
@@ -319,7 +315,6 @@ class SensorBeamsPool {
         this.#slots.set(beam.key, slot);
       }
 
-      // Update endpoints in-place without allocating new BufferGeometry
       slot.positionAttr.setXYZ(0, beam.origin[0], beam.origin[1], beam.origin[2]);
       slot.positionAttr.setXYZ(1, beam.endPoint[0], beam.endPoint[1], beam.endPoint[2]);
       slot.positionAttr.needsUpdate = true;
@@ -355,12 +350,54 @@ class SensorBeamsPool {
   }
 }
 
+export type SceneRunMode = 'idle' | 'running' | 'paused';
+
+export interface ProjectedMarkerPose {
+  readonly id: string;
+  readonly u: number;
+  readonly v: number;
+  readonly visible: boolean;
+  readonly position: readonly [number, number, number];
+  readonly yawDeg: number;
+}
+
+/** Projects a 3D world point `[x, y, z]` through a live Three.js `Camera` into normalized `[0..1, 0..1]` UV coordinates. */
+export function projectPointWithCamera(
+  position: readonly [number, number, number],
+  camera: THREE.Camera,
+): { readonly u: number; readonly v: number; readonly visible: boolean } {
+  const projected = new THREE.Vector3(position[0], position[1], position[2]).project(camera);
+  return {
+    u: (projected.x + 1) * 0.5,
+    v: (-projected.y + 1) * 0.5,
+    visible: projected.z >= -1 && projected.z <= 1,
+  };
+}
+
+export function applyOverlayMarkerElementPose(el: HTMLElement, pose: ProjectedMarkerPose): void {
+  el.style.left = `${Math.min(96, Math.max(4, pose.u * 100))}%`;
+  el.style.top = `${Math.min(96, Math.max(4, pose.v * 100))}%`;
+  el.setAttribute('data-u', pose.u.toFixed(4));
+  el.setAttribute('data-v', pose.v.toFixed(4));
+  el.setAttribute('data-position-x', String(pose.position[0]));
+  el.setAttribute('data-position-z', String(pose.position[2]));
+  el.setAttribute('data-yaw-deg', String(pose.yawDeg));
+}
+
 export interface WorldR3FSceneProps {
   readonly sceneData: WorldSceneData;
   readonly cameraMode: CameraMode;
   readonly orbitState: OrbitCameraState;
   readonly interpolator: SnapshotInterpolator;
+  /**
+   * Controls whether snapshots or editor `sceneData` drive poses:
+   * - `'running'` (default when snapshots exist): car, wheels, obstacles, and beams follow `interpolator.sample()`
+   * - `'paused'`: car, wheels, and beams stay at the last snapshot; obstacles follow `sceneData.obstacles` (editor `worldFile`)
+   * - `'idle'`: car, wheels, obstacles, and beams follow `sceneData` (track start pose + editor `worldFile`)
+   */
+  readonly runMode?: SceneRunMode;
   readonly onCameraReady?: (camera: THREE.Camera) => void;
+  readonly onProjectMarkers?: (markers: readonly ProjectedMarkerPose[]) => void;
 }
 
 export function WorldR3FScene({
@@ -368,7 +405,9 @@ export function WorldR3FScene({
   cameraMode,
   orbitState,
   interpolator,
+  runMode,
   onCameraReady,
+  onProjectMarkers,
 }: WorldR3FSceneProps): ReactNode {
   const { camera } = useThree();
   const carGroupRef = useRef<THREE.Group>(null);
@@ -438,13 +477,20 @@ export function WorldR3FScene({
     };
   }, [centreLineObject, leftBorderObject, rightBorderObject]);
 
-  const applySampledSnapshot = (sampled = interpolator.sample(performance.now())): void => {
-    const activePose = sampled ? sampled.car.pose : sceneData.carPose;
+  const applyFrameState = (sampled: StateSnapshot | null): void => {
+    const effectiveMode: SceneRunMode = runMode ?? (sampled ? 'running' : 'idle');
+
+    // 1. Car and wheels: use snapshot when running or paused (if a snapshot exists); use sceneData when idle
+    const useSnapshotForCar =
+      (effectiveMode === 'running' || effectiveMode === 'paused') && sampled !== null;
+    const activeCarPose: Pose = useSnapshotForCar ? sampled.car.pose : sceneData.carPose;
+
     if (carGroupRef.current) {
-      carGroupRef.current.position.set(...activePose.position);
-      carGroupRef.current.quaternion.set(...activePose.rotation);
+      carGroupRef.current.position.set(...activeCarPose.position);
+      carGroupRef.current.quaternion.set(...activeCarPose.rotation);
     }
-    if (sampled) {
+
+    if (useSnapshotForCar) {
       sampled.car.wheels.forEach((w, idx) => {
         const ref = wheelGroupRefs.current[idx];
         if (ref) {
@@ -452,37 +498,78 @@ export function WorldR3FScene({
           ref.quaternion.set(...w.rotation);
         }
       });
-      for (const obs of sampled.obstacles) {
-        const obsGroup = obstacleGroupRefs.current.get(obs.id);
-        if (obsGroup) {
-          obsGroup.position.set(...obs.pose.position);
-          obsGroup.quaternion.set(...obs.pose.rotation);
-        }
-      }
       beamsPool.sync(extractRenderedBeams(sampled));
     } else {
+      sceneData.wheels.forEach((w, idx) => {
+        const ref = wheelGroupRefs.current[idx];
+        if (ref) {
+          ref.position.set(...w.position);
+          ref.quaternion.set(...w.rotation);
+        }
+      });
       beamsPool.sync(sceneData.sensorBeams);
     }
 
+    // 2. Obstacles: snapshot poses drive obstacles ONLY while running.
+    // While paused or idle, the editor's worldFile (sceneData.obstacles) poses win.
+    const useSnapshotForObstacles =
+      effectiveMode === 'running' && sampled !== null && sampled.obstacles.length > 0;
+    const activeObstacles: readonly {
+      readonly id: string;
+      readonly pose: Pose;
+      readonly yawDeg: number;
+    }[] = useSnapshotForObstacles
+      ? sampled.obstacles.map((o) => ({
+          id: o.id,
+          pose: o.pose,
+          yawDeg: quatToYawDeg(o.pose.rotation),
+        }))
+      : sceneData.obstacles;
+
+    for (const obs of activeObstacles) {
+      const obsGroup = obstacleGroupRefs.current.get(obs.id);
+      if (obsGroup) {
+        obsGroup.position.set(...obs.pose.position);
+        obsGroup.quaternion.set(...obs.pose.rotation);
+      }
+    }
+
+    // 3. Camera transform
     const camTransform = computeCameraTransform(
       cameraMode,
-      activePose,
+      activeCarPose,
       sceneData.trackMesh,
       orbitState,
     );
     camera.position.set(...camTransform.position);
     camera.up.set(...camTransform.up);
     camera.lookAt(...camTransform.target);
-    camera.updateMatrixWorld();
+    camera.updateProjectionMatrix();
+    camera.updateMatrixWorld(true);
+
+    // 4. Project obstacle marker positions through the live R3F camera (`camera.project`)
+    if (onProjectMarkers) {
+      const projectedMarkers: ProjectedMarkerPose[] = activeObstacles.map((obs) => {
+        const uv = projectPointWithCamera(obs.pose.position, camera);
+        return {
+          id: obs.id,
+          u: uv.u,
+          v: uv.v,
+          visible: uv.visible,
+          position: obs.pose.position,
+          yawDeg: obs.yawDeg,
+        };
+      });
+      onProjectMarkers(projectedMarkers);
+    }
   };
 
   useEffect(() => {
-    applySampledSnapshot();
+    applyFrameState(interpolator.sample(performance.now()));
   });
 
-  // 60 Hz render loop: interpolate between the last two snapshots and update car, wheels, obstacles, beams, and camera in place
   useFrame(() => {
-    applySampledSnapshot(interpolator.sample(performance.now()));
+    applyFrameState(interpolator.sample(performance.now()));
   });
 
   const { bodyWidthM, bodyHeightM, bodyLengthM, bodyClearanceM, wheelRadiusM, wheelWidthM } =
@@ -562,17 +649,14 @@ export function WorldR3FScene({
           sceneData.carPose.rotation[3],
         ]}
       >
-        {/* Main chassis */}
         <mesh position={[0, bodyClearanceM + boxHeight * 0.38, 0]}>
           <boxGeometry args={[bodyWidthM, boxHeight * 0.72, bodyLengthM]} />
           <meshStandardMaterial color="#10b981" roughness={0.35} />
         </mesh>
-        {/* Cabin canopy */}
         <mesh position={[0, bodyClearanceM + boxHeight * 0.82, 0.03]}>
           <boxGeometry args={[bodyWidthM * 0.78, boxHeight * 0.36, bodyLengthM * 0.48]} />
           <meshStandardMaterial color="#047857" roughness={0.3} />
         </mesh>
-        {/* Front nose bar (-Z is forward) */}
         <mesh position={[0, bodyClearanceM + boxHeight * 0.28, -bodyLengthM * 0.49]}>
           <boxGeometry args={[bodyWidthM * 0.9, boxHeight * 0.25, 0.03]} />
           <meshStandardMaterial color="#a7f3d0" />
@@ -632,6 +716,8 @@ export interface WorldSceneProps {
   readonly orbitState: OrbitCameraState;
   readonly onOrbitChange: (next: OrbitCameraState) => void;
   readonly interpolator: SnapshotInterpolator;
+  readonly runMode: SceneRunMode;
+  readonly active?: boolean;
   readonly editable: boolean;
   readonly activeTool: EditorTool;
   readonly selectedObstacleId: string | null;
@@ -656,6 +742,8 @@ export function WorldScene({
   orbitState,
   onOrbitChange,
   interpolator,
+  runMode,
+  active = true,
   editable,
   activeTool,
   selectedObstacleId,
@@ -667,7 +755,9 @@ export function WorldScene({
 }: WorldSceneProps): ReactNode {
   const viewportRef = useRef<HTMLDivElement>(null);
   const liveCameraRef = useRef<THREE.Camera | null>(null);
+  const markerElementRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const [canvasReady, setCanvasReady] = useState(false);
+  const [canvasErrored, setCanvasErrored] = useState(false);
   const [viewportSize, setViewportSize] = useState<{
     readonly width: number;
     readonly height: number;
@@ -684,9 +774,8 @@ export function WorldScene({
     | null
   >(null);
 
-  const webglAvailable = canUseWebGL();
+  const webglAvailable = useMemo(() => canUseWebGL(), []);
 
-  // Observe real viewport aspect ratio changes
   useEffect(() => {
     const el = viewportRef.current;
     if (!el) return;
@@ -708,10 +797,66 @@ export function WorldScene({
   }, []);
 
   const cameraTransform = useMemo(() => {
-    const sampled = interpolator.latest();
+    const sampled = runMode === 'idle' ? null : interpolator.latest();
     const activePose = sampled ? sampled.car.pose : sceneData.carPose;
     return computeCameraTransform(cameraMode, activePose, sceneData.trackMesh, orbitState);
-  }, [cameraMode, interpolator, orbitState, sceneData.carPose, sceneData.trackMesh]);
+  }, [cameraMode, interpolator, orbitState, runMode, sceneData.carPose, sceneData.trackMesh]);
+
+  const handleProjectMarkers = useMemo(
+    () =>
+      (markers: readonly ProjectedMarkerPose[]): void => {
+        for (const marker of markers) {
+          const el = markerElementRefs.current.get(marker.id);
+          if (el) {
+            applyOverlayMarkerElementPose(el, marker);
+          }
+        }
+      },
+    [],
+  );
+
+  // Also synchronize overlay markers whenever sceneData, cameraTransform, or viewportSize changes
+  useEffect(() => {
+    const el = viewportRef.current;
+    const rawRect = el?.getBoundingClientRect();
+    const width = rawRect && rawRect.width > 0 ? rawRect.width : viewportSize.width;
+    const height = rawRect && rawRect.height > 0 ? rawRect.height : viewportSize.height;
+    const aspect = width > 0 && height > 0 ? width / height : 4 / 3;
+
+    const liveCam = liveCameraRef.current;
+    if (liveCam && 'aspect' in liveCam) {
+      const persp = liveCam as THREE.PerspectiveCamera;
+      if (Math.abs(persp.aspect - aspect) > 1e-4) {
+        persp.aspect = aspect;
+        persp.updateProjectionMatrix();
+      }
+      persp.updateMatrixWorld(true);
+    }
+
+    for (const obs of sceneData.obstacles) {
+      const markerEl = markerElementRefs.current.get(obs.id);
+      if (!markerEl) continue;
+      const uv: { readonly u: number; readonly v: number; readonly visible: boolean } = liveCam
+        ? projectPointWithCamera(obs.pose.position, liveCam)
+        : {
+            ...groundPointToViewportUV(
+              { x: obs.pose.position[0], z: obs.pose.position[2] },
+              aspect,
+              cameraTransform,
+              48,
+            ),
+            visible: true,
+          };
+      applyOverlayMarkerElementPose(markerEl, {
+        id: obs.id,
+        u: uv.u,
+        v: uv.v,
+        visible: uv.visible,
+        position: obs.pose.position,
+        yawDeg: obs.yawDeg,
+      });
+    }
+  }, [cameraTransform, sceneData.obstacles, viewportSize]);
 
   const getViewportRect = (): {
     readonly left: number;
@@ -780,7 +925,6 @@ export function WorldScene({
       return;
     }
 
-    // Check if pointer is close to an existing obstacle in world coordinates
     if (point) {
       let nearestId: string | null = null;
       let nearestDist = 0.35;
@@ -840,7 +984,6 @@ export function WorldScene({
       if (!obs) return;
       const dx = point.x - obs.pose.position[0];
       const dz = point.z - obs.pose.position[2];
-      // Yaw 0 faces -Z; positive yaw turns left (-X)
       const yawDeg = Math.round(((Math.atan2(-dx, -dz) * 180) / Math.PI) * 10) / 10;
       onRotateObstacleTo(dragState.id, yawDeg, { dragging: true });
     }
@@ -879,11 +1022,16 @@ export function WorldScene({
       ? viewportSize.width / viewportSize.height
       : 4 / 3;
 
+  const readyAttr = !webglAvailable || canvasErrored ? 'fallback' : canvasReady ? 'true' : 'false';
+
   return (
     <div
       ref={viewportRef}
       data-testid="world-viewport"
-      data-ready={webglAvailable ? (canvasReady ? 'true' : 'false') : 'true'}
+      data-ready={readyAttr}
+      data-active={active ? 'true' : 'false'}
+      data-car-x={sceneData.carPose.position[0]}
+      data-car-z={sceneData.carPose.position[2]}
       style={{
         position: 'relative',
         flex: 1,
@@ -896,8 +1044,14 @@ export function WorldScene({
     >
       <div style={{ position: 'absolute', inset: 0 }}>
         {webglAvailable ? (
-          <CanvasErrorBoundary fallback={nonWebglFallback}>
+          <CanvasErrorBoundary
+            fallback={nonWebglFallback}
+            onError={() => {
+              setCanvasErrored(true);
+            }}
+          >
             <Canvas
+              frameloop={active ? 'always' : 'never'}
               gl={{ preserveDrawingBuffer: true, antialias: true }}
               camera={{ position: [...cameraTransform.position], fov: 48, near: 0.05, far: 500 }}
               onCreated={({ camera }) => {
@@ -910,9 +1064,11 @@ export function WorldScene({
                 cameraMode={cameraMode}
                 orbitState={orbitState}
                 interpolator={interpolator}
+                runMode={runMode}
                 onCameraReady={(cam) => {
                   liveCameraRef.current = cam;
                 }}
+                onProjectMarkers={handleProjectMarkers}
               />
             </Canvas>
           </CanvasErrorBoundary>
@@ -950,6 +1106,13 @@ export function WorldScene({
           return (
             <div
               key={obs.id}
+              ref={(el) => {
+                if (el) {
+                  markerElementRefs.current.set(obs.id, el);
+                } else {
+                  markerElementRefs.current.delete(obs.id);
+                }
+              }}
               data-testid={`obstacle-marker-${obs.id}`}
               data-obstacle-id={obs.id}
               data-obstacle-type={obs.type}

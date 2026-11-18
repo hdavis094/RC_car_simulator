@@ -2,10 +2,14 @@ import {
   parseCarLine,
   type ConnectionState,
   type Hello,
+  type Log,
   type Telemetry,
 } from '@rcsim/control-protocol/messages';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { parseIpcError, type RcsimApi } from '../../shared/ipc.ts';
+import { useSessionStore } from '../shell/session.ts';
+
+export const MAX_CONSOLE_ENTRIES = 500;
 
 export interface RawConsoleEntry {
   readonly id: number;
@@ -24,62 +28,160 @@ export function formatIncomingLine(line: string): string {
   }
 }
 
-export function NetworkConsole({
-  api = window.rcsim,
-  visible = true,
-}: {
+interface ControlLinkSnapshot {
+  readonly connectionState: ConnectionState;
+  readonly hello: Hello | null;
+  readonly telemetry: Telemetry | null;
+  readonly entries: readonly RawConsoleEntry[];
+}
+
+interface ControlTracker {
+  getSnapshot(): ControlLinkSnapshot;
+  subscribe(listener: () => void): () => void;
+  clearEntries(): void;
+}
+
+const trackersByApi = new WeakMap<RcsimApi, ControlTracker>();
+
+function ensureControlTracker(api: RcsimApi): ControlTracker {
+  const existing = trackersByApi.get(api);
+  if (existing) return existing;
+
+  let snapshot: ControlLinkSnapshot = {
+    connectionState: 'idle',
+    hello: null,
+    telemetry: null,
+    entries: [],
+  };
+  let nextId = 1;
+  const subscribers = new Set<() => void>();
+
+  const notify = (): void => {
+    for (const sub of subscribers) sub();
+  };
+
+  api.control.onState((nextState) => {
+    if (snapshot.connectionState === nextState) return;
+    snapshot = {
+      ...snapshot,
+      connectionState: nextState,
+    };
+    notify();
+  });
+
+  api.control.onMessage((msg: Hello | Telemetry | Log) => {
+    const nextConn: ConnectionState =
+      snapshot.connectionState === 'idle' || snapshot.connectionState === 'connecting'
+        ? 'connected'
+        : snapshot.connectionState;
+    snapshot = {
+      ...snapshot,
+      connectionState: nextConn,
+      telemetry: msg.t === 'telemetry' ? msg : snapshot.telemetry,
+      hello: msg.t === 'hello' ? msg : snapshot.hello,
+    };
+    notify();
+  });
+
+  api.control.onRaw((rawLine, direction) => {
+    const nextConn: ConnectionState =
+      snapshot.connectionState === 'idle' || snapshot.connectionState === 'connecting'
+        ? 'connected'
+        : snapshot.connectionState;
+    let nextTelemetry = snapshot.telemetry;
+    let nextHello = snapshot.hello;
+    if (direction === 'in') {
+      const parsed = parseCarLine(rawLine.trim());
+      if (parsed.ok) {
+        if (parsed.message.t === 'telemetry') nextTelemetry = parsed.message;
+        else if (parsed.message.t === 'hello') nextHello = parsed.message;
+      }
+    }
+    const entry: RawConsoleEntry = {
+      id: nextId++,
+      direction,
+      raw: rawLine.trim(),
+      formatted: direction === 'in' ? formatIncomingLine(rawLine) : rawLine.trim(),
+    };
+    const nextEntries =
+      snapshot.entries.length >= MAX_CONSOLE_ENTRIES
+        ? [...snapshot.entries.slice(snapshot.entries.length - MAX_CONSOLE_ENTRIES + 1), entry]
+        : [...snapshot.entries, entry];
+
+    snapshot = {
+      connectionState: nextConn,
+      hello: nextHello,
+      telemetry: nextTelemetry,
+      entries: nextEntries,
+    };
+    notify();
+  });
+
+  const tracker: ControlTracker = {
+    getSnapshot() {
+      return snapshot;
+    },
+    subscribe(listener) {
+      subscribers.add(listener);
+      return () => {
+        subscribers.delete(listener);
+      };
+    },
+    clearEntries() {
+      snapshot = {
+        ...snapshot,
+        entries: [],
+      };
+      notify();
+    },
+  };
+  trackersByApi.set(api, tracker);
+  return tracker;
+}
+
+/** Prime the per-API control tracker so connection state and raw history are captured from startup. */
+export function primeControlLinkTracker(api: RcsimApi): void {
+  ensureControlTracker(api);
+}
+
+const noopSubscribe = (): (() => void) => () => {};
+
+export interface NetworkConsoleProps {
   readonly api?: RcsimApi;
   readonly visible?: boolean;
-}): ReactNode {
-  const [connectionState, setConnectionState] = useState<ConnectionState>('idle');
-  const [hello, setHello] = useState<Hello | null>(null);
-  const [telemetry, setTelemetry] = useState<Telemetry | null>(null);
-  const [entries, setEntries] = useState<readonly RawConsoleEntry[]>([]);
+}
+
+export function NetworkConsole({ api = window.rcsim, visible }: NetworkConsoleProps): ReactNode {
+  const sessionVisible = useSessionStore((s) => s.panelOpen && s.panel === 'network');
+  const isVisible = visible ?? sessionVisible;
+
+  const tracker = ensureControlTracker(api);
+
+  // While hidden, use a no-op subscription and cached initial snapshot so incoming 50 Hz telemetry
+  // buffers in `tracker` without re-rendering `NetworkConsole`. When `isVisible` becomes true,
+  // `useSyncExternalStore` reads the live buffered snapshot and subscribes to live updates.
+  const [hiddenInitialSnapshot] = useState<ControlLinkSnapshot>(() => ({
+    ...tracker.getSnapshot(),
+    entries: [],
+  }));
+
+  const snapshot = useSyncExternalStore(
+    isVisible ? tracker.subscribe : noopSubscribe,
+    isVisible ? tracker.getSnapshot : () => hiddenInitialSnapshot,
+  );
+
+  const { connectionState, hello, telemetry, entries } = snapshot;
+
   const [line, setLine] = useState('');
   const [autoscroll, setAutoscroll] = useState(true);
   const [error, setError] = useState('');
-  const nextIdRef = useRef(1);
   const logViewRef = useRef<HTMLPreElement>(null);
 
   useEffect(() => {
-    const offState = api.control.onState((state) => {
-      setConnectionState(state);
-    });
-    const offMsg = api.control.onMessage((msg) => {
-      if (msg.t === 'telemetry') {
-        setTelemetry(msg);
-      } else if (msg.t === 'hello') {
-        setHello(msg);
-      }
-    });
-    const offRaw = api.control.onRaw((rawLine, direction) => {
-      if (direction === 'in') {
-        const parsed = parseCarLine(rawLine.trim());
-        if (parsed.ok) {
-          if (parsed.message.t === 'telemetry') setTelemetry(parsed.message);
-          else if (parsed.message.t === 'hello') setHello(parsed.message);
-        }
-      }
-      const entry: RawConsoleEntry = {
-        id: nextIdRef.current++,
-        direction,
-        raw: rawLine.trim(),
-        formatted: direction === 'in' ? formatIncomingLine(rawLine) : rawLine.trim(),
-      };
-      setEntries((prev) => [...prev.slice(-499), entry]);
-    });
-    return () => {
-      offState();
-      offMsg();
-      offRaw();
-    };
-  }, [api]);
-
-  useEffect(() => {
-    if (autoscroll && logViewRef.current) {
+    if (autoscroll && isVisible && logViewRef.current) {
       logViewRef.current.scrollTop = logViewRef.current.scrollHeight;
     }
-  }, [autoscroll, entries, visible]);
+  }, [autoscroll, entries, isVisible]);
 
   const tofText =
     telemetry?.tof_mm && telemetry.tof_mm.length > 0 ? `${telemetry.tof_mm.join(' / ')} mm` : '—';
@@ -157,7 +259,12 @@ export function NetworkConsole({
             />{' '}
             Autoscroll
           </label>
-          <button type="button" onClick={() => setEntries([])}>
+          <button
+            type="button"
+            onClick={() => {
+              tracker.clearEntries();
+            }}
+          >
             Clear
           </button>
         </div>

@@ -1,16 +1,30 @@
 export {
+  INITIAL_CONNECT_BACKOFF_MS,
+  MAX_CONNECT_BACKOFF_MS,
   WorldRoot,
   createWorldDockTabs,
+  ensureWorldObstacleIds,
   generateUniqueObstacleId,
   normalizeLayoutPath,
   type WorldRootProps,
 } from './WorldRoot.tsx';
-export { NetworkConsole, formatIncomingLine, type RawConsoleEntry } from './NetworkConsole.tsx';
+export {
+  MAX_CONSOLE_ENTRIES,
+  NetworkConsole,
+  formatIncomingLine,
+  primeControlLinkTracker,
+  type NetworkConsoleProps,
+  type RawConsoleEntry,
+} from './NetworkConsole.tsx';
 export {
   WorldR3FScene,
   WorldScene,
+  applyOverlayMarkerElementPose,
   canUseWebGL,
+  projectPointWithCamera,
   type EditorTool,
+  type ProjectedMarkerPose,
+  type SceneRunMode,
   type WorldR3FSceneProps,
   type WorldSceneProps,
 } from './WorldScene.tsx';
@@ -67,6 +81,8 @@ export {
   computeDriveFromKeys,
   isEditableEventTarget,
   isEstopKey,
+  isInteractiveControlTarget,
+  isModifierKey,
   normalizeDriveKey,
   sampleManualDriveInput,
   type DriveCommandInput,

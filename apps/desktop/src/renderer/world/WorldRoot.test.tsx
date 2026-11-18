@@ -24,11 +24,15 @@ import {
   BUILTIN_OVAL_TRACK,
   BUILTIN_TECHNICAL_TRACK,
   DEFAULT_ORBIT_CAMERA,
+  MAX_CONSOLE_ENTRIES,
+  NetworkConsole,
   OBSTACLE_DIMENSIONS,
   SnapshotInterpolator,
   WorldR3FScene,
   WorldRoot,
+  applyOverlayMarkerElementPose,
   buildWorldSceneData,
+  canUseWebGL,
   computeCameraTransform,
   computeDriveFromGamepad,
   computeDriveFromKeys,
@@ -39,13 +43,15 @@ import {
   groundPointToViewportUV,
   interpolateSnapshots,
   normalizeLayoutPath,
+  primeControlLinkTracker,
   screenToGroundPoint,
   yawDegToQuat,
+  type ProjectedMarkerPose,
 } from './index.ts';
 
 beforeEach(() => {
   useSessionStore.setState(useSessionStore.getInitialState());
-  useEnvironmentStore.setState({ current: 'workbench' });
+  useEnvironmentStore.setState({ current: 'world' });
 });
 
 afterEach(() => {
@@ -1009,12 +1015,12 @@ describe('3D World environment (P1-F)', () => {
 
     render(<WorldRoot api={fake.api} />);
 
-    // Hold W for 200 ms (10 ticks at 50 Hz) while no run exists and connect fails
+    // Hold W for 80 ms (4 ticks at 50 Hz, within 100 ms initial backoff) while no run exists and connect fails
     await act(async () => {
       fireEvent.keyDown(window, { key: 'w' });
       await Promise.resolve();
     });
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 4; i++) {
       nowMs += 20;
       await act(async () => {
         vi.advanceTimersByTime(20);
@@ -1114,7 +1120,7 @@ describe('3D World environment (P1-F)', () => {
     expect(tabs[0]?.id).toBe('network');
     expect(tabs[0]?.label).toBe('Network Console');
 
-    render(<WorldRoot api={fake.api} />);
+    render(<WorldRoot api={fake.api} showDock={true} />);
 
     const snapWithBeams: StateSnapshot = {
       tick: 250,
@@ -1224,5 +1230,626 @@ describe('3D World environment (P1-F)', () => {
         ),
       ).toBe(true);
     });
+  });
+
+  it('Round 2 #1: in the real R3F scene, uses editor worldFile obstacle poses while paused (keeping the car at its paused snapshot pose) and resets car/obstacles on stop with no stale car pose', async () => {
+    const ovalTrack = trackLibrary.load('oval');
+    const initialWorld: WorldFile = {
+      schemaVersion: SCHEMA_VERSION,
+      name: 'Pause Move & Stop Reset',
+      trackId: 'oval',
+      seed: 1,
+      obstacles: [{ id: 'cone-1', type: 'cone', positionM: { x: 1.0, z: -2.0 }, yawDeg: 0 }],
+    };
+
+    const interpolator = new SnapshotInterpolator();
+    const nowMs = 1000;
+    vi.spyOn(performance, 'now').mockImplementation(() => nowMs);
+
+    const runningSnap: StateSnapshot = {
+      ...defaultSnapshotForWorld(initialWorld, ovalTrack),
+      tick: 500,
+      timeUs: 500_000,
+      status: 'running',
+      car: {
+        ...defaultSnapshotForWorld(initialWorld, ovalTrack).car,
+        pose: { position: [2.4, 0, -3.5], rotation: yawDegToQuat(15) },
+      },
+      obstacles: [
+        {
+          id: 'cone-1',
+          type: 'cone',
+          pose: { position: [1.0, 0, -2.0], rotation: yawDegToQuat(0) },
+        },
+      ],
+    };
+    interpolator.push(runningSnap, nowMs);
+
+    const initialSceneData = buildWorldSceneData(
+      defaultSnapshotForWorld(initialWorld, ovalTrack),
+      ovalTrack,
+      null,
+    );
+
+    const renderer = await ReactThreeTestRenderer.create(
+      <WorldR3FScene
+        sceneData={initialSceneData}
+        cameraMode="orbit"
+        orbitState={DEFAULT_ORBIT_CAMERA}
+        interpolator={interpolator}
+        runMode="running"
+      />,
+    );
+
+    await renderer.advanceFrames(2, 0.016);
+
+    const getMeshWorldPose = (name: string) => {
+      const group = getThreeGroupFromR3F(renderer, name);
+      group.updateMatrixWorld(true);
+      const pos = new THREE.Vector3();
+      const quat = new THREE.Quaternion();
+      group.getWorldPosition(pos);
+      group.getWorldQuaternion(quat);
+      return { pos, quat };
+    };
+
+    // 1. While running, both car and obstacle match the snapshot
+    expect(getMeshWorldPose('car-body').pos.z).toBeCloseTo(-3.5, 5);
+    expect(getMeshWorldPose('obstacle:cone-1').pos.x).toBeCloseTo(1.0, 5);
+    expect(getMeshWorldPose('obstacle:cone-1').pos.z).toBeCloseTo(-2.0, 5);
+
+    // 2. Pause and move/rotate cone-1 in the editor worldFile while interpolator still holds runningSnap
+    const pausedEditedWorld: WorldFile = {
+      ...initialWorld,
+      obstacles: [{ id: 'cone-1', type: 'cone', positionM: { x: 3.4, z: -4.2 }, yawDeg: 45 }],
+    };
+    const pausedSceneData = buildWorldSceneData(
+      defaultSnapshotForWorld(pausedEditedWorld, ovalTrack),
+      ovalTrack,
+      'cone-1',
+    );
+
+    await renderer.update(
+      <WorldR3FScene
+        sceneData={pausedSceneData}
+        cameraMode="orbit"
+        orbitState={DEFAULT_ORBIT_CAMERA}
+        interpolator={interpolator}
+        runMode="paused"
+      />,
+    );
+    await renderer.advanceFrames(3, 0.016);
+
+    // Obstacle mesh moved to the new editor pose (not overwritten by stale snapshot!), while car stays at paused pose
+    const pausedObstaclePose = getMeshWorldPose('obstacle:cone-1');
+    expect(pausedObstaclePose.pos.x).toBeCloseTo(3.4, 5);
+    expect(pausedObstaclePose.pos.z).toBeCloseTo(-4.2, 5);
+    expectQuaternionCloseTo(pausedObstaclePose.quat, yawDegToQuat(45), 5);
+    expect(getMeshWorldPose('car-body').pos.z).toBeCloseTo(-3.5, 5);
+
+    // 3. Stop the run: interpolator is reset and runMode becomes 'idle' -> car returns to track start pose (no stale car pose)
+    interpolator.reset();
+    await renderer.update(
+      <WorldR3FScene
+        sceneData={pausedSceneData}
+        cameraMode="orbit"
+        orbitState={DEFAULT_ORBIT_CAMERA}
+        interpolator={interpolator}
+        runMode="idle"
+      />,
+    );
+    await renderer.advanceFrames(3, 0.016);
+
+    const stoppedCarPose = getMeshWorldPose('car-body');
+    const expectedStartPose = defaultSnapshotForWorld(initialWorld, ovalTrack).car.pose;
+    expect(stoppedCarPose.pos.x).toBeCloseTo(expectedStartPose.position[0], 5);
+    expect(stoppedCarPose.pos.z).toBeCloseTo(expectedStartPose.position[2], 5);
+    expectQuaternionCloseTo(stoppedCarPose.quat, expectedStartPose.rotation, 5);
+
+    await renderer.unmount();
+  });
+
+  it('Round 2 #2: projects marker positions through the live R3F camera in useFrame so follow-mode markers track the moving camera imperatively without re-renders', async () => {
+    const ovalTrack = trackLibrary.load('oval');
+    const world: WorldFile = {
+      schemaVersion: SCHEMA_VERSION,
+      name: 'Live Camera Marker Projection',
+      trackId: 'oval',
+      seed: 1,
+      obstacles: [{ id: 'cone-1', type: 'cone', positionM: { x: 2.4, z: -2.0 }, yawDeg: 0 }],
+    };
+
+    const interpolator = new SnapshotInterpolator();
+    let nowMs = 1000;
+    vi.spyOn(performance, 'now').mockImplementation(() => nowMs);
+
+    const snapStart: StateSnapshot = {
+      ...defaultSnapshotForWorld(world, ovalTrack),
+      tick: 1,
+      timeUs: 1_000,
+      status: 'running',
+      car: {
+        ...defaultSnapshotForWorld(world, ovalTrack).car,
+        pose: { position: [2.4, 0, 0.75], rotation: [0, 0, 0, 1] },
+      },
+    };
+    interpolator.push(snapStart, nowMs);
+
+    const sceneData = buildWorldSceneData(snapStart, ovalTrack, null);
+    let latestMarkers: readonly ProjectedMarkerPose[] = [];
+    const markerButton = document.createElement('button');
+
+    const renderer = await ReactThreeTestRenderer.create(
+      <WorldR3FScene
+        sceneData={sceneData}
+        cameraMode="follow"
+        orbitState={DEFAULT_ORBIT_CAMERA}
+        interpolator={interpolator}
+        runMode="running"
+        onProjectMarkers={(markers) => {
+          latestMarkers = markers;
+          const m = markers[0];
+          if (m) applyOverlayMarkerElementPose(markerButton, m);
+        }}
+      />,
+    );
+
+    await renderer.advanceFrames(5, 0.016);
+    expect(latestMarkers).toHaveLength(1);
+    const initialMarker = latestMarkers[0]!;
+    expect(initialMarker.visible).toBe(true);
+    const initialV = initialMarker.v;
+
+    // Now move the car 1.25 m closer to cone-1 via a snapshot (NO React re-render of WorldR3FScene!)
+    nowMs = 1020;
+    const snapMoved: StateSnapshot = {
+      ...snapStart,
+      tick: 50,
+      timeUs: 50_000,
+      car: {
+        ...snapStart.car,
+        pose: { position: [2.4, 0, -0.5], rotation: [0, 0, 0, 1] },
+      },
+    };
+    interpolator.push(snapMoved, nowMs);
+    nowMs = 1040;
+
+    // Advance useFrame so the follow camera smoothly tracks the car and projects cone-1 through the live R3F camera
+    await renderer.advanceFrames(10, 0.016);
+
+    const updatedMarker = latestMarkers[0]!;
+    expect(updatedMarker.visible).toBe(true);
+    // As the follow camera moves closer to cone-1 along -Z, cone-1's projected vertical screen coordinate v changes
+    expect(Math.abs(updatedMarker.v - initialV)).toBeGreaterThan(0.03);
+    expect(markerButton.getAttribute('data-v')).toBe(updatedMarker.v.toFixed(4));
+    expect(markerButton.style.top).toBe(`${Math.min(96, Math.max(4, updatedMarker.v * 100))}%`);
+
+    await renderer.unmount();
+  });
+
+  it('Round 2 #3: clears held keys and releases the drive when Meta (Cmd), Control, or Alt is pressed while holding a drive key', async () => {
+    vi.useFakeTimers();
+    const fake = createFakeWithRealTracks();
+    render(<WorldRoot api={fake.api} />);
+
+    // Hold W -> drives at full throttle
+    await act(async () => {
+      fireEvent.keyDown(window, { key: 'w' });
+      vi.advanceTimersByTime(25);
+      await Promise.resolve();
+    });
+
+    const drivesBeforeMeta = fake.calls.filter(
+      (c) => c.service === 'control' && c.method === 'drive',
+    );
+    expect(drivesBeforeMeta.at(-1)?.args[0]).toEqual({ throttle: 1, steer: 0 });
+
+    // Press Meta (macOS Cmd) while W is still held (no W keyup fires on macOS)
+    await act(async () => {
+      fireEvent.keyDown(window, { key: 'Meta', metaKey: true });
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Must immediately send neutral drive(0, 0) and releaseDrive()
+    const drivesAfterMeta = fake.calls.filter(
+      (c) => c.service === 'control' && c.method === 'drive',
+    );
+    expect(drivesAfterMeta.at(-1)?.args[0]).toEqual({ throttle: 0, steer: 0 });
+    expect(fake.calls.some((c) => c.service === 'control' && c.method === 'releaseDrive')).toBe(
+      true,
+    );
+
+    // Advancing 50 Hz timer must not send any more drive commands (W is no longer stuck)
+    const countAfterMeta = drivesAfterMeta.length;
+    await act(async () => {
+      vi.advanceTimersByTime(100);
+      await Promise.resolve();
+    });
+    expect(fake.calls.filter((c) => c.service === 'control' && c.method === 'drive')).toHaveLength(
+      countAfterMeta,
+    );
+  });
+
+  it('Round 2 #4: tracks keys and sends drive only in manual mode (pressing a key in auto followed by blur or unmount never sends drive)', async () => {
+    vi.useFakeTimers();
+    const fake = createFakeWithRealTracks();
+    const { unmount } = render(<WorldRoot api={fake.api} />);
+
+    // Switch to Auto mode
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Auto mode' }));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const driveCountInAutoStart = fake.calls.filter(
+      (c) => c.service === 'control' && c.method === 'drive',
+    ).length;
+    const releaseCountInAutoStart = fake.calls.filter(
+      (c) => c.service === 'control' && c.method === 'releaseDrive',
+    ).length;
+
+    // Press W in auto mode, advance 50 Hz timers, blur window, and unmount
+    await act(async () => {
+      fireEvent.keyDown(window, { key: 'w' });
+      vi.advanceTimersByTime(60);
+      fireEvent.blur(window);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      unmount();
+      await Promise.resolve();
+    });
+
+    expect(fake.calls.filter((c) => c.service === 'control' && c.method === 'drive')).toHaveLength(
+      driveCountInAutoStart,
+    );
+    expect(
+      fake.calls.filter((c) => c.service === 'control' && c.method === 'releaseDrive'),
+    ).toHaveLength(releaseCountInAutoStart);
+  });
+
+  it('Round 2 #5: backs off control.connect exponentially (100 ms doubling up to 2 s) even during an active starting/running run when firmware is not listening yet', async () => {
+    vi.useFakeTimers();
+    let nowMs = 1000;
+    vi.spyOn(performance, 'now').mockImplementation(() => nowMs);
+
+    const fake = createFakeWithRealTracks();
+    const connectSpy = vi
+      .fn()
+      .mockRejectedValue(new Error(ipcErrorMessage('busy', 'Firmware TCP not listening yet')));
+    fake.api.control.connect = connectSpy;
+
+    render(<WorldRoot api={fake.api} />);
+
+    // Start a run -> immediate connect attempt #1 fails at t = 1000 ms (next retry after 100 ms backoff)
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('run-play-pause-btn'));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(connectSpy).toHaveBeenCalledTimes(1);
+
+    // Hold W while run is active; step 20 ms ticks up to t = 1080 ms -> must NOT reconnect on every tick
+    await act(async () => {
+      fireEvent.keyDown(window, { key: 'w' });
+      await Promise.resolve();
+    });
+    for (let i = 0; i < 4; i++) {
+      nowMs += 20;
+      await act(async () => {
+        vi.advanceTimersByTime(20);
+        await Promise.resolve();
+      });
+    }
+    expect(connectSpy).toHaveBeenCalledTimes(1);
+
+    // At t = 1100 ms (+100 ms), backoff expires -> attempt #2 fails (next backoff = 200 ms -> t = 1300 ms)
+    nowMs += 20;
+    await act(async () => {
+      vi.advanceTimersByTime(20);
+      await Promise.resolve();
+    });
+    expect(connectSpy).toHaveBeenCalledTimes(2);
+
+    // Ticks from t = 1120 ms to t = 1280 ms (180 ms elapsed < 200 ms) -> still 2 calls
+    for (let i = 0; i < 9; i++) {
+      nowMs += 20;
+      await act(async () => {
+        vi.advanceTimersByTime(20);
+        await Promise.resolve();
+      });
+    }
+    expect(connectSpy).toHaveBeenCalledTimes(2);
+
+    // At t = 1300 ms (+200 ms), backoff expires -> attempt #3
+    nowMs += 20;
+    await act(async () => {
+      vi.advanceTimersByTime(20);
+      await Promise.resolve();
+    });
+    expect(connectSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it('Round 2 #6: assigns real unique ids when loading a layout with obstacles lacking an id so select, move, rotate, and delete work', async () => {
+    const fake = createFakeWithRealTracks();
+    const layoutWithoutIds: WorldFile = {
+      schemaVersion: SCHEMA_VERSION,
+      name: 'No Obstacle IDs',
+      trackId: 'oval',
+      seed: 5,
+      obstacles: [
+        { type: 'cone', positionM: { x: 1.0, z: -1.0 }, yawDeg: 0 },
+        { type: 'cone', positionM: { x: 2.0, z: -2.0 }, yawDeg: 10 },
+        { type: 'box', positionM: { x: 3.0, z: -3.0 }, yawDeg: 0 },
+      ],
+    };
+    fake.api.worldEdit.load = vi.fn().mockResolvedValue(layoutWithoutIds);
+
+    render(<WorldRoot api={fake.api} />);
+
+    fireEvent.click(screen.getByTestId('world-load-btn'));
+    await waitFor(() => {
+      expect(screen.getByTestId('obstacle-marker-cone-1')).toBeDefined();
+      expect(screen.getByTestId('obstacle-marker-cone-2')).toBeDefined();
+      expect(screen.getByTestId('obstacle-marker-box-1')).toBeDefined();
+    });
+
+    // Select cone-1, move it, and rotate it
+    fireEvent.pointerDown(screen.getByTestId('obstacle-marker-cone-1'), { button: 0 });
+    fireEvent.pointerUp(screen.getByTestId('obstacle-marker-cone-1'));
+    fireEvent.change(screen.getByLabelText('Selected obstacle X (m)'), {
+      target: { value: '4.5' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Rotate left 15°' }));
+
+    // Select cone-2 and delete it
+    fireEvent.pointerDown(screen.getByTestId('obstacle-marker-cone-2'), { button: 0 });
+    fireEvent.pointerUp(screen.getByTestId('obstacle-marker-cone-2'));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete obstacle' }));
+    expect(screen.queryByTestId('obstacle-marker-cone-2')).toBeNull();
+
+    // Save layout and verify real IDs and updated poses were persisted
+    fireEvent.click(screen.getByTestId('world-save-btn'));
+    await waitFor(() => {
+      const saveCall = fake.calls.find((c) => c.service === 'worldEdit' && c.method === 'save');
+      expect(saveCall).toBeDefined();
+      const savedWorld = saveCall!.args[1] as WorldFile;
+      expect(savedWorld.obstacles).toEqual([
+        { id: 'cone-1', type: 'cone', positionM: { x: 4.5, z: -1.0 }, yawDeg: 15 },
+        { id: 'box-1', type: 'box', positionM: { x: 3.0, z: -3.0 }, yawDeg: 0 },
+      ]);
+    });
+  });
+
+  it('Round 2 #7 & #10: removes test-only heuristics (isWorldActive strictly follows environment store, showDock defaults to false, data-ready is fallback in jsdom, canUseWebGL ignores ResizeObserver, and inactive World pauses rendering)', async () => {
+    const fake = createFakeWithRealTracks();
+    useEnvironmentStore.setState({ current: 'workbench' });
+
+    render(<WorldRoot api={fake.api} />);
+
+    // 1. showDock defaults to false even when a custom fake.api is passed
+    expect(screen.queryByRole('tab', { name: 'Network Console' })).toBeNull();
+
+    // 2. data-ready is 'fallback' (not 'true') when WebGL is unavailable in jsdom
+    const viewport = screen.getByTestId('world-viewport');
+    expect(viewport.getAttribute('data-ready')).toBe('fallback');
+    expect(viewport.getAttribute('data-active')).toBe('false');
+
+    // 3. Because current environment is 'workbench', isWorldActive is false and keydowns do not drive
+    await act(async () => {
+      fireEvent.keyDown(window, { key: 'w' });
+      await Promise.resolve();
+    });
+    expect(fake.calls.filter((c) => c.service === 'control' && c.method === 'drive')).toHaveLength(
+      0,
+    );
+
+    // 4. Switching environment to 'world' activates WorldScene (data-active="true")
+    act(() => {
+      useEnvironmentStore.getState().show('world');
+    });
+    expect(viewport.getAttribute('data-active')).toBe('true');
+
+    // 5. canUseWebGL does not depend on ResizeObserver
+    const origResizeObserver = globalThis.ResizeObserver;
+    const getContextSpy = vi
+      .spyOn(HTMLCanvasElement.prototype, 'getContext')
+      .mockReturnValue({} as unknown as RenderingContext);
+    try {
+      (globalThis as unknown as { ResizeObserver?: unknown }).ResizeObserver = undefined;
+      expect(canUseWebGL()).toBe(true);
+    } finally {
+      (globalThis as unknown as { ResizeObserver?: unknown }).ResizeObserver = origResizeObserver;
+      getContextSpy.mockRestore();
+    }
+  });
+
+  it('Round 2 #8: does not trigger E-stop when Space is pressed while a button has focus, but triggers E-stop when the canvas/ground or World body has focus', async () => {
+    const fake = createFakeWithRealTracks();
+    render(<WorldRoot api={fake.api} />);
+
+    // Focus the Manual mode button and press Space -> must NOT trigger E-stop
+    const manualButton = screen.getByRole('button', { name: 'Manual mode' });
+    manualButton.focus();
+    await act(async () => {
+      fireEvent.keyDown(manualButton, { key: ' ', code: 'Space' });
+      await Promise.resolve();
+    });
+    expect(fake.calls.some((c) => c.service === 'control' && c.method === 'estop')).toBe(false);
+
+    // Focus the ground/viewport overlay (or document.body) and press Space -> triggers E-stop
+    const ground = screen.getByTestId('world-ground');
+    ground.focus();
+    await act(async () => {
+      fireEvent.keyDown(ground, { key: ' ', code: 'Space' });
+      await Promise.resolve();
+    });
+    expect(fake.calls.some((c) => c.service === 'control' && c.method === 'estop')).toBe(true);
+  });
+
+  it('Round 2 #9: NetworkConsole derives connected state when mounted after control is already connected, buffers messages while hidden without re-rendering, and caps history at MAX_CONSOLE_ENTRIES', () => {
+    const fake = createFakeWithRealTracks();
+
+    // Prime tracker and connect BEFORE NetworkConsole mounts
+    primeControlLinkTracker(fake.api);
+    act(() => {
+      fake.emit.controlState('connected');
+    });
+
+    const { rerender } = render(<NetworkConsole api={fake.api} visible={false} />);
+
+    // Console mounted after connection already established shows 'connected' and 'Disconnect'
+    expect(screen.getByTestId('telemetry-connection').textContent).toContain('connected');
+    expect(screen.getByRole('button', { name: 'Disconnect' })).toBeDefined();
+
+    // Emit MAX_CONSOLE_ENTRIES + 40 control messages while hidden (visible={false})
+    act(() => {
+      for (let i = 1; i <= MAX_CONSOLE_ENTRIES + 40; i++) {
+        fake.emit.controlMessage({
+          t: 'log',
+          msg: `entry-${i}`,
+        });
+      }
+    });
+
+    // While hidden, buffered entries are not flushed into DOM log
+    const logContainer = screen.getByTestId('network-console-log');
+    expect(logContainer.textContent).toBe('Control protocol JSON lines will appear here.');
+
+    // When visible becomes true, buffered entries flush once and are capped at MAX_CONSOLE_ENTRIES
+    rerender(<NetworkConsole api={fake.api} visible={true} />);
+    const entryCount = (logContainer.textContent?.match(/← \{/g) ?? []).length;
+    expect(entryCount).toBe(MAX_CONSOLE_ENTRIES);
+    expect(logContainer.textContent).not.toContain('"entry-1"');
+    expect(logContainer.textContent).toContain(`"entry-${MAX_CONSOLE_ENTRIES + 40}"`);
+  });
+
+  it('Round 2 #12: disposes Three.js geometries and materials on a track change and on unmount, and sends a final neutral drive on unmount in manual mode', async () => {
+    // Part A: Geometry and material disposal on track change and on WorldR3FScene unmount
+    const ovalTrack = trackLibrary.load('oval');
+    const technicalTrack = trackLibrary.load('technical');
+    const ovalWorld: WorldFile = {
+      schemaVersion: SCHEMA_VERSION,
+      name: 'Disposal Test',
+      trackId: 'oval',
+      seed: 1,
+      obstacles: [{ id: 'cone-1', type: 'cone', positionM: { x: 2.4, z: -1.5 }, yawDeg: 0 }],
+    };
+
+    const interpolator = new SnapshotInterpolator();
+    const ovalSnap: StateSnapshot = {
+      ...defaultSnapshotForWorld(ovalWorld, ovalTrack),
+      status: 'running',
+      sensors: [
+        {
+          instanceId: 'tof_front',
+          beams: [
+            {
+              origin: [2.4, 0.1, 0.5],
+              direction: [0, 0, -1],
+              maxRangeM: 1.5,
+              hitM: 0.7,
+            },
+          ],
+        },
+      ],
+    };
+    interpolator.push(ovalSnap, 1000);
+
+    const ovalSceneData = buildWorldSceneData(ovalSnap, ovalTrack, null);
+    const renderer = await ReactThreeTestRenderer.create(
+      <WorldR3FScene
+        sceneData={ovalSceneData}
+        cameraMode="orbit"
+        orbitState={DEFAULT_ORBIT_CAMERA}
+        interpolator={interpolator}
+        runMode="running"
+      />,
+    );
+    await renderer.advanceFrames(1, 0.016);
+
+    const r3fRoot = getThreeGroupFromR3F(renderer, 'world-r3f-root');
+    const trackSurfaceMesh = renderer.scene.find((n) => n.props['name'] === 'track-surface')!
+      .instance as THREE.Mesh;
+    const ovalSurfaceGeomDisposeSpy = vi.spyOn(trackSurfaceMesh.geometry, 'dispose');
+
+    // Switch track from 'oval' to 'technical' -> old oval track geometry is disposed
+    const techWorld: WorldFile = { ...ovalWorld, trackId: 'technical' };
+    const techSnap = defaultSnapshotForWorld(techWorld, technicalTrack);
+    const techSceneData = buildWorldSceneData(techSnap, technicalTrack, null);
+
+    await renderer.update(
+      <WorldR3FScene
+        sceneData={techSceneData}
+        cameraMode="orbit"
+        orbitState={DEFAULT_ORBIT_CAMERA}
+        interpolator={interpolator}
+        runMode="idle"
+      />,
+    );
+    expect(ovalSurfaceGeomDisposeSpy).toHaveBeenCalled();
+
+    // Spy on remaining geometries and materials before unmounting WorldR3FScene
+    const geomDisposeSpies: ReturnType<typeof vi.spyOn>[] = [];
+    const matDisposeSpies: ReturnType<typeof vi.spyOn>[] = [];
+    r3fRoot.traverse((obj) => {
+      const geom = (obj as THREE.Mesh | THREE.Line).geometry;
+      if (geom instanceof THREE.BufferGeometry) {
+        geomDisposeSpies.push(vi.spyOn(geom, 'dispose'));
+      }
+      const mat = (obj as THREE.Mesh | THREE.Line).material;
+      if (mat instanceof THREE.Material) {
+        matDisposeSpies.push(vi.spyOn(mat, 'dispose'));
+      }
+    });
+    expect(geomDisposeSpies.length).toBeGreaterThan(0);
+    expect(matDisposeSpies.length).toBeGreaterThan(0);
+
+    await renderer.unmount();
+
+    expect(geomDisposeSpies.every((spy) => spy.mock.calls.length > 0)).toBe(true);
+    expect(matDisposeSpies.every((spy) => spy.mock.calls.length > 0)).toBe(true);
+
+    // Part B: Final neutral drive({ throttle: 0, steer: 0 }) on WorldRoot unmount while driving in manual mode
+    vi.useFakeTimers();
+    const fake = createFakeWithRealTracks();
+    const { unmount } = render(<WorldRoot api={fake.api} />);
+
+    await act(async () => {
+      fireEvent.keyDown(window, { key: 'w' });
+      vi.advanceTimersByTime(25);
+      await Promise.resolve();
+    });
+
+    const drivesBeforeUnmount = fake.calls.filter(
+      (c) => c.service === 'control' && c.method === 'drive',
+    );
+    expect(drivesBeforeUnmount.at(-1)?.args[0]).toEqual({ throttle: 1, steer: 0 });
+
+    await act(async () => {
+      unmount();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const drivesAfterUnmount = fake.calls.filter(
+      (c) => c.service === 'control' && c.method === 'drive',
+    );
+    expect(drivesAfterUnmount.length).toBeGreaterThan(drivesBeforeUnmount.length);
+    expect(drivesAfterUnmount.at(-1)?.args[0]).toEqual({ throttle: 0, steer: 0 });
+    expect(fake.calls.some((c) => c.service === 'control' && c.method === 'releaseDrive')).toBe(
+      true,
+    );
+    expect(fake.calls.some((c) => c.service === 'control' && c.method === 'disconnect')).toBe(true);
   });
 });

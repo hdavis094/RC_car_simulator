@@ -22,12 +22,14 @@ import {
   DRIVE_INTERVAL_MS,
   isEditableEventTarget,
   isEstopKey,
+  isInteractiveControlTarget,
+  isModifierKey,
   normalizeDriveKey,
   sampleManualDriveInput,
   type DriveCommandInput,
 } from './driving-controller.ts';
 import { SnapshotInterpolator } from './interpolation.ts';
-import { NetworkConsole } from './NetworkConsole.tsx';
+import { NetworkConsole, primeControlLinkTracker } from './NetworkConsole.tsx';
 import {
   CAMERA_MODES,
   DEFAULT_ORBIT_CAMERA,
@@ -37,7 +39,7 @@ import {
   type OrbitCameraState,
 } from './scene-data.ts';
 import { BUILTIN_OVAL_TRACK, BUILTIN_TRACKS } from './track-mesh.ts';
-import { WorldScene, type EditorTool } from './WorldScene.tsx';
+import { WorldScene, type EditorTool, type SceneRunMode } from './WorldScene.tsx';
 
 const DEFAULT_WORLD_FILE: WorldFile = {
   schemaVersion: SCHEMA_VERSION,
@@ -61,7 +63,8 @@ const PALETTE_TOOLS: readonly { readonly id: EditorTool; readonly label: string 
   { id: 'ramp', label: 'Ramp' },
 ];
 
-const CONNECT_RETRY_BACKOFF_MS = 2000;
+export const INITIAL_CONNECT_BACKOFF_MS = 100;
+export const MAX_CONNECT_BACKOFF_MS = 2000;
 
 /**
  * Validates and normalizes a relative layout file path inside `worlds/`.
@@ -123,6 +126,31 @@ export function generateUniqueObstacleId(
   return `${prefix}${candidateNum}`;
 }
 
+/**
+ * Ensures every obstacle in a `WorldFile` has a real, unique `id`
+ * so selection, dragging, rotation, and deletion work even when a layout file
+ * omitted optional obstacle `id` fields.
+ */
+export function ensureWorldObstacleIds(world: WorldFile): WorldFile {
+  const assigned: Obstacle[] = [];
+  let changed = false;
+  for (const obs of world.obstacles) {
+    const trimmedId = obs.id?.trim();
+    const alreadyUsed = trimmedId ? assigned.some((a) => a.id === trimmedId) : false;
+    if (!trimmedId || alreadyUsed) {
+      const id = generateUniqueObstacleId(obs.type, assigned);
+      assigned.push({ ...obs, id });
+      changed = true;
+    } else if (trimmedId !== obs.id) {
+      assigned.push({ ...obs, id: trimmedId });
+      changed = true;
+    } else {
+      assigned.push(obs);
+    }
+  }
+  return changed ? { ...world, obstacles: assigned } : world;
+}
+
 export function createWorldDockTabs(api?: RcsimApi): readonly DockTab[] {
   return [
     {
@@ -138,17 +166,15 @@ export interface WorldRootProps {
   readonly initialWorld?: WorldFile;
   /**
    * When true, mounts a standalone `BottomPanel` containing `createWorldDockTabs(api)`.
-   * Defaults to true when a custom/fake `api` is passed (standalone tests), and false
-   * when using the global `window.rcsim` inside `App.tsx`.
+   * Defaults to `false` (in `App.tsx`, the shell mounts World's dock tabs directly in its shared `BottomPanel`).
    */
   readonly showDock?: boolean;
 }
 
 /** Root of the 3D World environment (P1-F). */
-export function WorldRoot({ api, initialWorld, showDock }: WorldRootProps = {}): ReactNode {
+export function WorldRoot({ api, initialWorld, showDock = false }: WorldRootProps = {}): ReactNode {
   const resolvedApi = api ?? window.rcsim;
-  const shouldRenderDock =
-    showDock ?? (typeof window === 'undefined' || resolvedApi !== window.rcsim);
+  primeControlLinkTracker(resolvedApi);
 
   const [interpolator] = useState<SnapshotInterpolator>(() => new SnapshotInterpolator());
   const latestSnapshotRef = useRef<StateSnapshot | null>(null);
@@ -158,7 +184,10 @@ export function WorldRoot({ api, initialWorld, showDock }: WorldRootProps = {}):
 
   const [trackIds, setTrackIds] = useState<readonly string[]>(['oval', 'technical']);
   const [track, setTrack] = useState<Track>(BUILTIN_OVAL_TRACK);
-  const [worldFile, setWorldFile] = useState<WorldFile>(initialWorld ?? DEFAULT_WORLD_FILE);
+  const trackRef = useRef<Track>(track);
+  const [worldFile, setWorldFile] = useState<WorldFile>(() =>
+    ensureWorldObstacleIds(initialWorld ?? DEFAULT_WORLD_FILE),
+  );
   const worldFileRef = useRef<WorldFile>(worldFile);
 
   const [layoutPaths, setLayoutPaths] = useState<readonly string[]>([]);
@@ -184,6 +213,10 @@ export function WorldRoot({ api, initialWorld, showDock }: WorldRootProps = {}):
   const [placementCoordsTouched, setPlacementCoordsTouched] = useState(false);
 
   useEffect(() => {
+    trackRef.current = track;
+  }, [track]);
+
+  useEffect(() => {
     worldFileRef.current = worldFile;
   }, [worldFile]);
 
@@ -197,6 +230,7 @@ export function WorldRoot({ api, initialWorld, showDock }: WorldRootProps = {}):
 
   // Driving state
   const [driveMode, setDriveMode] = useState<Mode>('manual');
+  const driveModeRef = useRef<Mode>(driveMode);
   const [estopLatched, setEstopLatched] = useState(false);
   const [lastDriveCommand, setLastDriveCommand] = useState<DriveCommandInput>({
     throttle: 0,
@@ -206,18 +240,16 @@ export function WorldRoot({ api, initialWorld, showDock }: WorldRootProps = {}):
   const driveActiveRef = useRef(false);
   const controlConnectedRef = useRef(false);
   const connectInFlightRef = useRef<Promise<boolean> | null>(null);
+  const connectFailuresRef = useRef<number>(0);
   const lastConnectFailAtMsRef = useRef<number>(-Infinity);
 
-  // Environment tracking for releasing drive when switching away from 3D World
-  const currentEnv = useEnvironmentStore((state) => state.current);
-  const [hasVisitedWorld, setHasVisitedWorld] = useState<boolean>(currentEnv === 'world');
-  if (currentEnv === 'world' && !hasVisitedWorld) {
-    setHasVisitedWorld(true);
-  }
+  useEffect(() => {
+    driveModeRef.current = driveMode;
+  }, [driveMode]);
 
-  // In standalone unit tests (where show('world') was not called yet), treat as active
-  // until the environment store has visited 'world' and then switched away.
-  const isWorldActive = currentEnv === 'world' || (!hasVisitedWorld && shouldRenderDock);
+  // Environment tracking for releasing drive and pausing Canvas frameloop when switching away from 3D World
+  const currentEnv = useEnvironmentStore((state) => state.current);
+  const isWorldActive = currentEnv === 'world';
 
   const reportError = useCallback((err: unknown): void => {
     const parsed = parseIpcError(err);
@@ -239,26 +271,41 @@ export function WorldRoot({ api, initialWorld, showDock }: WorldRootProps = {}):
     }
   }, []);
 
+  const resetSnapshotState = useCallback(
+    (nextWorld: WorldFile = worldFileRef.current, nextTrack: Track = trackRef.current): void => {
+      latestSnapshotRef.current = null;
+      interpolator.reset();
+      updateReadoutsDom(defaultSnapshotForWorld(nextWorld, nextTrack));
+    },
+    [interpolator, updateReadoutsDom],
+  );
+
   const loadTrackById = useCallback(
-    async (id: string): Promise<Track> => {
+    async (id: string, options?: { readonly resetInterpolator?: boolean }): Promise<Track> => {
       try {
         const loaded = await resolvedApi.worldEdit.loadTrack(id);
+        trackRef.current = loaded;
         setTrack(loaded);
+        if (options?.resetInterpolator) {
+          resetSnapshotState(worldFileRef.current, loaded);
+        }
         return loaded;
       } catch (err) {
         const parsed = parseIpcError(err);
         // TODO(P2-01): remove when worldEdit is wired
         const fallback = BUILTIN_TRACKS[id] ?? BUILTIN_OVAL_TRACK;
-        if (parsed.code === 'not-implemented') {
-          setTrack(fallback);
-          return fallback;
-        }
-        setErrorMessage(parsed.message);
+        trackRef.current = fallback;
         setTrack(fallback);
+        if (options?.resetInterpolator) {
+          resetSnapshotState(worldFileRef.current, fallback);
+        }
+        if (parsed.code !== 'not-implemented') {
+          setErrorMessage(parsed.message);
+        }
         return fallback;
       }
     },
-    [resolvedApi],
+    [resetSnapshotState, resolvedApi],
   );
 
   const ensureControlConnected = useCallback(
@@ -267,28 +314,26 @@ export function WorldRoot({ api, initialWorld, showDock }: WorldRootProps = {}):
       if (connectInFlightRef.current) return connectInFlightRef.current;
 
       const now = performance.now();
-      const hasActiveRun =
-        runInfoRef.current !== null &&
-        (runInfoRef.current.state === 'running' ||
-          runInfoRef.current.state === 'starting' ||
-          runInfoRef.current.state === 'paused');
-
-      if (
-        !options?.force &&
-        !hasActiveRun &&
-        now - lastConnectFailAtMsRef.current < CONNECT_RETRY_BACKOFF_MS
-      ) {
-        return false;
+      if (!options?.force && connectFailuresRef.current > 0) {
+        const backoffMs = Math.min(
+          MAX_CONNECT_BACKOFF_MS,
+          INITIAL_CONNECT_BACKOFF_MS * 2 ** (connectFailuresRef.current - 1),
+        );
+        if (now - lastConnectFailAtMsRef.current < backoffMs) {
+          return false;
+        }
       }
 
       const promise = (async () => {
         try {
           await resolvedApi.control.connect({ kind: 'run' });
           controlConnectedRef.current = true;
+          connectFailuresRef.current = 0;
           lastConnectFailAtMsRef.current = -Infinity;
           return true;
         } catch {
           controlConnectedRef.current = false;
+          connectFailuresRef.current += 1;
           lastConnectFailAtMsRef.current = performance.now();
           return false;
         } finally {
@@ -314,13 +359,17 @@ export function WorldRoot({ api, initialWorld, showDock }: WorldRootProps = {}):
     void resolvedApi.worldEdit
       .loadTrack(worldFileRef.current.trackId)
       .then((loaded) => {
-        if (alive) setTrack(loaded);
+        if (alive) {
+          trackRef.current = loaded;
+          setTrack(loaded);
+        }
       })
       .catch((err) => {
         if (!alive) return;
         const parsed = parseIpcError(err);
         // TODO(P2-01): remove when worldEdit is wired
         const fallback = BUILTIN_TRACKS[worldFileRef.current.trackId] ?? BUILTIN_OVAL_TRACK;
+        trackRef.current = fallback;
         setTrack(fallback);
         if (parsed.code !== 'not-implemented') {
           setErrorMessage(parsed.message);
@@ -346,6 +395,8 @@ export function WorldRoot({ api, initialWorld, showDock }: WorldRootProps = {}):
           setSpeed(info.speed);
           setSeed(info.seed);
           if (info.state === 'running' || info.state === 'starting' || info.state === 'paused') {
+            connectFailuresRef.current = 0;
+            lastConnectFailAtMsRef.current = -Infinity;
             void ensureControlConnected({ force: true });
           }
         }
@@ -359,13 +410,17 @@ export function WorldRoot({ api, initialWorld, showDock }: WorldRootProps = {}):
       setRunInfo(info);
       setSpeed(info.speed);
       setSeed(info.seed);
+      if (info.state === 'ended') {
+        resetSnapshotState();
+      }
       if (info.trackId) {
-        void loadTrackById(info.trackId);
+        void loadTrackById(info.trackId, { resetInterpolator: info.state === 'ended' });
       }
       if (
         (info.state === 'running' || info.state === 'starting' || info.state === 'paused') &&
         prevState !== info.state
       ) {
+        connectFailuresRef.current = 0;
         lastConnectFailAtMsRef.current = -Infinity;
         void ensureControlConnected({ force: true });
       }
@@ -374,6 +429,7 @@ export function WorldRoot({ api, initialWorld, showDock }: WorldRootProps = {}):
     // Keep snapshots out of React state so snapshot arrival never re-renders WorldRoot
     const offSnapshot = resolvedApi.run.onSnapshot((snapshot) => {
       if (!alive) return;
+      if (runInfoRef.current?.state === 'ended') return;
       latestSnapshotRef.current = snapshot;
       interpolator.push(snapshot, performance.now());
       updateReadoutsDom(snapshot);
@@ -382,6 +438,7 @@ export function WorldRoot({ api, initialWorld, showDock }: WorldRootProps = {}):
     const offControlState = resolvedApi.control.onState((state) => {
       controlConnectedRef.current = state === 'connected';
       if (state === 'connected') {
+        connectFailuresRef.current = 0;
         lastConnectFailAtMsRef.current = -Infinity;
       }
     });
@@ -392,11 +449,19 @@ export function WorldRoot({ api, initialWorld, showDock }: WorldRootProps = {}):
       offSnapshot();
       offControlState();
     };
-  }, [ensureControlConnected, interpolator, loadTrackById, resolvedApi, updateReadoutsDom]);
+  }, [
+    ensureControlConnected,
+    interpolator,
+    loadTrackById,
+    resetSnapshotState,
+    resolvedApi,
+    updateReadoutsDom,
+  ]);
 
   const isRunning = runInfo?.state === 'running' || runInfo?.state === 'starting';
   const isPaused = runInfo?.state === 'paused';
   const editable = !isRunning;
+  const sceneRunMode: SceneRunMode = isRunning ? 'running' : isPaused ? 'paused' : 'idle';
 
   // Build structural scene data from editor worldFile and track (does not depend on 60 Hz snapshots)
   const baseSnapshot = useMemo<StateSnapshot>(
@@ -411,12 +476,13 @@ export function WorldRoot({ api, initialWorld, showDock }: WorldRootProps = {}):
 
   const sendDriveCommand = useCallback(
     (command: DriveCommandInput): void => {
+      if (driveModeRef.current !== 'manual') return;
       setLastDriveCommand((prev) =>
         prev.throttle === command.throttle && prev.steer === command.steer ? prev : command,
       );
       void (async () => {
         const connected = await ensureControlConnected();
-        if (!connected) return;
+        if (!connected || driveModeRef.current !== 'manual') return;
         await resolvedApi.control.drive(command).catch(() => {});
       })();
     },
@@ -433,8 +499,9 @@ export function WorldRoot({ api, initialWorld, showDock }: WorldRootProps = {}):
         prev.throttle === 0 && prev.steer === 0 ? prev : { throttle: 0, steer: 0 },
       );
       if (wasActive || hadKeys || alwaysRelease) {
+        const shouldSendNeutral = (wasActive || hadKeys) && driveModeRef.current === 'manual';
         void (async () => {
-          if (wasActive || hadKeys) {
+          if (shouldSendNeutral) {
             await resolvedApi.control.drive({ throttle: 0, steer: 0 }).catch(() => {});
           }
           await resolvedApi.control.releaseDrive().catch(() => {});
@@ -449,10 +516,21 @@ export function WorldRoot({ api, initialWorld, showDock }: WorldRootProps = {}):
   useEffect(() => {
     const nowManualActive = isWorldActive && driveMode === 'manual';
     if (prevManualActiveRef.current && !nowManualActive) {
-      releaseActiveDrive(true);
+      const hadActiveDrive = driveActiveRef.current || pressedKeysRef.current.size > 0;
+      pressedKeysRef.current.clear();
+      driveActiveRef.current = false;
+      setLastDriveCommand((prev) =>
+        prev.throttle === 0 && prev.steer === 0 ? prev : { throttle: 0, steer: 0 },
+      );
+      void (async () => {
+        if (hadActiveDrive) {
+          await resolvedApi.control.drive({ throttle: 0, steer: 0 }).catch(() => {});
+        }
+        await resolvedApi.control.releaseDrive().catch(() => {});
+      })();
     }
     prevManualActiveRef.current = nowManualActive;
-  }, [driveMode, isWorldActive, releaseActiveDrive]);
+  }, [driveMode, isWorldActive, resolvedApi]);
 
   // Release drive and disconnect control on WorldRoot unmount
   useEffect(() => {
@@ -460,13 +538,16 @@ export function WorldRoot({ api, initialWorld, showDock }: WorldRootProps = {}):
     return () => {
       const hadKeys = pressedKeys.size > 0;
       pressedKeys.clear();
-      const wasDriving = driveActiveRef.current || hadKeys;
+      const wasDriving = (driveActiveRef.current || hadKeys) && driveModeRef.current === 'manual';
+      const wasManual = driveModeRef.current === 'manual';
       driveActiveRef.current = false;
       void (async () => {
         if (wasDriving) {
           await resolvedApi.control.drive({ throttle: 0, steer: 0 }).catch(() => {});
         }
-        await resolvedApi.control.releaseDrive().catch(() => {});
+        if (wasManual || wasDriving) {
+          await resolvedApi.control.releaseDrive().catch(() => {});
+        }
         await resolvedApi.control.disconnect().catch(() => {});
       })();
     };
@@ -475,11 +556,19 @@ export function WorldRoot({ api, initialWorld, showDock }: WorldRootProps = {}):
   // Clear pressed keys and release drive on window blur or document visibilitychange to hidden
   useEffect(() => {
     const onBlur = (): void => {
-      releaseActiveDrive(driveActiveRef.current || pressedKeysRef.current.size > 0);
+      if (
+        driveModeRef.current === 'manual' &&
+        (driveActiveRef.current || pressedKeysRef.current.size > 0)
+      ) {
+        releaseActiveDrive(true);
+      } else {
+        pressedKeysRef.current.clear();
+        driveActiveRef.current = false;
+      }
     };
     const onVisibilityChange = (): void => {
       if (document.hidden || document.visibilityState === 'hidden') {
-        releaseActiveDrive(driveActiveRef.current || pressedKeysRef.current.size > 0);
+        onBlur();
       }
     };
     window.addEventListener('blur', onBlur);
@@ -746,11 +835,26 @@ export function WorldRoot({ api, initialWorld, showDock }: WorldRootProps = {}):
   useEffect(() => {
     if (!isWorldActive) return;
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (isEditableEventTarget(event.target)) return;
-      // Ignore auto-repeated keydown events and any modifier combinations (Cmd/Ctrl/Alt + key)
-      if (event.repeat || event.ctrlKey || event.metaKey || event.altKey) return;
+      // On any modifier keydown (Meta, Control, Alt) or chord, clear held keys and release drive
+      // so macOS Cmd-held keyup suppression never leaves a drive key stuck.
+      if (isModifierKey(event.key) || event.ctrlKey || event.metaKey || event.altKey) {
+        if (
+          driveModeRef.current === 'manual' &&
+          (pressedKeysRef.current.size > 0 || driveActiveRef.current)
+        ) {
+          releaseActiveDrive(true);
+        } else {
+          pressedKeysRef.current.clear();
+          driveActiveRef.current = false;
+        }
+        return;
+      }
+
+      if (event.repeat) return;
 
       if (isEstopKey(event)) {
+        // Space should not trigger E-stop while a button, input, select, or other interactive control has focus
+        if (isInteractiveControlTarget(event.target)) return;
         event.preventDefault();
         pressedKeysRef.current.clear();
         driveActiveRef.current = false;
@@ -763,6 +867,8 @@ export function WorldRoot({ api, initialWorld, showDock }: WorldRootProps = {}):
         })();
         return;
       }
+
+      if (isEditableEventTarget(event.target)) return;
 
       // Obstacle rotation & deletion shortcuts when an obstacle is selected and editable
       if (editable && selectedObstacleId) {
@@ -795,29 +901,32 @@ export function WorldRoot({ api, initialWorld, showDock }: WorldRootProps = {}):
       const dir = normalizeDriveKey(event.key);
       if (!dir) return;
 
+      // Track keys and send drive commands strictly in manual mode
+      if (driveMode !== 'manual' || estopLatched) return;
+
       pressedKeysRef.current.add(event.key);
-      if (driveMode === 'manual' && !estopLatched) {
-        const sampled = sampleManualDriveInput(pressedKeysRef.current);
-        driveActiveRef.current = sampled.active;
-        sendDriveCommand(sampled.command);
-      }
+      const sampled = sampleManualDriveInput(pressedKeysRef.current);
+      driveActiveRef.current = sampled.active;
+      sendDriveCommand(sampled.command);
     };
 
     const onKeyUp = (event: KeyboardEvent): void => {
       const dir = normalizeDriveKey(event.key);
       if (!dir) return;
+      if (driveMode !== 'manual' || estopLatched) {
+        pressedKeysRef.current.clear();
+        return;
+      }
       for (const k of [...pressedKeysRef.current]) {
         if (normalizeDriveKey(k) === dir) {
           pressedKeysRef.current.delete(k);
         }
       }
-      if (driveMode === 'manual' && !estopLatched) {
-        const sampled = sampleManualDriveInput(pressedKeysRef.current);
-        if (sampled.active) {
-          sendDriveCommand(sampled.command);
-        } else if (driveActiveRef.current) {
-          releaseActiveDrive(true);
-        }
+      const sampled = sampleManualDriveInput(pressedKeysRef.current);
+      if (sampled.active) {
+        sendDriveCommand(sampled.command);
+      } else if (driveActiveRef.current) {
+        releaseActiveDrive(true);
       }
     };
 
@@ -857,16 +966,18 @@ export function WorldRoot({ api, initialWorld, showDock }: WorldRootProps = {}):
   }, [driveMode, estopLatched, isWorldActive, releaseActiveDrive, sendDriveCommand]);
 
   const handleToggleMode = async (nextMode: Mode): Promise<void> => {
-    const wasDriving = driveActiveRef.current || pressedKeysRef.current.size > 0;
+    const wasManual = driveModeRef.current === 'manual';
+    const wasDriving = wasManual && (driveActiveRef.current || pressedKeysRef.current.size > 0);
     pressedKeysRef.current.clear();
     driveActiveRef.current = false;
+    driveModeRef.current = nextMode;
     setLastDriveCommand((prev) =>
       prev.throttle === 0 && prev.steer === 0 ? prev : { throttle: 0, steer: 0 },
     );
     setDriveMode(nextMode);
     setEstopLatched(false);
     await ensureControlConnected({ force: true });
-    if (driveMode === 'manual' && nextMode !== 'manual') {
+    if (wasManual && nextMode !== 'manual') {
       if (wasDriving) {
         await resolvedApi.control.drive({ throttle: 0, steer: 0 }).catch(() => {});
       }
@@ -889,12 +1000,18 @@ export function WorldRoot({ api, initialWorld, showDock }: WorldRootProps = {}):
     setErrorMessage('');
     try {
       if (!runInfo || runInfo.state === 'ended') {
+        const prevState = runInfoRef.current?.state;
         const nextWorld: WorldFile = { ...worldFileRef.current, seed };
         const started = await resolvedApi.run.start({ world: nextWorld, seed, speed });
+        const statusAlreadyHandled =
+          runInfoRef.current?.state === started.state && prevState !== started.state;
         runInfoRef.current = started;
         setRunInfo(started);
-        lastConnectFailAtMsRef.current = -Infinity;
-        void ensureControlConnected({ force: true });
+        if (!statusAlreadyHandled) {
+          connectFailuresRef.current = 0;
+          lastConnectFailAtMsRef.current = -Infinity;
+          void ensureControlConnected({ force: true });
+        }
       } else if (runInfo.state === 'running') {
         await resolvedApi.run.pause();
       } else if (runInfo.state === 'paused') {
@@ -909,6 +1026,7 @@ export function WorldRoot({ api, initialWorld, showDock }: WorldRootProps = {}):
     setErrorMessage('');
     try {
       await resolvedApi.run.stop();
+      resetSnapshotState();
     } catch (err) {
       setErrorMessage(parseIpcError(err).message);
     }
@@ -944,14 +1062,14 @@ export function WorldRoot({ api, initialWorld, showDock }: WorldRootProps = {}):
       if (isPaused) {
         try {
           const live = await resolvedApi.worldEdit.currentLayout();
-          payload = {
+          payload = ensureWorldObstacleIds({
             ...live,
             seed,
             obstacles:
               worldFileRef.current.obstacles.length > 0
                 ? worldFileRef.current.obstacles
                 : live.obstacles,
-          };
+          });
         } catch {
           // Use local worldFile when no active live layout in main
         }
@@ -986,23 +1104,25 @@ export function WorldRoot({ api, initialWorld, showDock }: WorldRootProps = {}):
     setStatusMessage('');
     try {
       const targetPath = normalizeLayoutPath(pathToLoad);
-      let loaded: WorldFile;
+      let parsedWorld: WorldFile;
       try {
-        loaded = World.parse(await resolvedApi.worldEdit.load(targetPath));
+        parsedWorld = World.parse(await resolvedApi.worldEdit.load(targetPath));
       } catch (loadErr) {
         if (parseIpcError(loadErr).code === 'not-implemented') {
           const raw = await resolvedApi.project.readFile(targetPath);
-          loaded = World.parse(JSON.parse(raw));
+          parsedWorld = World.parse(JSON.parse(raw));
         } else {
           throw loadErr;
         }
       }
+      const loaded = ensureWorldObstacleIds(parsedWorld);
       worldFileRef.current = loaded;
       setWorldFile(loaded);
       setSeed(loaded.seed);
       setLayoutPath(targetPath);
       setSelectedObstacleId(null);
-      await loadTrackById(loaded.trackId);
+      const loadedTrack = await loadTrackById(loaded.trackId, { resetInterpolator: true });
+      resetSnapshotState(loaded, loadedTrack);
       setStatusMessage(`Loaded ${targetPath}`);
     } catch (err) {
       setErrorMessage(parseIpcError(err).message);
@@ -1090,7 +1210,7 @@ export function WorldRoot({ api, initialWorld, showDock }: WorldRootProps = {}):
             >
               {RUN_SPEEDS.map((s) => (
                 <option key={String(s)} value={String(s)}>
-                  {s === 'unpaced' ? 'Unpaced' : `${s}×`}
+                  {s === 'unpaced' ? 'Unpaced' : `${s}\u00d7`}
                 </option>
               ))}
             </select>
@@ -1230,12 +1350,10 @@ export function WorldRoot({ api, initialWorld, showDock }: WorldRootProps = {}):
             value={worldFile.trackId}
             onChange={(e) => {
               const nextTrackId = e.target.value;
-              setWorldFile((prev) => {
-                const next = { ...prev, trackId: nextTrackId };
-                worldFileRef.current = next;
-                return next;
-              });
-              void loadTrackById(nextTrackId);
+              const nextWorld: WorldFile = { ...worldFileRef.current, trackId: nextTrackId };
+              worldFileRef.current = nextWorld;
+              setWorldFile(nextWorld);
+              void loadTrackById(nextTrackId, { resetInterpolator: true });
             }}
           >
             {trackIds.map((id) => (
@@ -1557,6 +1675,8 @@ export function WorldRoot({ api, initialWorld, showDock }: WorldRootProps = {}):
         orbitState={orbitState}
         onOrbitChange={setOrbitState}
         interpolator={interpolator}
+        runMode={sceneRunMode}
+        active={isWorldActive}
         editable={editable}
         activeTool={activeTool}
         selectedObstacleId={selectedObstacleId}
@@ -1567,8 +1687,8 @@ export function WorldRoot({ api, initialWorld, showDock }: WorldRootProps = {}):
         onObstacleDragEnd={handleObstacleDragEnd}
       />
 
-      {/* Standalone BottomPanel for unit/component tests; App.tsx passes createWorldDockTabs(api) to its shared BottomPanel */}
-      {shouldRenderDock ? (
+      {/* Optional standalone BottomPanel when showDock is explicitly passed in tests */}
+      {showDock ? (
         <BottomPanel api={resolvedApi} projectDir="/project" jump={() => {}} tabs={dockTabs} />
       ) : null}
     </section>

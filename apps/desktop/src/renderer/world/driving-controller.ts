@@ -39,9 +39,39 @@ export function normalizeDriveKey(key: string): 'up' | 'down' | 'left' | 'right'
   }
 }
 
+export function isModifierKey(key: string): boolean {
+  return key === 'Meta' || key === 'Control' || key === 'Alt' || key === 'OS' || key === 'Super';
+}
+
 export function isEstopKey(event: { readonly key: string; readonly code?: string }): boolean {
   return event.key === ' ' || event.code === 'Space';
 }
+
+const INTERACTIVE_TAGS = new Set([
+  'INPUT',
+  'TEXTAREA',
+  'SELECT',
+  'BUTTON',
+  'A',
+  'SUMMARY',
+  'DETAILS',
+]);
+
+const INTERACTIVE_ROLES = new Set([
+  'button',
+  'tab',
+  'checkbox',
+  'radio',
+  'switch',
+  'slider',
+  'spinbutton',
+  'combobox',
+  'listbox',
+  'menuitem',
+  'option',
+  'textbox',
+  'link',
+]);
 
 export function isEditableEventTarget(target: EventTarget | null): boolean {
   if (!target || typeof target !== 'object') return false;
@@ -49,6 +79,49 @@ export function isEditableEventTarget(target: EventTarget | null): boolean {
   const tag = el.tagName?.toUpperCase();
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
   if (el.isContentEditable) return true;
+  return false;
+}
+
+/**
+ * Returns true when `target` (or `document.activeElement` when `target` is `window`/`document`)
+ * is an interactive UI control (such as a focused `<button>`, `<input>`, `<select>`, `<textarea>`,
+ * or ARIA widget) where `Space` activates the control rather than triggering a global E-stop.
+ * Returns false when the 3D canvas, ground overlay, or document body has focus.
+ */
+export function isInteractiveControlTarget(target: EventTarget | null): boolean {
+  if (isEditableEventTarget(target)) return true;
+
+  const checkElement = (node: EventTarget | null): boolean => {
+    if (!node || typeof node !== 'object' || !('tagName' in node)) return false;
+    const el = node as HTMLElement;
+    const tag = el.tagName?.toUpperCase();
+    if (!tag || tag === 'BODY' || tag === 'HTML' || tag === 'CANVAS') return false;
+    if (INTERACTIVE_TAGS.has(tag)) return true;
+    if (el.isContentEditable) return true;
+    const role = el.getAttribute?.('role')?.toLowerCase();
+    if (role && INTERACTIVE_ROLES.has(role)) return true;
+    if (typeof el.closest === 'function') {
+      const ancestor = el.closest(
+        'button, input, textarea, select, a[href], summary, [contenteditable="true"], [role="button"], [role="tab"], [role="slider"], [role="checkbox"], [role="switch"], [role="combobox"], [role="menuitem"]',
+      );
+      if (ancestor) return true;
+    }
+    return false;
+  };
+
+  if (checkElement(target)) return true;
+  if (
+    (target === null ||
+      (typeof window !== 'undefined' && target === window) ||
+      (typeof document !== 'undefined' &&
+        (target === document ||
+          target === document.body ||
+          target === document.documentElement))) &&
+    typeof document !== 'undefined' &&
+    document.activeElement
+  ) {
+    return checkElement(document.activeElement);
+  }
   return false;
 }
 
