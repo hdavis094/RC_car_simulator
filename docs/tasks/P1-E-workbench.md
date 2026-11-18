@@ -1,6 +1,6 @@
 # P1-E — app: Workbench environment
 
-Status: in-review
+Status: done
 Agent: Antigravity
 Branch: ws/p1-e
 Depends on: P0 (all)
@@ -110,3 +110,11 @@ Main-process services (P1-D), the world viewer (P1-F), visual wiring diagrams, d
 - **Contract change requests**:
   - Integration request for the shell (`apps/desktop/src/renderer/shell/App.tsx`, owned by P1-D): call `hasUnsavedWorkbenchChanges()` (exported from `apps/desktop/src/renderer/workbench/index.ts`) in its confirm-before-switch, close, and `beforeunload` guards so unsaved Workbench edits are protected alongside dirty code editors.
 - **Open questions**: none.
+
+- **Merged** (orchestrator, 2026-11-18): review round 5 approved `ccef637` (rebased as `e14c2a6`); CI green on Linux and macOS. Non-blocking follow-ups, not fixed:
+  - "Reload from disk" while `car.json` is unreadable discards the in-memory edits and leaves a blocking load error (`reloadFromDisk` → `load(force)` → `!carResult.ok`). Bail out and keep the edits when the forced read fails.
+  - The stale-result test switches between two `api` objects. The real app uses one `window.rcsim`, so protection there rests on `projectDir`; the same-api late `writeCar`/`readCar` case and `saving === false` after a dropped save are untested.
+  - A catalog `diskReadError` isn't cleared by `catalog.onChange` recovering (`updateCatalogListing`).
+  - `createCustomPart` returns `{ok: true}` when its result is dropped after a project switch.
+  - The `diskReadError` banner and the external-change banner can both be `role="alert"` at once.
+  - Shell integration of `hasUnsavedWorkbenchChanges()` is done by the orchestrator on main.
