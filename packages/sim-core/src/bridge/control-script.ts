@@ -174,6 +174,10 @@ export const MAX_CONTROL_BYTES_PER_TICK = 32 * 1024;
  * isn't reading) is an `error` too. An entry counts as delivered only once its
  * write has completed; the rest is reported by `undelivered()`.
  *
+ * **No retries.** A failed write proves nothing about how much of it arrived, so
+ * it is never retried (a retry could run commands twice): it ends the run with
+ * an `error` naming the port and the tick, and the source takes no more steps.
+ *
  * The car's replies (hello, telemetry) are read and kept in `received`.
  */
 export class ControlledSource implements ActuatorSource {
@@ -185,6 +189,9 @@ export class ControlledSource implements ActuatorSource {
   readonly #delivered: boolean[];
   /** Everything before this index is delivered. */
   #cursor = 0;
+  #stopped = false;
+  /** Set by an ambiguous write failure: the source takes no further step. */
+  #failure: ActuatorSourceEnded | undefined;
   #count = 0;
   readonly #listening = new Map<number, { hostPort: number; bindAddress: string }>();
   readonly #everListened = new Set<number>();
@@ -243,6 +250,7 @@ export class ControlledSource implements ActuatorSource {
   }
 
   async step(input: TickInput): Promise<TickOutput> {
+    if (this.#failure) throw this.#failure;
     await this.#deliverDue(input);
     const output = await this.#inner.step(input);
     for (const event of output.netEvents) {
@@ -269,6 +277,7 @@ export class ControlledSource implements ActuatorSource {
   }
 
   async stop(): Promise<void> {
+    this.#stopped = true;
     for (const port of [...this.#clients.keys()]) this.#drop(port);
     await this.#inner.stop();
   }
@@ -300,14 +309,14 @@ export class ControlledSource implements ActuatorSource {
     if (batches.size === 0) return;
 
     const writes: Promise<void>[] = [];
+    let failedPort: number | undefined;
     for (const [port, batch] of batches) {
       const client = await this.#client(port, this.#listening.get(port) as Target);
       writes.push(
         new Promise<void>((resolve) => {
           client.socket.write(batch.text.join(''), (error) => {
             if (error) {
-              // The firmware dropped the connection (newer client, closed it): the
-              // entries stay undelivered and go out again over a new connection.
+              failedPort ??= port;
               this.#drop(port);
             } else {
               for (const i of batch.indices) this.#delivered[i] = true;
@@ -326,6 +335,14 @@ export class ControlledSource implements ActuatorSource {
           message: `control input for tick ${input.tick} did not drain within ${this.#stallMs} ms (${bytes} bytes): the firmware's socket buffers are full because it is not reading them`,
         }),
     );
+    // A failed write proves nothing about how much of it arrived, and a retry could
+    // run commands the firmware already received a second time: never retried.
+    if (failedPort !== undefined) {
+      throw (this.#failure = new ActuatorSourceEnded({
+        kind: 'error',
+        message: `control connection to port ${failedPort} reset during tick ${input.tick}; delivery ambiguous (the firmware may have received some of the lines, so none are resent)`,
+      }));
+    }
     while (this.#cursor < this.#entries.length && this.#delivered[this.#cursor]) this.#cursor += 1;
   }
 
@@ -381,6 +398,20 @@ export class ControlledSource implements ActuatorSource {
         socket.once('connect', () => {
           client.isConnected = true;
           resolve();
+        });
+        // Destroyed before it connected (by a stop, say): only 'close' says so.
+        socket.once('close', () => {
+          if (client.isConnected) return;
+          reject(
+            new ActuatorSourceEnded(
+              this.#stopped
+                ? { kind: 'finished' }
+                : {
+                    kind: 'error',
+                    message: `control: the connection to firmware port ${port} closed before it was established`,
+                  },
+            ),
+          );
         });
         socket.once('error', (error) => {
           socket.destroy();

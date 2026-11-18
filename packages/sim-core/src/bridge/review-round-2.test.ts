@@ -210,7 +210,8 @@ describe('3. frames decoded before a malformed one', () => {
     });
     const cap = capture(run);
     const result = await run.step(3);
-    expect(result.ticks).toBe(0); // the violation arrived with tick 0's answer
+    // tick 0's own answer was valid and stands; the unsolicited frame behind it ends the run
+    expect(result.ticks).toBe(1);
     expect(result.end).toMatchObject({ kind: 'error' });
     expect(JSON.stringify(result.end)).toMatch(/unexpected STEP_DONE/);
     expect(cap.text()).not.toContain('wrong tick accepted');

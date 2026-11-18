@@ -50,11 +50,6 @@ export class Channel {
     });
   }
 
-  /** The next event without consuming it, if one is already queued. */
-  peek(): ChannelEvent | undefined {
-    return this.#queue[0];
-  }
-
   /** Writes one frame. Resolves false when the connection is gone (the write is dropped). */
   send(message: Message): Promise<boolean> {
     return this.sendFrame(encodeFrame(message)); // throws ProtocolError for an oversize message

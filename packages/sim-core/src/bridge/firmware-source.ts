@@ -379,9 +379,9 @@ export class FirmwareSource implements ActuatorSource {
     if (event.kind !== 'message' || event.message.type !== 'STEP_DONE') {
       throw await this.#unexpected(event);
     }
-    // A frame that went wrong right behind the answer ends the run at this tick.
-    const behind = channel.peek();
-    if (behind?.kind === 'malformed') throw await this.#endOf(behind);
+    // Frames are applied one at a time, in wire order, whatever the chunking: this
+    // answer was valid, so its tick completes and its outputs stand. A bad frame
+    // behind it is the next event the channel hands over, and ends the run there.
     const done = event.message; // `#accept` has checked that it answers this tick
     // A rebooted firmware starts with nothing driving its pins: say so first, so
     // anything it sets up in this very tick still wins.
