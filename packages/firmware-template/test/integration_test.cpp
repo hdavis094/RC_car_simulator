@@ -13,12 +13,15 @@
 #include <thread>
 
 #include "fake_sim.h"
+#include "socket_helpers.h"
 
 namespace {
 using namespace rcsim::hal;
 struct Socket {
   int fd;
-  explicit Socket(int family) : fd(::socket(family, SOCK_STREAM, 0)) { REQUIRE(fd >= 0); }
+  explicit Socket(int family) : fd(::socket(family, SOCK_STREAM, 0)) {
+    socket_test::nonblocking(fd);
+  }
   ~Socket() { ::close(fd); }
   bool readable(int timeout = 0) const {
     pollfd p{fd, POLLIN, 0};
@@ -29,21 +32,26 @@ struct Socket {
     address.sin_family = AF_INET;
     address.sin_port = htons(port);
     inet_pton(AF_INET, "127.0.0.1", &address.sin_addr);
-    REQUIRE(::connect(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0);
-  }
-  void write(const std::string& text) {
-    size_t sent = 0;
-    while (sent < text.size()) {
-      const auto n = ::send(fd, text.data() + sent, text.size() - sent, 0);
-      REQUIRE(n > 0);
-      sent += static_cast<size_t>(n);
+    if (::connect(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
+      REQUIRE((errno == EINPROGRESS || socket_test::wouldBlock()));
+      socket_test::waitReady(fd, POLLOUT, socket_test::Clock::now() + std::chrono::seconds(2));
+      int error = 0;
+      socklen_t size = sizeof(error);
+      REQUIRE(getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &size) == 0);
+      REQUIRE(error == 0);
     }
   }
+  void write(const std::string& text) {
+    socket_test::transfer(fd, reinterpret_cast<uint8_t*>(const_cast<char*>(text.data())),
+                          text.size(), true);
+  }
   void read(std::string& text) {
-    while (readable()) {
+    for (size_t attempts = 0; attempts < 64; ++attempts) {
       char buffer[16384];
-      auto n = ::recv(fd, buffer, sizeof(buffer), 0);
-      if (n <= 0) return;
+      const auto n = ::recv(fd, buffer, sizeof(buffer), MSG_DONTWAIT);
+      if (n < 0 && errno == EINTR) continue;
+      if (n == 0 || (n < 0 && (socket_test::wouldBlock() || errno == ECONNRESET))) return;
+      REQUIRE_MESSAGE(n > 0, "controller receive failed; errno=", errno);
       text.append(buffer, static_cast<size_t>(n));
     }
   }
@@ -80,6 +88,21 @@ struct Process {
     throw std::runtime_error("firmware did not exit");
   }
 };
+void sendFrame(int fd, const JsonDocument& message) {
+  auto bytes = encode(message);
+  socket_test::transfer(fd, bytes.data(), bytes.size(), true);
+}
+JsonDocument receiveFrame(int fd) {
+  Bytes bytes(4);
+  socket_test::transfer(fd, bytes.data(), bytes.size(), false);
+  uint32_t length = 0;
+  for (unsigned i = 0; i < 4; ++i) length |= uint32_t(bytes[i]) << (8 * i);
+  REQUIRE(length >= 1);
+  REQUIRE(length <= 1048576);
+  bytes.resize(length + 4);
+  socket_test::transfer(fd, bytes.data() + 4, length, false);
+  return decode(bytes);
+}
 std::vector<JsonDocument> messages(const std::string& text) {
   std::vector<JsonDocument> result;
   size_t start = 0, end;
@@ -118,11 +141,10 @@ TEST_CASE(
     int fd;
     ~Close() { ::close(fd); }
   } close{fd};
-  timeval timeout{2, 0};
-  REQUIRE(setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) == 0);
-  REQUIRE(receive(fd)["type"] == "HELLO");
+  socket_test::nonblocking(fd);
+  REQUIRE(receiveFrame(fd)["type"] == "HELLO");
   hal_test::FakeSim sim;
-  send(fd, sim.config);
+  sendFrame(fd, sim.config);
   uint16_t port = 0;
   std::string serial, firstText, secondText;
   bool connected = false, replaced = false, sawAuto = false, sawDrive = false, sawFailsafe = false;
@@ -153,8 +175,8 @@ TEST_CASE(
       first.read(firstText);
       second.write(std::string(256, '\n') + "{\"t\":\"estop\"}\n" + std::string(1024, '\n'));
     }
-    send(fd, sim.next());
-    auto done = receive(fd);
+    sendFrame(fd, sim.next());
+    auto done = receiveFrame(fd);
     REQUIRE(done["type"] == "STEP_DONE");
     REQUIRE(done["message"]["tick"] == tick);
     auto data = done["message"].as<JsonVariantConst>();
@@ -208,7 +230,7 @@ TEST_CASE(
   bye["type"] = "BYE";
   bye["message"]["reason"] = "shutdown";
   bye["message"]["message"] = "starter test complete";
-  send(fd, bye);
+  sendFrame(fd, bye);
   CHECK(firmware.wait() == 0);
   INFO(serial);
   CHECK(connected);

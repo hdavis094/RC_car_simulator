@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { runHostTests } from './run-host-tests.mjs';
 import { compilerWords } from '../../hal/scripts/compiler-command.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -13,6 +14,7 @@ function run(command, args, options = {}) {
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`${command} exited ${result.status ?? result.signal}`);
 }
+run(process.execPath, ['--test', path.join(root, 'scripts/run-host-tests.test.mjs')]);
 for (const [source, target] of [
   ['default-car.json', 'car.json'],
   ['default-car.car_config.h', 'include/car_config.h'],
@@ -80,6 +82,9 @@ for (const cxx of [process.env.CXX || 'c++', 'g++', 'clang++']) {
     '-o',
     executable,
   ]);
-  run(executable, [], { cwd: hal, env: { ...process.env, STARTER_PROJECT: root } });
+  await runHostTests(executable, ['--duration=true', '--no-colors=true'], {
+    cwd: hal,
+    env: { ...process.env, STARTER_PROJECT: root },
+  });
 }
 if (!seen.size) throw new Error('No C++ compiler found');

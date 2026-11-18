@@ -10,6 +10,7 @@
 #include <string>
 
 #include "control.h"
+#include "socket_helpers.h"
 
 using namespace car;
 TEST_CASE("outbound frames include LF in one send attempt, or drop whole when oversized") {
@@ -46,19 +47,26 @@ TEST_CASE("a full socket cannot delay the output update, failsafe or e-stop") {
       ::close(b);
     }
   } cleanup{sockets[0], sockets[1]};
-  int limit = 4096;
-  REQUIRE(setsockopt(sockets[0], SOL_SOCKET, SO_SNDBUF, &limit, sizeof(limit)) == 0);
-  std::string filler(4096, 'x');
+  for (int fd : sockets) {
+    socket_test::nonblocking(fd);
+    socket_test::smallBuffers(fd);
+  }
+  std::string filler(1024, 'x');
   size_t queued = 0;
-  while (true) {
-    const auto n = ::send(sockets[0], filler.data(), filler.size(), MSG_DONTWAIT);
-    if (n < 0) {
-      REQUIRE((errno == EAGAIN || errno == EWOULDBLOCK));
+  bool full = false;
+  // Capacity can vary by OS: bound attempts AND bytes rather than waiting
+  // indefinitely for EAGAIN. The receiver is never drained during this fill.
+  for (size_t attempts = 0; attempts < 1024 && queued < 1024 * 1024; ++attempts) {
+    const auto n = ::send(sockets[0], filler.data(), filler.size(), socket_test::sendFlags());
+    if (n < 0 && errno == EINTR) continue;
+    if (n < 0 && socket_test::wouldBlock()) {
+      full = true;
       break;
     }
-    REQUIRE(n > 0);
+    REQUIRE_MESSAGE(n > 0, "fill failed; errno=", errno);
     queued += static_cast<size_t>(n);
   }
+  REQUIRE_MESSAGE(full, "socket did not fill within 1 MiB / 1024 attempts");
   JsonDocument message;
   message["t"] = "telemetry";
   JsonDocument greeting;
@@ -111,23 +119,27 @@ TEST_CASE("a full socket cannot delay the output update, failsafe or e-stop") {
   // Loaded macOS runners have headroom; blocking retry regressions take seconds.
   CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(1));
   size_t received = 0;
-  while (true) {
+  for (size_t attempts = 0; received < queued && attempts < 1024; ++attempts) {
     char bytes[4096];
-    const auto n = ::recv(sockets[1], bytes, sizeof(bytes), MSG_DONTWAIT);
-    if (n < 0) break;
-    REQUIRE(n > 0);
+    const auto n =
+        ::recv(sockets[1], bytes, std::min(sizeof(bytes), queued - received), MSG_DONTWAIT);
+    if (n < 0 && errno == EINTR) continue;
+    REQUIRE_MESSAGE(n > 0, "drain failed; errno=", errno);
     received += static_cast<size_t>(n);
   }
-  CHECK(received == queued);  // No prefix of a dropped line reached the peer.
+  REQUIRE(received == queued);
+  char extra;
+  REQUIRE(::recv(sockets[1], &extra, 1, MSG_DONTWAIT) < 0);
+  REQUIRE(socket_test::wouldBlock());  // No prefix of a dropped line reached the peer.
   helloPending = retryHello(helloPending, hello);
-  CHECK_FALSE(helloPending);
+  REQUIRE_FALSE(helloPending);  // Abort here if no hello was sent; never wait in recv.
   helloPending = retryHello(helloPending, [] {
     FAIL("a sent hello must not be repeated");
     return SendResult::Sent;
   });
   CHECK_FALSE(helloPending);
   char bytes[128];
-  const auto n = ::recv(sockets[1], bytes, sizeof(bytes), 0);
+  const auto n = ::recv(sockets[1], bytes, sizeof(bytes), MSG_DONTWAIT);
   REQUIRE(n > 0);
   CHECK(std::string(bytes, static_cast<size_t>(n)) == "{\"t\":\"hello\"}\n");
 }
@@ -142,10 +154,8 @@ TEST_CASE("socket send treats memory exhaustion as a dropped message, and peer c
     int fd;
     ~Cleanup() { ::close(fd); }
   } cleanup{sockets[0]};
-#ifdef SO_NOSIGPIPE
-  int enabled = 1;
-  REQUIRE(setsockopt(sockets[0], SOL_SOCKET, SO_NOSIGPIPE, &enabled, sizeof(enabled)) == 0);
-#endif
+  socket_test::nonblocking(sockets[0]);
+  socket_test::nonblocking(sockets[1]);
   REQUIRE(::close(sockets[1]) == 0);
   const uint8_t bytes[] = {'x', '\n'};
   CHECK(trySendSocket(sockets[0], bytes, sizeof(bytes)) == SendResult::Disconnect);

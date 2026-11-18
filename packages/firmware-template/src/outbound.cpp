@@ -49,6 +49,13 @@ SendResult trySendSocket(int fd, const uint8_t* bytes, size_t size) {
   // https://github.com/espressif/esp-lwip/blob/fa4dffdfac52587a26c1f29258376df750cf8474/src/api/api_msg.c#L386-L398
   // https://github.com/espressif/esp-lwip/blob/fa4dffdfac52587a26c1f29258376df750cf8474/src/api/api_msg.c#L1774-L1824
   // https://github.com/espressif/esp-lwip/blob/fa4dffdfac52587a26c1f29258376df750cf8474/src/api/sockets.c#L1918-L1922
+#if !defined(MSG_NOSIGNAL) && defined(SO_NOSIGPIPE)
+  // macOS has no per-send MSG_NOSIGNAL. Do not rely on a caller's signal
+  // disposition: peer loss must return EPIPE, including in the standalone adapter.
+  int noSignal = 1;
+  if (setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, sizeof(noSignal)) != 0)
+    return SendResult::Disconnect;
+#endif
   fd_set writable;
   FD_ZERO(&writable);
   FD_SET(fd, &writable);
