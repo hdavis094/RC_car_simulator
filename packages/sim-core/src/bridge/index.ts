@@ -12,4 +12,6 @@ export {
   parseControlScript,
   withControlScript,
   type ControlEntry,
+  type UndeliveredEntry,
 } from './control-script.ts';
+export { installTerminationHandlers, killAllFirmware } from './process.ts';

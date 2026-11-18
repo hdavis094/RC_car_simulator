@@ -14,6 +14,7 @@ import {
   ControlScriptError,
   parseControlScript,
   withControlScript,
+  type ControlledSource,
 } from '../bridge/control-script.ts';
 import { createFirmwareSource } from '../bridge/firmware-source.ts';
 import { createRun } from '../run/run.ts';
@@ -139,6 +140,7 @@ export async function runScenario(
     );
   }
   let source: ActuatorSource;
+  let controlled: ControlledSource | undefined;
   if (spec.firmware !== undefined) {
     // Check the inputs before spawning anything.
     const control =
@@ -157,7 +159,7 @@ export async function runScenario(
       }
       source = createFirmwareSource({ binary });
     }
-    if (control) source = withControlScript(source, control);
+    if (control) source = controlled = withControlScript(source, control);
   } else if (spec.script !== undefined) {
     source = createScriptedSource(parseTimeline(await readJson(at(spec.script), 'script')));
   } else {
@@ -185,7 +187,13 @@ export async function runScenario(
   } finally {
     await run.stop();
   }
-  const end: RunEnd = run.end ?? { kind: 'stopped' };
+  let end: RunEnd = run.end ?? { kind: 'stopped' };
+  // A timeline that wasn't played in full is a failed scenario, not a silent pass:
+  // its entries never reached the firmware. (A run that already failed keeps its own end.)
+  const unsent = controlled?.describeUndelivered();
+  if (unsent && (end.kind === 'stopped' || end.kind === 'finished')) {
+    end = { kind: 'error', message: unsent };
+  }
 
   const m = run.metrics();
   const metrics = Object.fromEntries(SCENARIO_METRICS.map((name) => [name, m[name]])) as Record<

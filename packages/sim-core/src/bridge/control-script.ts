@@ -7,6 +7,7 @@ import {
   type TickInput,
   type TickOutput,
 } from '../api/actuator-source.ts';
+import { DEFAULT_STALL_TIMEOUT_MS } from './firmware-source.ts';
 
 /** A control-timeline file that is malformed (the CLI reports it as bad input). */
 export class ControlScriptError extends Error {
@@ -38,7 +39,7 @@ const MAX_ENTRIES = 200_000;
  * `line` is sent verbatim (to test how the firmware copes with junk). `port`
  * defaults to the control port, 3333. `everyMs` with `untilUs` repeats the
  * entry, the way a held stick is resent to beat the 500 ms failsafe; a repeated
- * `drive` has its `seq` raised by one each time. Entries are sent in time order.
+ * `drive` has its `seq` raised by one each time (wrapping at 2³²). Entries are sent in time order.
  */
 export function parseControlScript(value: unknown): ControlEntry[] {
   if (!Array.isArray(value))
@@ -84,7 +85,8 @@ export function parseControlScript(value: unknown): ControlEntry[] {
     }
     const lineFor = (n: number): string =>
       message?.t === 'drive' && n > 0
-        ? JSON.stringify({ ...message, seq: (message.seq as number) + n })
+        ? // seq is a u32 that wraps, as a client's would
+          JSON.stringify({ ...message, seq: ((message.seq as number) + n) % 2 ** 32 })
         : line;
 
     const emit = (at: number, n: number): void => {
@@ -115,32 +117,87 @@ export function parseControlScript(value: unknown): ControlEntry[] {
   return entries.sort((a, b) => a.tUs - b.tUs);
 }
 
+/** An entry the run ended without delivering. */
+export interface UndeliveredEntry extends ControlEntry {
+  readonly reason: 'port-never-listened' | 'run-ended-first';
+}
+
+interface Client {
+  readonly socket: net.Socket;
+  /** Settles when connected; rejects with the connect error. */
+  readonly connected: Promise<void>;
+  isConnected: boolean;
+}
+
 /**
  * An `ActuatorSource` that plays a control timeline into the firmware it
- * wraps. Each entry is written to the firmware's TCP server (found through its
- * LISTEN net event, so the host port hal picked doesn't matter) just before
- * the tick that contains its time, and every other call passes through.
+ * wraps. Every other call passes through.
  *
- * An entry whose port isn't listening yet waits, and so does everything after
- * it. The car's replies (hello, telemetry) are read and kept in `received`.
+ * **When.** An entry is written at the first tick boundary at or after its
+ * `tUs`, never before: delivery is quantised to tick starts, so an entry is up
+ * to one tick late (100 900 µs goes out at 101 000 µs with 1 ms ticks). It
+ * goes to the firmware's TCP server, found through its LISTEN net event, so
+ * the host port hal chose doesn't matter. An entry whose port isn't listening
+ * yet waits, and so does everything after it.
+ *
+ * **Never blocking.** A write is queued on the socket and not waited for: the
+ * firmware reads its sockets only while it runs a tick, so a step that waited
+ * for the firmware to drain what it was sent could never finish. The only
+ * wait here is the first connection, which the kernel completes without the
+ * firmware (and which counts against the stall timeout like any other wait).
+ * Lines too many to fit the socket's buffers reach the firmware over the
+ * following ticks, as they would reach a real car over a real network.
+ *
+ * The car's replies (hello, telemetry) are read and kept in `received`.
  */
 export class ControlledSource implements ActuatorSource {
   /** The last lines the firmware sent back over its control connections. */
   readonly received: string[] = [];
   readonly #inner: ActuatorSource;
   readonly #entries: readonly ControlEntry[];
+  readonly #stallMs: number;
   #next = 0;
   readonly #listening = new Map<number, { hostPort: number; bindAddress: string }>();
-  readonly #clients = new Map<number, net.Socket>();
+  readonly #everListened = new Set<number>();
+  readonly #clients = new Map<number, Client>();
 
-  constructor(inner: ActuatorSource, entries: readonly ControlEntry[]) {
+  constructor(
+    inner: ActuatorSource,
+    entries: readonly ControlEntry[],
+    options: { readonly stallTimeoutMs?: number } = {},
+  ) {
     this.#inner = inner;
     this.#entries = entries;
+    this.#stallMs = options.stallTimeoutMs ?? DEFAULT_STALL_TIMEOUT_MS;
   }
 
-  /** Lines still waiting to be sent. */
+  /** Lines not yet sent. */
   get pending(): number {
     return this.#entries.length - this.#next;
+  }
+
+  /** The entries the run has not delivered (so far), with why. */
+  undelivered(): readonly UndeliveredEntry[] {
+    return this.#entries.slice(this.#next).map((entry) => ({
+      ...entry,
+      reason: this.#everListened.has(entry.port) ? 'run-ended-first' : 'port-never-listened',
+    }));
+  }
+
+  /** A sentence naming the undelivered entries and their ports, or undefined when all went out. */
+  describeUndelivered(): string | undefined {
+    const left = this.undelivered();
+    if (left.length === 0) return undefined;
+    const why = (e: UndeliveredEntry): string =>
+      e.reason === 'port-never-listened'
+        ? 'the firmware never listened on it'
+        : 'the run ended first';
+    const shown = left
+      .slice(0, 5)
+      .map((e) => `tUs ${e.tUs} to port ${e.port} (${why(e)})`)
+      .join('; ');
+    const more = left.length > 5 ? `; and ${left.length - 5} more` : '';
+    return `control: ${left.length} of ${this.#entries.length} timeline entries were never delivered: ${shown}${more}`;
   }
 
   start(setup: ActuatorSourceSetup): Promise<void> {
@@ -150,18 +207,11 @@ export class ControlledSource implements ActuatorSource {
   async step(input: TickInput): Promise<TickOutput> {
     while (this.#next < this.#entries.length) {
       const entry = this.#entries[this.#next] as ControlEntry;
-      if (entry.tUs >= input.t1Us) break;
+      if (entry.tUs > input.t0Us) break; // not before its time
       const target = this.#listening.get(entry.port);
       if (!target) break;
       const client = await this.#client(entry.port, target);
-      await new Promise<void>((resolve, reject) => {
-        client.write(`${entry.line}\n`, (error) => (error ? reject(error) : resolve()));
-      }).catch((error: Error) => {
-        throw new ActuatorSourceEnded({
-          kind: 'error',
-          message: `control: cannot send to firmware port ${entry.port}: ${error.message}`,
-        });
-      });
+      client.socket.write(`${entry.line}\n`);
       this.#next += 1;
     }
     const output = await this.#inner.step(input);
@@ -171,6 +221,7 @@ export class ControlledSource implements ActuatorSource {
           hostPort: event.hostPort,
           bindAddress: event.bindAddress,
         });
+        this.#everListened.add(event.firmwarePort);
       } else if (event.type === 'unlisten' && event.proto === 'tcp') {
         this.#listening.delete(event.firmwarePort);
         this.#drop(event.firmwarePort);
@@ -192,12 +243,32 @@ export class ControlledSource implements ActuatorSource {
     await this.#inner.stop();
   }
 
-  async #client(
-    port: number,
-    target: { hostPort: number; bindAddress: string },
-  ): Promise<net.Socket> {
-    const existing = this.#clients.get(port);
-    if (existing && !existing.destroyed) return existing;
+  /** The connection to a firmware port, opened if needed and connected before it is used. */
+  async #client(port: number, target: { hostPort: number; bindAddress: string }): Promise<Client> {
+    let client = this.#clients.get(port);
+    if (!client || client.socket.destroyed) {
+      client = this.#connect(port, target);
+      this.#clients.set(port, client);
+    }
+    if (!client.isConnected) {
+      // Connecting is the kernel's job, but a wait is a wait: it gets the stall timeout.
+      let timer: NodeJS.Timeout | undefined;
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new ActuatorSourceEnded({ kind: 'stalled', afterMs: this.#stallMs })),
+          this.#stallMs,
+        );
+      });
+      try {
+        await Promise.race([client.connected, timeout]);
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+    return client;
+  }
+
+  #connect(port: number, target: { hostPort: number; bindAddress: string }): Client {
     const socket = net.connect({ host: target.bindAddress, port: target.hostPort });
     socket.setNoDelay(true);
     socket.setEncoding('utf8');
@@ -212,22 +283,31 @@ export class ControlledSource implements ActuatorSource {
     });
     // The firmware dropping us (a newer client, a reboot) is not an error here.
     socket.on('error', () => undefined);
-    await new Promise<void>((resolve, reject) => {
-      socket.once('connect', resolve);
-      socket.once('error', reject);
-    }).catch((error: Error) => {
-      socket.destroy();
-      throw new ActuatorSourceEnded({
-        kind: 'error',
-        message: `control: cannot connect to firmware port ${port} at ${target.bindAddress}:${target.hostPort}: ${error.message}`,
-      });
-    });
-    this.#clients.set(port, socket);
-    return socket;
+    const client: Client = {
+      socket,
+      isConnected: false,
+      connected: new Promise<void>((resolve, reject) => {
+        socket.once('connect', () => {
+          client.isConnected = true;
+          resolve();
+        });
+        socket.once('error', (error) => {
+          socket.destroy();
+          reject(
+            new ActuatorSourceEnded({
+              kind: 'error',
+              message: `control: cannot connect to firmware port ${port} at ${target.bindAddress}:${target.hostPort}: ${error.message}`,
+            }),
+          );
+        });
+      }),
+    };
+    client.connected.catch(() => undefined);
+    return client;
   }
 
   #drop(port: number): void {
-    this.#clients.get(port)?.destroy();
+    this.#clients.get(port)?.socket.destroy();
     this.#clients.delete(port);
   }
 }
@@ -236,6 +316,7 @@ export class ControlledSource implements ActuatorSource {
 export function withControlScript(
   source: ActuatorSource,
   entries: readonly ControlEntry[],
+  options?: { readonly stallTimeoutMs?: number },
 ): ControlledSource {
-  return new ControlledSource(source, entries);
+  return new ControlledSource(source, entries, options);
 }

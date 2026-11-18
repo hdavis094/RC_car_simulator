@@ -15,13 +15,21 @@ export type ChannelEvent =
  */
 export class Channel {
   readonly #socket: Socket;
+  readonly #accept: ((message: Message) => string | undefined) | undefined;
   readonly #decoder = new FrameDecoder();
   readonly #queue: ChannelEvent[] = [];
   #waiter: ((event: ChannelEvent) => void) | undefined;
   #closed = false;
 
-  constructor(socket: Socket) {
+  /**
+   * `accept` judges each message at the moment it is decoded, against the
+   * state of the protocol then (not when a reader gets round to it): it
+   * returns a reason when the message may not arrive now. The channel then
+   * reports `malformed`, sends BYE(malformed), and drops everything after it.
+   */
+  constructor(socket: Socket, accept?: (message: Message) => string | undefined) {
     this.#socket = socket;
+    this.#accept = accept;
     socket.on('data', (chunk: Buffer) => this.#onData(chunk));
     // An error always precedes or accompanies 'close'; the reader sees `closed`.
     socket.on('error', () => this.#close());
@@ -76,16 +84,26 @@ export class Channel {
   #onData(chunk: Uint8Array): void {
     if (this.#closed) return;
     try {
-      for (const message of this.#decoder.push(chunk)) this.#push({ kind: 'message', message });
+      for (const message of this.#decoder.push(chunk)) {
+        const reason = this.#accept?.(message);
+        if (reason !== undefined) {
+          this.#reject(reason);
+          return;
+        }
+        this.#push({ kind: 'message', message });
+      }
     } catch (error) {
       if (!(error instanceof ProtocolError)) throw error;
       for (const message of error.decoded) this.#push({ kind: 'message', message });
-      this.#push({ kind: 'malformed', reason: error.message });
-      void this.send({ type: 'BYE', reason: 'malformed', message: error.message }).then(() =>
-        this.end(),
-      );
-      this.#closed = true;
+      this.#reject(error.message);
     }
+  }
+
+  /** A protocol violation: tell the peer, report it to the reader, accept nothing more. */
+  #reject(reason: string): void {
+    this.#push({ kind: 'malformed', reason });
+    void this.send({ type: 'BYE', reason: 'malformed', message: reason }).then(() => this.end());
+    this.#closed = true;
   }
 
   #close(): void {

@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { rmSync } from 'node:fs';
 
 /** How a firmware process ended. */
 export interface ExitInfo {
@@ -9,22 +10,54 @@ export interface ExitInfo {
 }
 
 const TAIL_LINES = 20;
+const TAIL_LINE_CHARS = 500;
 
 /**
  * Processes still running. A firmware that spins without calling hal never
- * notices its socket closing, so if this process exits first they would be
- * orphaned and spin forever: the exit hook kills them.
+ * notices its socket closing, so whoever hosts the bridge must kill these when
+ * it goes: the host's quit handler calls `killAllFirmware()`; the CLI also
+ * installs signal handlers (`installTerminationHandlers`). The `exit` hook
+ * below covers a host that simply returns or calls `process.exit()`; it
+ * changes no exit behaviour, so a library may have it.
  */
 const alive = new Set<ChildProcess>();
 let hooked = false;
 function hookExit(): void {
   if (hooked) return;
   hooked = true;
-  process.once('exit', () => {
-    for (const child of alive) child.kill('SIGKILL');
-  });
+  process.once('exit', killAllFirmware);
 }
-const TAIL_LINE_CHARS = 500;
+
+/** Socket files of live sources, removed by `killAllFirmware` along with the processes. */
+const sockets = new Set<string>();
+export const trackSocket = (file: string): void => void sockets.add(file);
+export const untrackSocket = (file: string): void => void sockets.delete(file);
+
+/**
+ * Kills every firmware process still running, at once (SIGKILL), and removes
+ * the sockets they were connected to. Synchronous: safe in an exit or signal handler.
+ */
+export function killAllFirmware(): void {
+  for (const child of alive) child.kill('SIGKILL');
+  for (const file of sockets) rmSync(file, { force: true });
+}
+
+/**
+ * Makes SIGTERM, SIGINT and SIGHUP kill the firmware before the host dies of
+ * them, and then lets the signal take its default course. Only an entry point
+ * that owns the process (the `rcsim` CLI) should call this: a library that
+ * installed signal handlers would change its host's exit behaviour. The desktop
+ * app calls `killAllFirmware()` from its own quit handling instead.
+ */
+export function installTerminationHandlers(): void {
+  for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
+    process.once(signal, () => {
+      killAllFirmware();
+      // `once` has removed this handler, so the signal now has its default effect.
+      process.kill(process.pid, signal);
+    });
+  }
+}
 
 /**
  * One firmware process. Its stdout is drained and dropped (Serial goes over

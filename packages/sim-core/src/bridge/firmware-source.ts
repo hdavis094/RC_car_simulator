@@ -20,7 +20,7 @@ import {
   type TickOutput,
 } from '../api/actuator-source.ts';
 import { Channel, type ChannelEvent } from './channel.ts';
-import { FirmwareProcess, type ExitInfo } from './process.ts';
+import { FirmwareProcess, trackSocket, untrackSocket, type ExitInfo } from './process.ts';
 
 /** Virtual time each hal call costs, and each `loop()` return (SPEC.md → CONFIG). */
 export const HAL_CALL_COST_NS = 1000;
@@ -88,8 +88,25 @@ export class FirmwareSource implements ActuatorSource {
   /** `running` once connected, `ended` after a failure, `stopped` after stop(). */
   #state: 'new' | 'running' | 'ended' | 'stopped' = 'new';
   #lock: Promise<unknown> = Promise.resolve();
-  readonly #stopSignal = Promise.withResolvers<void>();
+  /**
+   * Wakes the wait in progress (at most one: steps are serialised) when the
+   * process exits or the source is stopped. Long-lived promises are never
+   * raced per tick: every `then` on one would stay attached for good.
+   */
+  #slot: ((waited: Waited<never>) => void) | undefined;
+  /** How the current process ended, if it has. */
+  #exited: Extract<Waited<never>, { kind: 'exit' | 'spawn-error' }> | undefined;
+  /** What the peer may send now; checked as each message is decoded. */
+  #expect:
+    { readonly kind: 'hello' | 'none' } | { readonly kind: 'step-done'; readonly tick: number } = {
+    kind: 'none',
+  };
+  #starting: Promise<void> | undefined;
   #stopping: Promise<void> | undefined;
+  /** GPIOs the firmware is driving with PWM, by the STEP_DONEs so far. */
+  readonly #activePwm = new Set<number>();
+  /** After a reboot: pins whose signal is gone, reported with the next tick. */
+  #lostPwm: number[] = [];
   #rx: Uint8Array = new Uint8Array(0);
   #lastFaults: NetFaults | undefined;
   #resendFaults = false;
@@ -106,16 +123,29 @@ export class FirmwareSource implements ActuatorSource {
     return this.#socketPath;
   }
 
+  /** The firmware's process id, while it runs. */
+  get pid(): number | undefined {
+    return this.#proc?.pid;
+  }
+
+  /** The current firmware process (diagnostics and tests). */
+  get process(): FirmwareProcess | undefined {
+    return this.#proc;
+  }
+
   async start(setup: ActuatorSourceSetup): Promise<void> {
     if (this.#state !== 'new') throw new Error('FirmwareSource.start called twice');
     this.#state = 'running';
     this.#setup = setup;
     this.#deviceIndex = new Map(setup.devices.map((d, i) => [d.instanceId, i]));
-    try {
+    this.#starting = (async () => {
       await this.#listen();
       await this.#launch();
+    })();
+    try {
+      await this.#starting;
     } catch (error) {
-      await this.stop();
+      await this.#cleanup();
       throw error;
     }
   }
@@ -129,26 +159,50 @@ export class FirmwareSource implements ActuatorSource {
       if (this.#state === 'stopped') throw new Error('the firmware source is stopped');
       if (this.#state === 'new') throw new Error('the firmware source is not started');
       await this.#terminateProcess();
+      this.#checkNotStopped();
       this.#state = 'running';
-      // A rebooted board finds the same network conditions as before it went down.
+      // A rebooted board finds the same network conditions as before it went down...
       this.#resendFaults = this.#lastFaults !== undefined;
+      // ...but its pins are no longer driven: whatever PWM the old firmware held is gone.
+      this.#lostPwm = [...this.#activePwm];
+      this.#activePwm.clear();
       await this.#launch();
     });
   }
 
+  /**
+   * Ends the source: kills the firmware, closes and removes the socket. Safe
+   * at any time, also while `start` is still going (it is waited for, then
+   * undone), and safe to call twice.
+   */
   stop(): Promise<void> {
+    this.#state = 'stopped';
+    this.#slot?.({ kind: 'stopped' });
+    this.#pendingAccept?.reject(new Error('stopped'));
+    this.#pendingAccept = undefined;
+    // `start` checks for the stop after each of its waits and bails out; what it
+    // made before noticing is cleaned up below, after it has settled.
+    return this.#cleanup();
+  }
+
+  #cleanup(): Promise<void> {
     this.#stopping ??= (async () => {
       this.#state = 'stopped';
-      this.#stopSignal.resolve();
+      await this.#starting?.catch(() => undefined);
       await this.#terminateProcess();
-      this.#pendingAccept?.reject(new Error('stopped'));
-      this.#pendingAccept = undefined;
       const server = this.#server;
       this.#server = undefined;
       if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
-      if (this.#socketPath) await rm(this.#socketPath, { force: true });
+      if (this.#socketPath) {
+        await rm(this.#socketPath, { force: true });
+        untrackSocket(this.#socketPath);
+      }
     })();
     return this.#stopping;
+  }
+
+  #checkNotStopped(): void {
+    if (this.#state === 'stopped') throw new ActuatorSourceEnded({ kind: 'finished' });
   }
 
   // ---- serialisation: a restart never overlaps a step ----
@@ -168,6 +222,8 @@ export class FirmwareSource implements ActuatorSource {
     }
     await mkdir('/tmp', { recursive: true });
     await rm(this.#socketPath, { force: true });
+    this.#checkNotStopped();
+    trackSocket(this.#socketPath);
     const server = net.createServer((socket) => {
       const pending = this.#pendingAccept;
       if (pending) {
@@ -185,11 +241,14 @@ export class FirmwareSource implements ActuatorSource {
         resolve();
       });
     });
+    this.#checkNotStopped();
   }
 
   /** Spawns the firmware and completes the handshake (HELLO, then CONFIG). */
   async #launch(): Promise<void> {
     const setup = this.#setup as ActuatorSourceSetup;
+    // No await between this check and the spawn: a stop can't slip in between.
+    this.#checkNotStopped();
     const accepted = Promise.withResolvers<net.Socket>();
     this.#pendingAccept = accepted;
     const proc = new FirmwareProcess(this.#binary, this.#cwd, {
@@ -199,18 +258,25 @@ export class FirmwareSource implements ActuatorSource {
     this.#proc = proc;
     this.#channel = undefined;
     this.#nextPromise = undefined;
+    this.#exited = undefined;
+    this.#expect = { kind: 'hello' };
+    // One reaction per process, for its whole life.
+    proc.exit.then(
+      (info) => this.#onExit(proc, { kind: 'exit', info }),
+      (error: Error) => this.#onExit(proc, { kind: 'spawn-error', error }),
+    );
 
-    const connected = await this.#wait(accepted.promise, proc);
+    const connected = await this.#wait(accepted.promise);
     this.#pendingAccept = undefined;
     if (connected.kind !== 'value') {
       throw await this.#endOf(connected);
     }
-    const channel = new Channel(connected.value);
+    const channel = new Channel(connected.value, (message) => this.#accept(message));
     this.#channel = channel;
 
-    const hello = await this.#receive(proc);
+    const hello = await this.#receive();
     if (hello.kind !== 'message' || hello.message.type !== 'HELLO') {
-      throw await this.#unexpected(hello, 'HELLO');
+      throw await this.#unexpected(hello);
     }
     if (hello.message.protocolVersion !== PROTOCOL_VERSION) {
       const message = `firmware speaks sim-protocol ${hello.message.protocolVersion}; this sim speaks ${PROTOCOL_VERSION}`;
@@ -219,6 +285,7 @@ export class FirmwareSource implements ActuatorSource {
       this.#state = 'ended';
       throw new ActuatorSourceEnded({ kind: 'error', message });
     }
+    this.#checkNotStopped();
     await channel.send({
       type: 'CONFIG',
       protocolVersion: PROTOCOL_VERSION,
@@ -229,6 +296,44 @@ export class FirmwareSource implements ActuatorSource {
       net: { bindAddress: this.#bindAddress },
       devices: setup.devices,
     });
+    this.#expect = { kind: 'none' };
+  }
+
+  /**
+   * The protocol state machine, applied to each message as it arrives (see
+   * `Channel`): HELLO only first, STEP_DONE only while a STEP with that tick
+   * is outstanding and not yet answered, BYE any time.
+   */
+  #accept(message: Message): string | undefined {
+    if (message.type === 'BYE') return undefined;
+    const expect = this.#expect;
+    if (message.type === 'HELLO' && expect.kind === 'hello') {
+      this.#expect = { kind: 'none' };
+      return undefined;
+    }
+    if (message.type === 'STEP_DONE' && expect.kind === 'step-done') {
+      if (message.tick !== expect.tick) {
+        return `STEP_DONE ${message.tick} does not answer STEP ${expect.tick}`;
+      }
+      this.#expect = { kind: 'none' };
+      return undefined;
+    }
+    const wanted =
+      expect.kind === 'hello'
+        ? 'HELLO'
+        : expect.kind === 'step-done'
+          ? `STEP_DONE for tick ${expect.tick}`
+          : 'nothing (no STEP is outstanding)';
+    return `unexpected ${message.type}; the sim is waiting for ${wanted}`;
+  }
+
+  #onExit(
+    proc: FirmwareProcess,
+    exited: Extract<Waited<never>, { kind: 'exit' | 'spawn-error' }>,
+  ): void {
+    if (proc !== this.#proc) return; // a process the sim has already let go
+    this.#exited = exited;
+    this.#slot?.(exited);
   }
 
   // ---- one tick ----
@@ -244,6 +349,7 @@ export class FirmwareSource implements ActuatorSource {
     let step: Step;
     try {
       step = this.#buildStep(input);
+      this.#expect = { kind: 'step-done', tick: input.tick };
       await channel.send(step); // a dead connection shows up as `closed` below
     } catch (error) {
       if (error instanceof ProtocolError) {
@@ -255,24 +361,21 @@ export class FirmwareSource implements ActuatorSource {
       throw error;
     }
 
-    const event = await this.#receive(proc);
+    const event = await this.#receive();
     if (event.kind !== 'message' || event.message.type !== 'STEP_DONE') {
-      throw await this.#unexpected(event, 'STEP_DONE');
+      throw await this.#unexpected(event);
     }
-    const done = event.message;
-    if (done.tick !== input.tick) {
-      await channel.send({
-        type: 'BYE',
-        reason: 'malformed',
-        message: `STEP_DONE ${done.tick} answers STEP ${input.tick}`,
-      });
-      throw await this.#fail(proc, {
-        kind: 'error',
-        message: `firmware answered tick ${input.tick} with STEP_DONE ${done.tick}`,
-      });
+    const done = event.message; // `#accept` has checked that it answers this tick
+    // A rebooted firmware starts with nothing driving its pins: say so first, so
+    // anything it sets up in this very tick still wins.
+    const lost = this.#lostPwm.map((gpio) => ({ gpio, periodUs: 0, pulseUs: 0 }));
+    this.#lostPwm = [];
+    for (const pwm of done.pwm) {
+      if (pwm.periodUs > 0) this.#activePwm.add(pwm.gpio);
+      else this.#activePwm.delete(pwm.gpio);
     }
     return {
-      pwm: done.pwm,
+      pwm: lost.length > 0 ? [...lost, ...done.pwm] : done.pwm,
       gpioWrites: done.gpioWrites,
       serialTx: done.serialTx,
       netEvents: done.netEvents,
@@ -320,48 +423,48 @@ export class FirmwareSource implements ActuatorSource {
     return this.#nextPromise;
   }
 
-  /** Races `promise` against the process exiting, a stop, and the stall timeout. */
-  async #wait<T>(promise: Promise<T>, proc: FirmwareProcess): Promise<Waited<T>> {
-    let timer: NodeJS.Timeout | undefined;
-    const timeout = new Promise<Waited<T>>((resolve) => {
-      timer = setTimeout(() => resolve({ kind: 'timeout' }), this.#stallMs);
+  /**
+   * Waits for `promise` (a per-call promise) or for whatever ends the wait
+   * first: the process exiting, a stop, the stall timeout. The process and
+   * stop wake the single `#slot`; nothing long-lived is raced.
+   */
+  #wait<T>(promise: Promise<T>): Promise<Waited<T>> {
+    if (this.#state === 'stopped') return Promise.resolve({ kind: 'stopped' });
+    return new Promise<Waited<T>>((resolve) => {
+      let settled = false;
+      const done = (waited: Waited<T>): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (this.#slot === done) this.#slot = undefined;
+        resolve(waited);
+      };
+      const timer = setTimeout(() => done({ kind: 'timeout' }), this.#stallMs);
+      this.#slot = done as (waited: Waited<never>) => void;
+      promise.then(
+        (value) => done({ kind: 'value', value }),
+        () => done({ kind: 'stopped' }),
+      );
+      if (this.#exited) done(this.#exited);
     });
-    try {
-      return await Promise.race([
-        promise.then((value): Waited<T> => ({ kind: 'value', value })),
-        proc.exit.then(
-          (info): Waited<T> => ({ kind: 'exit', info }),
-          (error: Error): Waited<T> => ({ kind: 'spawn-error', error }),
-        ),
-        this.#stopSignal.promise.then((): Waited<T> => ({ kind: 'stopped' })),
-        timeout,
-      ]);
-    } finally {
-      clearTimeout(timer);
-    }
   }
 
   /** The next channel event, or a failure the caller turns into an end. */
-  async #receive(
-    proc: FirmwareProcess,
-  ): Promise<ChannelEvent | Exclude<Waited<ChannelEvent>, { kind: 'value' }>> {
-    const waited = await this.#wait(this.#nextEvent(), proc);
+  async #receive(): Promise<ChannelEvent | Exclude<Waited<ChannelEvent>, { kind: 'value' }>> {
+    const waited = await this.#wait(this.#nextEvent());
     return waited.kind === 'value' ? waited.value : waited;
   }
 
   /** Turns anything but the expected message into the error that ends the source. */
   async #unexpected(
     event: ChannelEvent | Exclude<Waited<ChannelEvent>, { kind: 'value' }>,
-    expected: string,
   ): Promise<ActuatorSourceEnded> {
     if (event.kind === 'message') {
-      const message: Message = event.message;
-      if (message.type === 'BYE') return this.#endOf({ kind: 'closed' }, message);
-      const detail = `expected ${expected}, got ${message.type}`;
-      await this.#channel?.send({ type: 'BYE', reason: 'malformed', message: detail });
+      // `#accept` lets only the expected message and BYE through.
+      if (event.message.type === 'BYE') return this.#endOf({ kind: 'closed' }, event.message);
       return this.#fail(this.#proc as FirmwareProcess, {
         kind: 'error',
-        message: `firmware protocol error: ${detail}`,
+        message: `firmware protocol error: unexpected ${event.message.type}`,
       });
     }
     return this.#endOf(event);
@@ -394,8 +497,14 @@ export class FirmwareSource implements ActuatorSource {
         message: `cannot start firmware "${this.#binary}": ${what.error.message}`,
       });
     }
-    // A lost connection, a malformed frame or an exit: crashed, with the exit status.
-    const malformed = what.kind === 'malformed' ? what.reason : undefined;
+    if (what.kind === 'malformed') {
+      // The channel has told the firmware (BYE malformed); the run ends as an error, per SPEC.md.
+      return this.#fail(proc, {
+        kind: 'error',
+        message: `firmware protocol error: ${what.reason}`,
+      });
+    }
+    // A lost connection or an exit: crashed, with the exit status.
     const info = what.kind === 'exit' ? what.info : await this.#settle(proc);
     // A BYE or a last event the firmware managed to send before dying.
     let farewell = bye;
@@ -409,7 +518,6 @@ export class FirmwareSource implements ActuatorSource {
     if (farewell && farewell.message !== '') {
       tail.push(`[firmware BYE ${farewell.reason}] ${farewell.message}`);
     }
-    if (malformed) tail.push(`[sim] malformed frame from the firmware: ${malformed}`);
     this.#state = 'ended';
     this.#channel?.destroy();
     return new ActuatorSourceEnded({

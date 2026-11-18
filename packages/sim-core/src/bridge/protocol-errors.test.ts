@@ -1,49 +1,21 @@
-import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ActuatorSourceEnded } from '../api/actuator-source.ts';
 import type { RunEnd } from '../api/run.ts';
 import { testRun, testWorldFile } from '../run/test-support.ts';
 import { main } from '../scenario/cli.ts';
 import { exampleCar } from '@rcsim/schema';
+import { fakeFirmware } from './fake-firmware.ts';
 import { createFirmwareSource } from './firmware-source.ts';
 
-const protocol = fileURLToPath(new URL('../../../sim-protocol/src/index.ts', import.meta.url));
-
 let dir: string;
+const fake = (name: string, body: string): Promise<string> => fakeFirmware(dir, name, body);
 beforeAll(async () => {
   dir = await mkdtemp(path.join(tmpdir(), 'rcsim-fake-fw-'));
 });
 afterAll(() => rm(dir, { recursive: true, force: true }));
-
-/**
- * A "firmware" written in JS that speaks (or breaks) sim-protocol by hand:
- * `body` runs with `send(message)`, `receive()` and the connected socket.
- */
-async function fake(name: string, body: string): Promise<string> {
-  const file = path.join(dir, name);
-  await writeFile(
-    file,
-    `#!/usr/bin/env node
-import net from 'node:net';
-import { FrameDecoder, encodeFrame } from ${JSON.stringify(protocol)};
-const socket = net.connect(process.env.RCSIM_SOCKET);
-const decoder = new FrameDecoder();
-const inbox = [];
-let wake;
-socket.on('data', (chunk) => { inbox.push(...decoder.push(chunk)); wake?.(); });
-socket.on('close', () => process.exit(0));
-const send = (m) => socket.write(encodeFrame(m));
-const receive = async () => { while (!inbox.length) await new Promise((r) => (wake = r)); return inbox.shift(); };
-const hello = { type: 'HELLO', protocolVersion: 1, halVersion: 'fake' };
-${body}
-`,
-  );
-  await chmod(file, 0o755);
-  return file;
-}
 
 async function endOf(binary: string, ticks = 3): Promise<RunEnd> {
   const source = createFirmwareSource({ binary, stallTimeoutMs: 1500 });
@@ -97,7 +69,7 @@ describe('a firmware that misbehaves', () => {
     );
     const end = await endOf(binary);
     expect(end).toMatchObject({ kind: 'error' });
-    expect(JSON.stringify(end)).toMatch(/STEP_DONE 5/);
+    expect(JSON.stringify(end)).toMatch(/STEP_DONE 5 does not answer STEP 0/);
   });
 
   it('is ended for sending a frame that is not valid, and told so', async () => {
@@ -108,10 +80,10 @@ describe('a firmware that misbehaves', () => {
        const bye = await receive(); console.error('sim said', bye.type, bye.reason);
        await new Promise((r) => setTimeout(r, 200));`,
     );
+    // SPEC.md: a malformed frame gets BYE(malformed) and the run ends as an error.
     const end = await endOf(binary);
-    expect(end.kind).toBe('crashed');
-    expect(JSON.stringify(end)).toMatch(/malformed frame from the firmware/);
-    expect(JSON.stringify(end)).toMatch(/sim said BYE malformed/);
+    expect(end.kind).toBe('error');
+    expect(JSON.stringify(end)).toMatch(/unknown message type/);
   });
 
   it('is ended for a message that does not belong (a second HELLO instead of STEP_DONE)', async () => {
@@ -121,7 +93,7 @@ describe('a firmware that misbehaves', () => {
     );
     const end = await endOf(binary);
     expect(end).toMatchObject({ kind: 'error' });
-    expect(JSON.stringify(end)).toMatch(/expected STEP_DONE, got HELLO/);
+    expect(JSON.stringify(end)).toMatch(/unexpected HELLO.*waiting for STEP_DONE for tick 0/);
   });
 
   it('stalls the run when it never connects', async () => {
