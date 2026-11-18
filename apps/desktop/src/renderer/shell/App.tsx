@@ -2,12 +2,13 @@ import { useEffect, useState, type ReactNode } from 'react';
 import type { Diagnostic, ProjectInfo, RcsimApi } from '../../shared/ipc.ts';
 import { parseIpcError } from '../../shared/ipc.ts';
 import { TerminalRoot } from '../terminal/index.ts';
-import { hasDirtyDocuments, useEditorStore } from '../terminal/editor-state.ts';
+import { useEditorStore } from '../terminal/editor-state.ts';
 import { WorkbenchRoot } from '../workbench/index.ts';
 import { WorldRoot } from '../world/index.ts';
 import { BottomPanel } from './BottomPanel.tsx';
 import { ENVIRONMENTS, useEnvironmentStore, type Environment } from './environment-store.ts';
 import { useSessionStore } from './session.ts';
+import { hasUnsavedChanges } from './unsaved.ts';
 import './shell.css';
 
 const LABELS: Record<Environment, string> = {
@@ -54,7 +55,7 @@ export function App({ api = window.rcsim }: { api?: RcsimApi }): ReactNode {
   }, [api]);
   useEffect(() => {
     const guard = (event: BeforeUnloadEvent): void => {
-      if (hasDirtyDocuments()) event.preventDefault();
+      if (hasUnsavedChanges()) event.preventDefault();
     };
     window.addEventListener('beforeunload', guard);
     return () => window.removeEventListener('beforeunload', guard);
@@ -62,7 +63,7 @@ export function App({ api = window.rcsim }: { api?: RcsimApi }): ReactNode {
 
   const openProject = async (dir?: string, create = false): Promise<void> => {
     if (working || buildStatus === 'building') return;
-    if (hasDirtyDocuments() && !window.confirm('Discard unsaved changes and switch car project?'))
+    if (hasUnsavedChanges() && !window.confirm('Discard unsaved changes and switch car project?'))
       return;
     setWorking(true);
     setError('');
