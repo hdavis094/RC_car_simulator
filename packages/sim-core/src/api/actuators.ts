@@ -22,6 +22,8 @@ export type ActuatorOutput =
       readonly kind: 'drive';
       /** −1..1, after arming, deadband and throttle curve. */
       readonly motorDuty: number;
+      /** The ESC applies the duty as braking effort. */
+      readonly brake?: boolean;
     };
 
 /**

@@ -24,6 +24,8 @@ export interface VehicleCommand {
   readonly steerAngleRad: number;
   /** Motor drive, −1..1: fraction of battery voltage, negative for reverse/brake. */
   readonly motorDuty: number;
+  /** The ESC applies the duty as braking effort. */
+  readonly brake?: boolean;
 }
 
 /** Wheels in a fixed order: front-left, front-right, rear-left, rear-right. */
