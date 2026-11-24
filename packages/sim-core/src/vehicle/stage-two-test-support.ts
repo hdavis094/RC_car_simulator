@@ -1,9 +1,8 @@
 // Helpers shared by the stage-2 tests. Not part of the package's public API.
 import { Car, World, defaultCatalog, exampleCar, type Placement } from '@rcsim/schema';
-import type { PhysicsStage } from '../api/vehicle.ts';
+import type { PhysicsStage, VehicleCommand } from '../api/vehicle.ts';
 import { trackLibrary } from '../world/track-library.ts';
 import { createPhysicsWorld } from '../world/world.ts';
-import type { DriveCommand } from './command.ts';
 import type { RapierVehicle } from './vehicle.ts';
 
 /** The default car with some parts placed (or re-placed) on the chassis. */
@@ -23,7 +22,7 @@ export const BATTERY_KG = (defaultCatalog.get('power.lipo-2s-5000')?.massG ?? 0)
 export interface Floor {
   readonly car: RapierVehicle;
   /** Applies `command` for `seconds` of sim time. */
-  drive(seconds: number, command?: Partial<DriveCommand>): void;
+  drive(seconds: number, command?: Partial<VehicleCommand>): void;
 }
 
 /** A car at the middle of an open floor, facing −Z. */

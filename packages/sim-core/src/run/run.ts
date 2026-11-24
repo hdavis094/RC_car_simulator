@@ -17,7 +17,6 @@ import { deviceKindOf, partContexts } from '../api/stubs/fake-run.ts';
 import type { RngStreams } from '../api/clock.ts';
 import { TickClock, createRngStreams } from '../clock/index.ts';
 import { LapCounter } from '../world/lap-counter.ts';
-import type { DriveOutput } from '../vehicle/command.ts';
 import { createPhysicsWorld, type PhysicsWorld } from '../world/world.ts';
 import { defaultModels } from './default-models.ts';
 
@@ -217,7 +216,7 @@ async function assemble(
     for (const actuator of actuators) {
       const out = actuator.update(t1Us);
       if (out.kind === 'steering') steerAngleRad = out.steerAngleRad;
-      else ({ motorDuty, brake } = out as DriveOutput);
+      else ({ motorDuty, brake } = out);
     }
     vehicle.applyCommand({ steerAngleRad, motorDuty, ...(brake ? { brake } : {}) });
     // 4. physics; collisions and laps counted

@@ -41,3 +41,4 @@ Open **Settings** to choose the dock position, initial simulation speed, or phys
 - [Build, flash, and monitor an ESP32](HARDWARE.md) from Terminal and the USB Serial Monitor.
 - [Drive from a phone](PHONE-CONTROL.md) using a session link from Network Console.
 - [Install the AppImage or DMG](INSTALL.md) and set up the host compiler.
+- [Exercise stage 2 physics](PHYSICS.md) by choosing it in Settings before Run.

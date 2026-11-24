@@ -1,9 +1,8 @@
 import { defaultCatalog, exampleCar, type EscMotorParams } from '@rcsim/schema';
 import { describe, expect, it } from 'vitest';
-import type { ActuatorModel } from '../api/actuators.ts';
+import type { ActuatorModel, ActuatorOutput } from '../api/actuators.ts';
 import { createRngStreams } from '../clock/index.ts';
 import { partContexts } from '../api/stubs/fake-run.ts';
-import type { DriveOutput } from '../vehicle/command.ts';
 import { createStageTwoActuatorModel } from './index.ts';
 
 const contexts = partContexts({ car: exampleCar, catalog: defaultCatalog }, createRngStreams(1));
@@ -32,7 +31,11 @@ function withParams(params: Partial<EscMotorParams>): typeof escPart {
 function bench(part = escPart) {
   const esc: ActuatorModel = createStageTwoActuatorModel(part);
   let nowUs = 0;
-  const send = (pulseUs: number, forUs = FRAME_US, periodUs = FRAME_US): DriveOutput => {
+  const send = (
+    pulseUs: number,
+    forUs = FRAME_US,
+    periodUs = FRAME_US,
+  ): Extract<ActuatorOutput, { kind: 'drive' }> => {
     esc.setPwm({ periodUs, pulseUs }, nowUs);
     nowUs += forUs;
     const out = esc.update(nowUs);

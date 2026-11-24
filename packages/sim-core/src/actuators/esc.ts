@@ -1,7 +1,6 @@
 import type { EscMotorParams } from '@rcsim/schema';
 import type { ActuatorModel, ActuatorOutput, PwmSignal } from '../api/actuators.ts';
 import type { PartContext } from '../api/parts.ts';
-import type { DriveOutput } from '../vehicle/command.ts';
 import { directGearbox, type Gearbox, type ThrottleDirection } from './gearbox.ts';
 
 /** Piecewise-linear map through the curve's points; `input` in 0..1. */
@@ -98,7 +97,7 @@ export function createEscModel(
           : params.pulseNeutralUs - params.pulseMinUs) - params.deadbandUs;
       const input = span > 0 ? (Math.abs(offset) - params.deadbandUs) / span : 1;
       const duty = throttleCurve(params.throttleCurve, input);
-      const output: DriveOutput = {
+      const output: Extract<ActuatorOutput, { kind: 'drive' }> = {
         kind: 'drive',
         motorDuty: way === 'forward' ? duty : -duty,
         ...(action === 'brake' ? { brake: true } : {}),

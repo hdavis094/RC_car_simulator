@@ -5,10 +5,15 @@ import type {
   World as RapierWorld,
 } from '@dimforge/rapier3d-deterministic-compat';
 import type { Pose, Quat, Vec3 } from '../api/math.ts';
-import { WHEEL_ORDER, type Vehicle, type VehicleState, type WheelState } from '../api/vehicle.ts';
+import {
+  WHEEL_ORDER,
+  type Vehicle,
+  type VehicleCommand,
+  type VehicleState,
+  type WheelState,
+} from '../api/vehicle.ts';
 import { GROUP, groups, type Rapier } from '../world/rapier.ts';
 import { quatMul, quatX, quatY, rotate } from '../world/quat.ts';
-import type { DriveCommand } from './command.ts';
 import type { VehicleParams } from './params.ts';
 import { brakeTorqueNm, motorLoad } from './powertrain.ts';
 import { tyreImpulse } from './tyre.ts';
@@ -71,8 +76,8 @@ export class RapierVehicle implements Vehicle {
   readonly #hardPoints: Vec3[] = [];
   /** False until the suspension has first been queried (`beforeStep`): its hard points are unset before. */
   #queried = false;
-  #command: DriveCommand = { steerAngleRad: 0, motorDuty: 0 };
-  #applied: DriveCommand = this.#command;
+  #command: VehicleCommand = { steerAngleRad: 0, motorDuty: 0 };
+  #applied: VehicleCommand = this.#command;
   #packV: number;
   #steerRad: [number, number, number, number] = [0, 0, 0, 0];
   #velocity: Vec3 = [0, 0, 0];
@@ -175,7 +180,7 @@ export class RapierVehicle implements Vehicle {
     this.#velocity = [0, 0, 0];
   }
 
-  applyCommand(command: DriveCommand): void {
+  applyCommand(command: VehicleCommand): void {
     this.#command = command;
   }
 
@@ -362,7 +367,7 @@ export class RapierVehicle implements Vehicle {
     for (const { impulse, at } of impulses) body.applyImpulseAtPoint(impulse, at, true);
   }
 
-  #clamped(command: DriveCommand): DriveCommand {
+  #clamped(command: VehicleCommand): VehicleCommand {
     const max = this.params.maxSteerRad;
     return {
       steerAngleRad: Math.max(-max, Math.min(max, command.steerAngleRad)),
