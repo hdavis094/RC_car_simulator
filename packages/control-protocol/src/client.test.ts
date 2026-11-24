@@ -158,7 +158,8 @@ describe('ControlClient against the fake car', () => {
     expect(Math.max(...gaps)).toBeLessThan(80 + 60);
 
     await startCar({ port });
-    await once(client, 'hello');
+    // A refused attempt queued just before listen() may still emit an error.
+    await until(() => client.hello !== undefined);
     expect(client.state).toBe('connected');
   });
 });
