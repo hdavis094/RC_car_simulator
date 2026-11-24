@@ -2,7 +2,6 @@ import { pathToFileURL } from 'node:url';
 import { app, BrowserWindow, dialog, Menu, session, shell } from 'electron';
 import { join, resolve } from 'node:path';
 import { registerIpc } from './ipc.ts';
-import { checkCompiler } from './compiler.ts';
 import { disposeRendererResources } from './renderer-lifecycle.ts';
 import { BuildService } from './services/build.ts';
 import { CatalogService } from './services/catalog.ts';
@@ -24,9 +23,7 @@ if (app.isPackaged) {
 }
 
 function createWindow(): BrowserWindow {
-  const root = app.isPackaged
-    ? (process.resourcesPath ?? resolve(__dirname, '../../../..'))
-    : resolve(__dirname, '../../../..');
+  const root = app.isPackaged ? process.resourcesPath : resolve(__dirname, '../../../..');
   const devServerUrl = !app.isPackaged ? process.env['ELECTRON_RENDERER_URL'] : undefined;
   const rendererFile = join(__dirname, '../renderer/index.html');
   const rendererUrl = devServerUrl ?? pathToFileURL(rendererFile).href;
@@ -80,9 +77,9 @@ function createWindow(): BrowserWindow {
   const catalog = new CatalogService(project);
   const build = new BuildService(
     project,
-    ((!app.isPackaged ? process.env['RCSIM_BUILD_SIM'] : undefined) ?? app.isPackaged)
+    app.isPackaged
       ? join(root, 'hal', 'bin', 'build-sim')
-      : join(root, 'packages/hal/bin/build-sim'),
+      : (process.env['RCSIM_BUILD_SIM'] ?? join(root, 'packages/hal/bin/build-sim')),
   );
   const pty = new PtyService(project);
   const run = new SimService({
@@ -173,10 +170,6 @@ void app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) =>
     callback(false),
   );
-  const compiler = checkCompiler();
-  if (!compiler.ok) {
-    dialog.showErrorBox('C++ compiler required', compiler.message ?? 'No usable compiler found.');
-  }
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

@@ -8,9 +8,7 @@ release.
 
 1. Download the `Donkey-Car-Simulator-*.AppImage`.
 2. Make it executable: `chmod +x Donkey-Car-Simulator-*.AppImage`.
-3. Launch it. On some desktops you may need FUSE 2 (`libfuse2`) for AppImage
-   mounting; if launching fails, extract with `--appimage-extract` and run the
-   unpacked binary.
+3. Launch it. On systems where AppImage mounting is unavailable, run it with `--appimage-extract-and-run`.
 
 The app needs a host C++ compiler. Install one before building firmware:
 
@@ -23,9 +21,7 @@ Set `CXX` to override the compiler (for example `CXX=clang++`).
 ## macOS (Apple Silicon and Intel)
 
 1. Open the matching `.dmg` and drag the app into `/Applications`.
-2. First launch is blocked by Gatekeeper because the app is unsigned. Right-click
-   the app and choose **Open**, then confirm. Alternatively run
-   `xattr -dr com.apple.quarantine /Applications/Donkey\ Car\ Simulator.app`.
+2. Try opening the app. If Gatekeeper blocks it and you trust the build, open **System Settings > Privacy & Security**, choose **Open Anyway**, and confirm. [Apple first-launch instructions](https://support.apple.com/en-us/102445)
 
 Install the Xcode Command Line Tools for the C++ compiler:
 

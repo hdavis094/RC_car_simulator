@@ -9,6 +9,7 @@ import {
   readdirSync,
   renameSync,
   rmSync,
+  symlinkSync,
 } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -56,8 +57,13 @@ try {
   if (process.env.CPPFLAGS !== undefined) makeEnv.CPPFLAGS = makeCompiler(cppFlags);
   if (process.env.CXXFLAGS !== undefined) makeEnv.CXXFLAGS = makeCompiler(cxxFlags);
   const version = spawnSync(command, [...prefix, '--version'], { cwd: root, encoding: 'utf8' });
-  if (version.error) throw version.error;
-  if (version.status !== 0) throw new Error('cannot determine CXX version');
+  if (version.error || version.status !== 0) {
+    const setup =
+      process.platform === 'darwin'
+        ? 'Install the Xcode Command Line Tools with xcode-select --install.'
+        : 'Install a C++17 toolchain such as GCC or Clang and make.';
+    throw new Error(`Cannot run CXX (${words.join(' ')}). ${setup} Set CXX to select a compiler.`);
+  }
   const hash = createHash('sha256')
     .update(JSON.stringify(words))
     .update(version.stdout)
@@ -80,20 +86,24 @@ try {
     removeStaleBuilds(buildRoot);
     const temporary = mkdtempSync(path.join(buildRoot, '.hal-'));
     try {
+      // Make sees relative target names even when the app and cache paths contain spaces.
+      for (const entry of ['Makefile', 'src', 'include', 'libraries', 'third_party']) {
+        symlinkSync(path.join(hal, entry), path.join(temporary, entry));
+      }
       run(
         'make',
         [
           '--no-print-directory',
           '-s',
           `CXX=${makeCompiler(words)}`,
-          `BUILD_DIR=${path.relative(hal, temporary)}`,
+          'BUILD_DIR=out',
           'lib',
         ],
-        hal,
+        temporary,
         makeEnv,
       );
       try {
-        renameSync(temporary, cache);
+        renameSync(path.join(temporary, 'out'), cache);
       } catch (error) {
         // Another first builder may have published the same complete immutable cache.
         if (
