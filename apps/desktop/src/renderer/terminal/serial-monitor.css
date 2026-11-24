@@ -1,0 +1,12 @@
+.serial-monitor .panel-tools {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+.serial-port-tools input[type='number'] {
+  width: 7rem;
+}
+
+.serial-port-tools select {
+  max-width: min(18rem, 55vw);
+}

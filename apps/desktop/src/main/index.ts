@@ -6,6 +6,8 @@ import { disposeRendererResources } from './renderer-lifecycle.ts';
 import { BuildService } from './services/build.ts';
 import { CatalogService } from './services/catalog.ts';
 import { ControlService } from './services/control/control-service.ts';
+import { HardwareService } from './services/hardware/hardware.ts';
+import { PlatformioService } from './services/hardware/platformio.ts';
 import { SimService } from './services/sim/sim-service.ts';
 import { spawnUtilityHost } from './services/sim/utility-host.ts';
 import { WorldEditService } from './services/world-edit/world-edit-service.ts';
@@ -67,11 +69,26 @@ function createWindow(): BrowserWindow {
     },
   });
   const catalog = new CatalogService(project);
+  const platformio = new PlatformioService(app.getPath('userData'), async () => {
+    const { response } = await dialog.showMessageBox(window, {
+      type: 'question',
+      title: 'Install PlatformIO',
+      message: 'Install PlatformIO Core?',
+      detail:
+        'The app will use Python 3 to download PlatformIO Core into its own virtual environment.',
+      buttons: ['Cancel', 'Install'],
+      defaultId: 0,
+      cancelId: 0,
+    });
+    return response === 1;
+  });
   const build = new BuildService(
     project,
     (!app.isPackaged ? process.env['RCSIM_BUILD_SIM'] : undefined) ??
       join(root, 'packages/hal/bin/build-sim'),
+    platformio,
   );
+  const hardware = new HardwareService(platformio, build);
   const pty = new PtyService(project);
   const run = new SimService({
     project,
@@ -83,7 +100,7 @@ function createWindow(): BrowserWindow {
   const worldEdit = new WorldEditService({ project, sim: run });
   const removeIpc = registerIpc(
     window,
-    { project, catalog, build, pty, run, control, worldEdit },
+    { project, catalog, build, hardware, pty, run, control, worldEdit },
     rendererUrl,
   );
   const stopRun = (): void => {
@@ -92,17 +109,24 @@ function createWindow(): BrowserWindow {
   };
   const removeLifecycle = disposeRendererResources(window.webContents, [
     build,
+    hardware,
     pty,
     { dispose: stopRun },
   ]);
+  const stopHardware = (): void => {
+    build.dispose();
+    hardware.dispose();
+  };
   app.on('before-quit', stopRun);
+  app.on('before-quit', stopHardware);
   window.on('closed', () => {
     removeIpc();
     removeLifecycle();
     app.off('before-quit', stopRun);
+    app.off('before-quit', stopHardware);
     run.dispose();
     control.dispose();
-    build.dispose();
+    stopHardware();
     pty.dispose();
     catalog.dispose();
     void project.dispose();

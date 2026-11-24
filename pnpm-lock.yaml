@@ -235,6 +235,9 @@ importers:
       react-dom:
         specifier: ^19.3.1
         version: 19.3.1(react@19.3.1)
+      serialport-rs:
+        specifier: ^1.1.0
+        version: 1.1.0
       three:
         specifier: ^0.187.0
         version: 0.187.0
@@ -1517,6 +1520,10 @@ packages:
     resolution: {integrity: sha512-Y7/KDsb8LjooZpwaqGyulO6DQlksgCncchHGk+sZIY4SBvUocMBEFH5Ur1fI4dV+Jvl0w6cjvucaIi40puRioA==}
     engines: {node: '>=10'}
     hasBin: true
+
+  serialport-rs@1.1.0:
+    resolution: {integrity: sha512-xroGC5aEpNlow5lCo54j/DFbJai9jtjbYOv/gjQ79OMubWg2lNBP4JKwRtkU5muTvJMTH6Gep6LwwPpTVnH7/g==}
+    engines: {node: '>=22 <27'}
 
   shebang-command@2.0.0:
     resolution: {integrity: sha512-kHxr2zZpYtdmrN1qDjrrX/Z1rR1kG8Dx+gkpK1G4eXmvXswmcE1hTWBWYUzlraYw1/yZp6YuDY77YtvbN0dmDA==}
@@ -2867,6 +2874,8 @@ snapshots:
   semver@6.3.1: {}
 
   semver@7.8.5: {}
+
+  serialport-rs@1.1.0: {}
 
   shebang-command@2.0.0:
     dependencies:

@@ -5,6 +5,7 @@ import { relative, resolve, sep } from 'node:path';
 import type { BuildApi, BuildEvent, BuildTarget, Diagnostic } from '../../shared/ipc.ts';
 import { errorText, fail } from './errors.ts';
 import { Signal } from './events.ts';
+import type { PlatformioService } from './hardware/platformio.ts';
 import type { ProjectService } from './project.ts';
 
 /** GCC and Clang share file:line:column; strip only ANSI for parsing, never for output. */
@@ -60,44 +61,122 @@ export function parseDiagnostics(output: string, projectDir: string): Diagnostic
   return diagnostics;
 }
 
+interface ActiveBuild {
+  readonly id: string;
+  readonly dir: string;
+  child?: ChildProcess;
+  cancelTimer?: ReturnType<typeof setTimeout>;
+  cancelled: boolean;
+}
+
+interface UploadPreparation {
+  validatePort(): Promise<void>;
+  releaseSerial(): Promise<void>;
+  releaseUpload(): void;
+}
+
 export class BuildService implements BuildApi {
-  private active:
-    { id: string; child: ChildProcess; cancelTimer?: ReturnType<typeof setTimeout> } | undefined;
+  private active: ActiveBuild | undefined;
   private readonly events = new Signal<[BuildEvent]>();
   readonly onEvent = this.events.subscribe;
   private readonly project: ProjectService;
-  private readonly driver: string;
-  constructor(project: ProjectService, driver: string) {
+  private readonly simDriver: string;
+  private readonly platformio: Pick<PlatformioService, 'requirePath'> | undefined;
+
+  constructor(
+    project: ProjectService,
+    simDriver: string,
+    platformio?: Pick<PlatformioService, 'requirePath'>,
+  ) {
     this.project = project;
-    this.driver = driver;
+    this.simDriver = simDriver;
+    this.platformio = platformio;
   }
 
   async start(target: BuildTarget): Promise<{ readonly buildId: string }> {
     if (target !== 'sim' && target !== 'esp32') fail('invalid', 'Unknown build target.');
-    if (target === 'esp32') fail('not-implemented', 'PlatformIO builds are scheduled for Phase 3.');
+    if (target === 'esp32') return this.startPlatformio([]);
+    const build = this.reserve();
+    try {
+      return this.launch(build, this.simDriver, [build.dir], 'HAL build-sim');
+    } catch (error) {
+      this.active = undefined;
+      throw error;
+    }
+  }
+
+  async startUpload(
+    port: string,
+    upload: UploadPreparation,
+  ): Promise<{ readonly buildId: string }> {
+    return this.startPlatformio(['-t', 'upload', '--upload-port', port], upload);
+  }
+
+  private async startPlatformio(
+    args: string[],
+    upload?: UploadPreparation,
+  ): Promise<{ readonly buildId: string }> {
+    const build = this.reserve();
+    try {
+      if (!this.platformio) fail('not-found', 'PlatformIO is unavailable.');
+      if (upload) await upload.validatePort();
+      if (build.cancelled) fail('build-failed', 'Build was cancelled.');
+      const executable = await this.platformio.requirePath();
+      if (build.cancelled) fail('build-failed', 'Build was cancelled.');
+      if (upload) {
+        await upload.releaseSerial();
+        await upload.validatePort();
+        if (build.cancelled) fail('build-failed', 'Build was cancelled.');
+      }
+      return this.launch(
+        build,
+        executable,
+        ['run', '-e', 'esp32dev', ...args],
+        'PlatformIO',
+        upload?.releaseUpload,
+      );
+    } catch (error) {
+      this.active = undefined;
+      throw error;
+    }
+  }
+
+  private reserve(): ActiveBuild {
     if (this.active) fail('busy', 'A build is already running.');
-    const dir = this.project.requireProject().dir;
-    const buildId = randomUUID();
+    const build = { dir: this.project.requireProject().dir, id: randomUUID(), cancelled: false };
+    this.active = build;
+    return build;
+  }
+
+  private launch(
+    build: ActiveBuild,
+    executable: string,
+    args: string[],
+    driver: string,
+    onFinished?: () => void,
+  ): { readonly buildId: string } {
+    const { dir, id: buildId } = build;
     const started = performance.now();
     // No shell interpolation: project paths can contain spaces and shell metacharacters.
-    const child = spawn(this.driver, [dir], {
+    const child = spawn(executable, args, {
       cwd: dir,
       env: { ...process.env, LC_ALL: 'C', LC_MESSAGES: 'C', LANGUAGE: 'C' },
       detached: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
-    this.active = { id: buildId, child };
+    build.child = child;
     const output: Record<'stdout' | 'stderr', string> = { stdout: '', stderr: '' };
     let finished = false;
-    let cancelled = false;
     const done = (exitCode: number | null): void => {
       if (finished) return;
       finished = true;
-      clearTimeout(this.active?.cancelTimer);
+      clearTimeout(build.cancelTimer);
       this.active = undefined;
+      onFinished?.();
       this.events.emit({
         kind: 'done',
         buildId,
-        ok: exitCode === 0 && !cancelled,
+        ok: exitCode === 0 && !build.cancelled,
         exitCode,
         durationMs: performance.now() - started,
         diagnostics: [
@@ -117,21 +196,21 @@ export class BuildService implements BuildApi {
         kind: 'output',
         buildId,
         stream: 'stderr',
-        text: `Could not start HAL build-sim: ${errorText(error)}\n`,
+        text: `Could not start ${driver}: ${errorText(error)}\n`,
       });
       done(null);
     });
-    child.once('close', (code, signal) => {
-      cancelled = signal !== null;
-      done(code);
-    });
+    child.once('close', done);
     return { buildId };
   }
   async cancel(buildId: string): Promise<void> {
-    if (this.active?.id !== buildId) return;
-    const { child } = this.active;
+    const build = this.active;
+    if (build?.id !== buildId || build.cancelled) return;
+    build.cancelled = true;
+    const { child } = build;
+    if (!child) return;
     this.signal(child, 'SIGTERM');
-    this.active.cancelTimer = setTimeout(() => this.signal(child, 'SIGKILL'), 1000);
+    build.cancelTimer = setTimeout(() => this.signal(child, 'SIGKILL'), 1000);
   }
   private signal(child: ChildProcess, signal: NodeJS.Signals): void {
     if (!child.pid) return;
@@ -142,9 +221,10 @@ export class BuildService implements BuildApi {
     }
   }
   dispose(): void {
-    if (this.active) {
-      clearTimeout(this.active.cancelTimer);
-      this.signal(this.active.child, 'SIGKILL');
-    }
+    const build = this.active;
+    if (!build) return;
+    build.cancelled = true;
+    clearTimeout(build.cancelTimer);
+    if (build.child) this.signal(build.child, 'SIGKILL');
   }
 }

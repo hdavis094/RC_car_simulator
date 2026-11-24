@@ -1,6 +1,6 @@
 # P3-01 — PlatformIO flash and real serial monitor
 
-Status: in-progress
+Status: done
 Agent: Codex
 Branch: ws/p3-01
 Depends on: P2-01 integration (merged)
@@ -26,9 +26,9 @@ Read the `HardwareApi` and `BuildApi` contracts in `apps/desktop/src/shared/ipc.
 
 ## Acceptance
 
-- [ ] `pnpm verify` passes.
-- [ ] Fake-driver tests cover argument boundaries, build/flash output, cancellation, serial connect/send/receive/disconnect and flash ownership of the port.
-- [ ] Compile the real firmware with PlatformIO if the toolchain is reachable. Record local hardware verification separately from automated coverage.
+- [x] `pnpm verify` passes.
+- [x] Fake-driver tests cover argument boundaries, build/flash output, cancellation, serial connect/send/receive/disconnect and flash ownership of the port.
+- [x] Compile the real firmware with PlatformIO if the toolchain is reachable. Record local hardware verification separately from automated coverage.
 
 ## Out of scope
 
@@ -36,7 +36,11 @@ Hardware-in-the-loop and installing system drivers.
 
 ## Handoff
 
-- **Built**:
-- **Deviations from the brief**:
-- **Contract change requests**:
-- **Open questions**:
+- **Built** added PlatformIO discovery and confirmed installation in an app-owned Python environment, ESP32 builds and uploads through BuildService, and simulator/USB selection in Terminal's Serial Monitor. Uploads release the serial handle before starting PlatformIO and reserve the port until the process exits. The hardware guide covers Linux permissions and macOS USB bridge drivers.
+- **Deviations from the brief** none.
+- **Contract change requests** none. The prebuilt `serialport-rs` dependency works with the existing workspace install policy.
+- **Verification** `pnpm install --frozen-lockfile` and `VITEST_MAX_WORKERS=1 pnpm verify` passed. The full run included 597 Vitest unit tests, 43 HAL tests each with GCC and Clang, one scenario test and 10 Electron tests. The single Vitest worker avoided an existing Workbench test's five-second timeout observed with default concurrency.
+- **Automated hardware coverage** fake PlatformIO and serial drivers cover argument boundaries, install confirmation, compiler diagnostics, upload output and cancellation, serial exchange and removal, and exclusive upload ownership. A renderer test covers source selection, baud, USB RX/TX and flash dispatch.
+- **Real firmware build** `pio run -e esp32dev` succeeded on Linux x86-64 with PlatformIO Core 6.2.0 and produced a 1,019,696-byte `firmware.bin`. The cold build emitted dependency warnings, including a non-fatal `esp-idf-size` warning about `--ng`. BuildService also built the starter firmware successfully from the copy of the project using Core installed by the app's own installer.
+- **Local hardware check** the read-only Linux scan found zero USB serial ports. The native driver passed a 115200-baud pseudo-terminal RX/TX and disconnect check. Physical ESP32 upload and macOS hardware were unavailable locally.
+- **Open questions** none.
