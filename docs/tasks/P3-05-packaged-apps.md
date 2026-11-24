@@ -1,9 +1,9 @@
 # P3-05 — Packaged Linux and macOS apps
 
-Status: todo
-Agent: Codex
+Status: in-progress
+Agent: OpenCode
 Branch: ws/p3-05
-Depends on: P3-01, P3-04
+Depends on: P3-01 and P3-04 for final package verification
 
 ## Goal
 
