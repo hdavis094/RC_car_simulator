@@ -26,10 +26,10 @@ try {
   await page.getByRole('textbox', { name: 'New project folder' }).fill(project);
   await page.getByRole('button', { name: 'Create project', exact: true }).click();
   await expect(page.getByRole('button', { name: 'main.cpp', exact: true })).toBeVisible();
-  const ports = await page.evaluate(() => window.rcsim.hardware.listSerialPorts());
+  const ports = await page.evaluate(() => globalThis.rcsim.hardware.listSerialPorts());
   if (!Array.isArray(ports)) throw new Error('The packaged USB serial service is unavailable.');
-  const { ptyId } = await page.evaluate(() => window.rcsim.pty.spawn({ cols: 80, rows: 24 }));
-  await page.evaluate((id) => window.rcsim.pty.kill(id), ptyId);
+  const { ptyId } = await page.evaluate(() => globalThis.rcsim.pty.spawn({ cols: 80, rows: 24 }));
+  await page.evaluate((id) => globalThis.rcsim.pty.kill(id), ptyId);
 
   await page.getByRole('button', { name: '3D World', exact: true }).click();
   await page.getByTestId('run-play-pause-btn').click();
