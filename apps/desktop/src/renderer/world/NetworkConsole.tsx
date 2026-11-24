@@ -8,6 +8,7 @@ import {
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { parseIpcError, type RcsimApi } from '../../shared/ipc.ts';
 import { useSessionStore } from '../shell/session.ts';
+import { PhoneControl } from './PhoneControl.tsx';
 
 export const MAX_CONSOLE_ENTRIES = 500;
 
@@ -269,6 +270,8 @@ export function NetworkConsole({ api = window.rcsim, visible }: NetworkConsolePr
           </button>
         </div>
       </div>
+
+      <PhoneControl api={api} />
 
       <pre ref={logViewRef} aria-label="Network Console messages" data-testid="network-console-log">
         {entries.length > 0

@@ -5,6 +5,7 @@ import { registerIpc } from './ipc.ts';
 import { disposeRendererResources } from './renderer-lifecycle.ts';
 import { BuildService } from './services/build.ts';
 import { CatalogService } from './services/catalog.ts';
+import { PhoneControlService } from './services/phone-control/phone-control-service.ts';
 import { ControlService } from './services/control/control-service.ts';
 import { SimService } from './services/sim/sim-service.ts';
 import { spawnUtilityHost } from './services/sim/utility-host.ts';
@@ -80,13 +81,15 @@ function createWindow(): BrowserWindow {
     spawnHost: () => spawnUtilityHost(join(__dirname, 'sim-host.js')),
   });
   const control = new ControlService({ onRunStatus: run.onStatus });
+  const phoneControl = new PhoneControlService(control);
   const worldEdit = new WorldEditService({ project, sim: run });
   const removeIpc = registerIpc(
     window,
-    { project, catalog, build, pty, run, control, worldEdit },
+    { project, catalog, build, pty, run, control, worldEdit, phoneControl },
     rendererUrl,
   );
   const stopRun = (): void => {
+    phoneControl.dispose();
     run.dispose();
     control.reset();
   };
@@ -100,6 +103,7 @@ function createWindow(): BrowserWindow {
     removeIpc();
     removeLifecycle();
     app.off('before-quit', stopRun);
+    phoneControl.dispose();
     run.dispose();
     control.dispose();
     build.dispose();

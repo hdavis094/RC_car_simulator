@@ -1,0 +1,60 @@
+:root {
+  color-scheme: dark;
+  font:
+    1rem system-ui,
+    sans-serif;
+  background: #10171e;
+  color: #e6eef5;
+}
+
+body {
+  margin: 0;
+}
+
+main {
+  max-width: 24rem;
+  margin-inline: auto;
+  padding: 1.25rem;
+}
+
+h1 {
+  font-size: 1.3rem;
+  margin-block: 0 0.75rem;
+}
+
+p {
+  color: #aec1d0;
+}
+
+.controls,
+.actions {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.65rem;
+  margin-top: 1rem;
+}
+
+button {
+  min-height: 3.75rem;
+  padding: 0.6rem;
+  border: 1px solid #435e72;
+  border-radius: 0.4rem;
+  background: #223544;
+  color: inherit;
+  font: inherit;
+  touch-action: none;
+  user-select: none;
+}
+
+button:active {
+  background: #39615e;
+}
+
+button:disabled {
+  opacity: 0.45;
+}
+
+#estop {
+  background: #9f3239;
+  border-color: #ea7880;
+}

@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Donkey Car Controller</title>
+    <link rel="stylesheet" href="/controller.css" />
+    <script type="module" src="/controller.js"></script>
+  </head>
+  <body>
+    <main>
+      <h1>Donkey Car Controller</h1>
+      <p id="connection" role="status">Connecting…</p>
+      <p id="telemetry">Waiting for car telemetry</p>
+      <div class="controls" aria-label="Drive controls">
+        <button data-drive="forward" type="button" disabled>Forward</button>
+        <button data-drive="left" type="button" disabled>Left</button>
+        <button data-drive="right" type="button" disabled>Right</button>
+        <button data-drive="reverse" type="button" disabled>Reverse</button>
+      </div>
+      <div class="actions">
+        <button id="manual" type="button" disabled>Manual mode</button>
+        <button id="estop" type="button" disabled>Emergency stop</button>
+      </div>
+    </main>
+  </body>
+</html>
