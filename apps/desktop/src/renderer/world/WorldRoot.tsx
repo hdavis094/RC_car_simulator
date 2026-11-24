@@ -31,6 +31,7 @@ import {
 } from './driving-controller.ts';
 import { SnapshotInterpolator } from './interpolation.ts';
 import { NetworkConsole, primeControlLinkTracker } from './NetworkConsole.tsx';
+import { NetworkFaultControls } from './NetworkFaultControls.tsx';
 import {
   CAMERA_MODES,
   DEFAULT_ORBIT_CAMERA,
@@ -207,6 +208,7 @@ export function WorldRoot({
   // Run state
   const [runInfo, setRunInfo] = useState<RunInfo | null>(null);
   const runInfoRef = useRef<RunInfo | null>(null);
+  const [stepCount, setStepCount] = useState(0);
   const defaultSpeed = usePreferencesStore((state) => state.simulationSpeed);
   const physicsStage = usePreferencesStore((state) => state.physicsStage);
   const [selectedSpeed, setSpeed] = useState<RunSpeed>();
@@ -1048,6 +1050,7 @@ export function WorldRoot({
     setErrorMessage('');
     try {
       await resolvedApi.run.step(1);
+      setStepCount((n) => n + 1);
     } catch (err) {
       setErrorMessage(parseIpcError(err).message);
     }
@@ -1640,6 +1643,13 @@ export function WorldRoot({
           ))}
         </div>
       </div>
+
+      <NetworkFaultControls
+        api={resolvedApi}
+        runState={runInfo?.state ?? null}
+        runId={runInfo?.runId ?? null}
+        stepCount={stepCount}
+      />
 
       {errorMessage ? (
         <div className="notice app-notice" role="alert">

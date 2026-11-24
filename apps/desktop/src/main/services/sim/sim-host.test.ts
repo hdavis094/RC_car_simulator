@@ -82,4 +82,80 @@ describe('SimHost', () => {
     expect(events.at(-1)).toMatchObject({ type: 'status', info: { state: 'ended', end } });
     await expect(host.handle(paused)).resolves.toMatchObject({ state: 'paused' });
   });
+
+  it('queues setNetFaults while paused so the latest edit takes effect on the next step, and supports reset', async () => {
+    const receivedFaults: Array<unknown> = [];
+    const source: ActuatorSource = {
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+      step: vi.fn(async ({ netFaults }) => {
+        receivedFaults.push(netFaults);
+        return { pwm: [], gpioWrites: [], serialTx: new Uint8Array(), netEvents: [], logs: [] };
+      }),
+    };
+    host = new SimHost(() => {}, { createSource: () => source });
+
+    await expect(
+      host.handle({
+        type: 'setNetFaults',
+        faults: { latencyUs: 1000, lossPpm: 0, dropout: false },
+      }),
+    ).rejects.toThrow('[rcsim:no-run]');
+
+    await host.handle({ ...start, paused: true });
+    expect(source.step).not.toHaveBeenCalled();
+
+    // Two edits submitted while paused: neither steps early, and the latest wins on the next step.
+    await host.handle({
+      type: 'setNetFaults',
+      faults: { latencyUs: 5_000, lossPpm: 10_000, dropout: false },
+    });
+    await host.handle({
+      type: 'setNetFaults',
+      faults: { latencyUs: 25_000, lossPpm: 150_000, dropout: true },
+    });
+    expect(source.step).not.toHaveBeenCalled();
+
+    await host.handle({ type: 'step', ticks: 1 });
+    await host.handle({ type: 'step', ticks: 1 });
+    expect(receivedFaults).toEqual([
+      { latencyUs: 25_000, lossPpm: 150_000, dropout: true },
+      undefined,
+    ]);
+
+    // Reset while paused applies on the next step.
+    await host.handle({
+      type: 'setNetFaults',
+      faults: { latencyUs: 0, lossPpm: 0, dropout: false },
+    });
+    await host.handle({ type: 'step', ticks: 1 });
+    expect(receivedFaults).toEqual([
+      { latencyUs: 25_000, lossPpm: 150_000, dropout: true },
+      undefined,
+      { latencyUs: 0, lossPpm: 0, dropout: false },
+    ]);
+  });
+
+  it('delivers setNetFaults on the next tick while running', async () => {
+    vi.useFakeTimers();
+    const seenFaults: Array<unknown> = [];
+    const source: ActuatorSource = {
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+      step: vi.fn(async ({ netFaults }) => {
+        if (netFaults) seenFaults.push(netFaults);
+        return { pwm: [], gpioWrites: [], serialTx: new Uint8Array(), netEvents: [], logs: [] };
+      }),
+    };
+    host = new SimHost(() => {}, { createSource: () => source, now: () => Date.now() });
+
+    await host.handle(start);
+    await host.handle({
+      type: 'setNetFaults',
+      faults: { latencyUs: 40_000, lossPpm: 50_000, dropout: false },
+    });
+    await vi.advanceTimersByTimeAsync(20);
+    expect(seenFaults).toEqual([{ latencyUs: 40_000, lossPpm: 50_000, dropout: false }]);
+    await host.handle({ type: 'stop' });
+  });
 });

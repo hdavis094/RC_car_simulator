@@ -1,6 +1,6 @@
 import type { Car, Catalog, Obstacle, Track, World } from '@rcsim/schema';
 import type { PhysicsStage, StateSnapshot } from '@rcsim/sim-core';
-import type { LogLine } from '@rcsim/sim-protocol';
+import type { LogLine, NetFaults } from '@rcsim/sim-protocol';
 import type { RunInfo, RunSpeed } from '../../../shared/ipc.ts';
 
 export type HostAction =
@@ -18,6 +18,7 @@ export type HostAction =
   | { readonly type: 'stop' | 'pause' | 'resume' | 'restartFirmware' | 'currentLayout' }
   | { readonly type: 'step'; readonly ticks: number }
   | { readonly type: 'setSpeed'; readonly speed: RunSpeed }
+  | { readonly type: 'setNetFaults'; readonly faults: NetFaults }
   | { readonly type: 'sendSerial'; readonly text: string }
   | { readonly type: 'addObstacle'; readonly obstacle: Obstacle }
   | {

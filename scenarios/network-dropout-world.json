@@ -1,0 +1,8 @@
+{
+  "$schema": "../packages/schema/json-schema/world.schema.json",
+  "schemaVersion": 1,
+  "name": "Network dropout failsafe",
+  "trackId": "oval",
+  "seed": 1,
+  "obstacles": []
+}
