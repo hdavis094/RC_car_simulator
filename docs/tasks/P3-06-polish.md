@@ -36,7 +36,7 @@ A redesign, new simulator capabilities and changing unrelated preferences.
 ## Handoff
 
 - **Built**: Startup guidance and stale-recent recovery, native workspace and Settings accelerators, persistent dock position/size, initial simulation speed, and physics stage selection. The chosen stage reaches the run host.
-  - Settings and recovery unit tests passed. `CI=true pnpm verify` passed including the v1 scenario and all 10 Electron tests. The ordinary local suite hit the existing scripted benchmark's 10-second limit while other worktrees were compiling.
+  - Settings and recovery unit tests passed. `CI=true pnpm verify` passed including the v1 scenario and all 10 Electron tests. A packaged-independent desktop smoke also confirmed preferences across renderer reload and app restart. The ordinary local suite hit the existing scripted benchmark's 10-second limit while other worktrees were compiling.
 - **Deviations from the brief**: Preferences use the existing renderer profile storage and leave car project files independent of desktop settings.
 - **Contract change requests**: None beyond the orchestrator-provided physics selector.
 - **Open questions**: Confirm a real desktop stage-2 run after P3-03 merges.

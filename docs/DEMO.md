@@ -35,3 +35,9 @@ Run `pnpm test:scenarios` to build the starter firmware and check the 60-second 
 ## Desktop settings
 
 Open **Settings** to choose the dock position, initial simulation speed, or physics model. These preferences persist across restarts. Use Cmd or Ctrl with 1, 2, or 3 to switch environments, and Cmd or Ctrl with comma to open Settings. Pick physics **Stage 1** and speed **1×** for the v1 walkthrough above.
+
+## Phase 3 features
+
+- [Build, flash, and monitor an ESP32](HARDWARE.md) from Terminal and the USB Serial Monitor.
+- [Drive from a phone](PHONE-CONTROL.md) using a session link from Network Console.
+- [Install the AppImage or DMG](INSTALL.md) and set up the host compiler.
