@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path';
 import { _electron as electron, expect } from '@playwright/test';
 
 const appPath = process.argv[2];
-if (!appPath) throw new Error('Pass the unpacked package executable.');
+if (!appPath) throw new Error('Pass the packaged app executable.');
 const directory = await realpath(await mkdtemp(join(tmpdir(), 'rcsim package smoke-')));
 const project = join(directory, 'Firmware project');
 const env = { ...process.env, XDG_CONFIG_HOME: join(directory, 'config') };

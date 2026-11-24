@@ -33,7 +33,9 @@ jobs:
       - run: pnpm --filter @rcsim/desktop exec electron-builder --linux AppImage --x64 --publish never
         working-directory: apps/desktop
       - name: Smoke test packaged firmware
-        run: xvfb-run -a node apps/desktop/scripts/smoke-packaged.mjs apps/desktop/dist/linux-unpacked/donkey-car-simulator
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+        run: xvfb-run -a node apps/desktop/scripts/smoke-packaged.mjs apps/desktop/dist/*.AppImage
       - uses: actions/upload-artifact@v7
         with:
           name: Donkey-Car-Simulator-linux-x64
