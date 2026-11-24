@@ -36,7 +36,8 @@ Signing, notarization, releases and auto-updates.
 ## Handoff
 
 - **Built**: OpenCode added the electron-builder workflow and packaged resource paths. The follow-up includes the HAL build helpers, stages the HAL compile with relative Make targets, runs a real project and firmware smoke test from the bundle, uses current Apple Silicon and Intel runner labels, and prepares executable native PTY helpers.
-  - Linux x64 AppImage produced locally. The unpacked Linux package created a project in a path containing spaces, compiled it with the bundled Electron Node runtime and launched the starter firmware. CI checks the three architecture artifacts and runs the same package smoke test.
+  - The Linux AppImage created a project in a path containing spaces, compiled it with the bundled Electron runtime and ran the starter firmware. The smoke test also starts a native PTY and lists USB serial ports. CI exercises the AppImage and the app bundles for both macOS architectures.
+  - [Initial integration package run](https://github.com/hdavis094/RC_car_simulator/actions/runs/45504267260) produced all three artifacts and passed the package smoke tests.
 - **Deviations from the brief**: The macOS binaries use ad-hoc signing and the DMG uses no Developer ID or notarization.
 - **Contract change requests**: None.
 - **Open questions**: Verify all package jobs with the completed Phase 3 dependency set.
