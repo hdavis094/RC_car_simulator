@@ -5,6 +5,7 @@ import { registerIpc } from './ipc.ts';
 import { disposeRendererResources } from './renderer-lifecycle.ts';
 import { BuildService } from './services/build.ts';
 import { CatalogService } from './services/catalog.ts';
+import { PhoneControlService } from './services/phone-control/phone-control-service.ts';
 import { ControlService } from './services/control/control-service.ts';
 import { HardwareService } from './services/hardware/hardware.ts';
 import { PlatformioService } from './services/hardware/platformio.ts';
@@ -97,13 +98,15 @@ function createWindow(): BrowserWindow {
     spawnHost: () => spawnUtilityHost(join(__dirname, 'sim-host.js')),
   });
   const control = new ControlService({ onRunStatus: run.onStatus });
+  const phoneControl = new PhoneControlService(control);
   const worldEdit = new WorldEditService({ project, sim: run });
   const removeIpc = registerIpc(
     window,
-    { project, catalog, build, hardware, pty, run, control, worldEdit },
+    { project, catalog, build, hardware, pty, run, control, worldEdit, phoneControl },
     rendererUrl,
   );
   const stopRun = (): void => {
+    phoneControl.dispose();
     run.dispose();
     control.reset();
   };
@@ -124,6 +127,7 @@ function createWindow(): BrowserWindow {
     removeLifecycle();
     app.off('before-quit', stopRun);
     app.off('before-quit', stopHardware);
+    phoneControl.dispose();
     run.dispose();
     control.dispose();
     stopHardware();

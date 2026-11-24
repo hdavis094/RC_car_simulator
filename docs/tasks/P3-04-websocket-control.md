@@ -1,6 +1,6 @@
 # P3-04 — WebSocket phone control
 
-Status: in-progress
+Status: in-review
 Agent: Codex
 Branch: ws/p3-04
 Depends on: P2-01 integration (merged)
@@ -11,7 +11,7 @@ Drive the simulated or real car from a phone browser using the desktop's existin
 
 ## Owned paths
 
-`apps/desktop/src/main/services/phone-control/`, `apps/desktop/src/main/{index,ipc}.ts` for registration, `apps/desktop/src/renderer/world/{PhoneControl,NetworkConsole}*`, `apps/desktop/package.json`, `pnpm-lock.yaml` and `docs/PHONE-CONTROL.md`. The orchestrator owns the shared IPC addition. The worker also updates this brief's Handoff.
+`apps/desktop/src/main/services/phone-control/`, `apps/desktop/src/main/{index,ipc}.ts` for registration, `apps/desktop/src/renderer/world/{PhoneControl,NetworkConsole,phone-controller}*`, `apps/desktop/package.json`, `pnpm-lock.yaml` and `docs/PHONE-CONTROL.md`. The orchestrator owns the shared IPC addition. The worker also updates this brief's Handoff.
 
 ## Read first
 
@@ -25,9 +25,9 @@ Read `packages/control-protocol/SPEC.md`, the desktop `ControlService`, and the 
 
 ## Acceptance
 
-- [ ] `pnpm verify` passes.
-- [ ] Tests cover credential rejection, valid command/telemetry routing, one active phone connection, drive release on staleness/disconnect, and server teardown.
-- [ ] The controller can drive the simulated starter firmware through a browser WebSocket.
+- [x] `pnpm verify` passes.
+- [x] Tests cover credential rejection, valid command/telemetry routing, one active phone connection, drive release on staleness/disconnect, and server teardown.
+- [x] The controller can drive the simulated starter firmware through a browser WebSocket.
 
 ## Out of scope
 
@@ -35,7 +35,8 @@ Direct WebSocket firmware, public Internet hosting and changing the existing TCP
 
 ## Handoff
 
-- **Built**:
-- **Deviations from the brief**:
-- **Contract change requests**:
-- **Open questions**:
+- **Built**: The Network Console can open a 15-minute phone session and can select either the simulated car or a real TCP target. A browser on the local network uses per-message WebSocket framing. Commands and telemetry share the desktop ControlClient. The service requires its invitation token and same-origin upgrade, admits one browser, and stops held drive after 250 ms without fresh input.
+  - `pnpm verify` passed on Linux. WebSocket service tests cover authorization, telemetry, sequence handling, neutral on stale input/disconnect, e-stop and expiry. An Electron browser at phone dimensions moved the simulated starter firmware car, released throttle and confirmed e-stop before disconnecting.
+- **Deviations from the brief**: No scope deviations. The browser uses the desktop gateway on a trusted LAN.
+- **Contract change requests**: None beyond the orchestrator-provided PhoneControlApi.
+- **Open questions**: Physical phone and real-car verification remain hardware checks.
