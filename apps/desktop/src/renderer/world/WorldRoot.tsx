@@ -18,6 +18,7 @@ import {
 } from '../../shared/ipc.ts';
 import { BottomPanel, type DockTab } from '../shell/BottomPanel.tsx';
 import { useEnvironmentStore } from '../shell/environment-store.ts';
+import { usePreferencesStore } from '../shell/preferences.ts';
 import {
   DRIVE_INTERVAL_MS,
   isEditableEventTarget,
@@ -206,7 +207,10 @@ export function WorldRoot({
   // Run state
   const [runInfo, setRunInfo] = useState<RunInfo | null>(null);
   const runInfoRef = useRef<RunInfo | null>(null);
-  const [speed, setSpeed] = useState<RunSpeed>(1);
+  const defaultSpeed = usePreferencesStore((state) => state.simulationSpeed);
+  const physicsStage = usePreferencesStore((state) => state.physicsStage);
+  const [selectedSpeed, setSpeed] = useState<RunSpeed>();
+  const speed = selectedSpeed ?? defaultSpeed;
   const [seed, setSeed] = useState<number>((initialWorld ?? DEFAULT_WORLD_FILE).seed);
 
   // Camera & scene editor state
@@ -1005,7 +1009,12 @@ export function WorldRoot({
         await prepareRun?.();
         const prevState = runInfoRef.current?.state;
         const nextWorld: WorldFile = { ...worldFileRef.current, seed };
-        const started = await resolvedApi.run.start({ world: nextWorld, seed, speed });
+        const started = await resolvedApi.run.start({
+          world: nextWorld,
+          seed,
+          speed,
+          ...(physicsStage === 2 ? { physicsStage } : {}),
+        });
         const statusAlreadyHandled =
           runInfoRef.current?.state === started.state && prevState !== started.state;
         runInfoRef.current = started;

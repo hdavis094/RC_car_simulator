@@ -148,6 +148,16 @@ function createWindow(): BrowserWindow {
           { label: 'Build for Sim', accelerator: 'CmdOrCtrl+Shift+B', click: () => click('build') },
         ],
       },
+      {
+        label: 'Workspace',
+        submenu: [
+          { label: 'Workbench', accelerator: 'CmdOrCtrl+1', click: () => click('show-workbench') },
+          { label: 'Terminal', accelerator: 'CmdOrCtrl+2', click: () => click('show-terminal') },
+          { label: '3D World', accelerator: 'CmdOrCtrl+3', click: () => click('show-world') },
+          { type: 'separator' },
+          { label: 'Settings', accelerator: 'CmdOrCtrl+,', click: () => click('settings') },
+        ],
+      },
       { role: 'viewMenu' },
       { role: 'windowMenu' },
     ]),

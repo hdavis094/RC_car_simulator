@@ -8,6 +8,7 @@ import { WorkbenchRoot } from '../workbench/index.ts';
 import { useWorkbenchStore } from '../workbench/workbench-store.ts';
 import { WorldRoot, createWorldDockTabs } from '../world/index.ts';
 import { BottomPanel } from './BottomPanel.tsx';
+import { PreferencesPanel } from './PreferencesPanel.tsx';
 import { ENVIRONMENTS, useEnvironmentStore, type Environment } from './environment-store.ts';
 import { useSessionStore } from './session.ts';
 import { hasUnsavedChanges } from './unsaved.ts';
@@ -22,6 +23,8 @@ const LABELS: Record<Environment, string> = {
 export function App({ api = window.rcsim }: { api?: RcsimApi }): ReactNode {
   const current = useEnvironmentStore((state) => state.current);
   const show = useEnvironmentStore((state) => state.show);
+  const [ready, setReady] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [project, setProject] = useState<ProjectInfo | null>(null);
   const [recent, setRecent] = useState<readonly ProjectInfo[]>([]);
   const [newProject, setNewProject] = useState(false);
@@ -48,10 +51,14 @@ export function App({ api = window.rcsim }: { api?: RcsimApi }): ReactNode {
         if (alive) {
           setProject(project);
           setRecent(recent);
+          setReady(true);
         }
       })
       .catch((error) => {
-        if (alive) setError(parseIpcError(error).message);
+        if (alive) {
+          setError(parseIpcError(error).message);
+          setReady(true);
+        }
       });
     const offBuild = api.build.onEvent((event) => useSessionStore.getState().buildEvent(event));
     const offRun = api.run.onStatus((run) => useSessionStore.setState({ run }));
@@ -86,8 +93,15 @@ export function App({ api = window.rcsim }: { api?: RcsimApi }): ReactNode {
         setRecent(await api.project.recent());
         show('terminal');
       }
-    } catch (error) {
-      report(error);
+    } catch (cause) {
+      const parsed = parseIpcError(cause);
+      if (dir && !create && parsed.code === 'not-found') {
+        setError(
+          `The recent project folder is missing. Choose Open project to locate it. (${dir})`,
+        );
+      } else {
+        report(cause);
+      }
     } finally {
       setWorking(false);
     }
@@ -156,7 +170,7 @@ export function App({ api = window.rcsim }: { api?: RcsimApi }): ReactNode {
             <select
               aria-label="Recent projects"
               value=""
-              disabled={working || buildStatus === 'building'}
+              disabled={recent.length === 0 || working || buildStatus === 'building'}
               onChange={(event) => {
                 if (event.target.value) void openProject(event.target.value);
               }}
@@ -177,6 +191,7 @@ export function App({ api = window.rcsim }: { api?: RcsimApi }): ReactNode {
             <button
               key={environment}
               type="button"
+              data-action={`show-${environment}`}
               aria-pressed={environment === current}
               onClick={() => show(environment)}
             >
@@ -185,6 +200,15 @@ export function App({ api = window.rcsim }: { api?: RcsimApi }): ReactNode {
           ))}
         </nav>
         <div className="build-actions">
+          <button
+            type="button"
+            data-action="settings"
+            aria-expanded={settingsOpen}
+            aria-controls="app-settings"
+            onClick={() => setSettingsOpen((open) => !open)}
+          >
+            Settings
+          </button>
           <button
             type="button"
             data-action="save-file"
@@ -218,6 +242,13 @@ export function App({ api = window.rcsim }: { api?: RcsimApi }): ReactNode {
           </button>
         </div>
       </div>
+      {settingsOpen ? <PreferencesPanel /> : null}
+      {ready && !project && !newProject ? (
+        <section className="first-run" aria-label="Getting started">
+          New project starts with ESP32 wiring and starter firmware. Use Open project for an
+          existing car folder.
+        </section>
+      ) : null}
       {error ? (
         <div className="notice app-notice" role="alert">
           {error}

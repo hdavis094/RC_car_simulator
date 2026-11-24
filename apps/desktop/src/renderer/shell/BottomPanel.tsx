@@ -1,8 +1,9 @@
-import { useState, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import type { Diagnostic, RcsimApi } from '../../shared/ipc.ts';
 import { BuildOutput } from '../terminal/BuildOutput.tsx';
 import { SerialMonitor } from '../terminal/SerialMonitor.tsx';
 import { ShellPanel } from '../terminal/ShellPanel.tsx';
+import { usePreferencesStore } from './preferences.ts';
 import { useSessionStore } from './session.ts';
 
 /** App owns one dock across environments. Extra tabs let 3D World add a Network Console. */
@@ -26,8 +27,9 @@ export function BottomPanel({
   const open = useSessionStore((state) => state.panelOpen);
   const shells = useSessionStore((state) => state.shells);
   const show = useSessionStore((state) => state.showPanel);
-  const [dock, setDock] = useState<'bottom' | 'right'>('bottom');
-  const [size, setSize] = useState(280);
+  const dock = usePreferencesStore((state) => state.dockPosition);
+  const size = usePreferencesStore((state) => state.dockSize);
+  const updatePreferences = usePreferencesStore((state) => state.update);
   return (
     <section
       className={`bottom-panel dock-${dock}`}
@@ -73,10 +75,15 @@ export function BottomPanel({
             min="160"
             max="520"
             value={size}
-            onChange={(event) => setSize(Number(event.target.value))}
+            onChange={(event) => updatePreferences({ dockSize: Number(event.target.value) })}
           />
         </label>
-        <button type="button" onClick={() => setDock(dock === 'bottom' ? 'right' : 'bottom')}>
+        <button
+          type="button"
+          onClick={() =>
+            updatePreferences({ dockPosition: dock === 'bottom' ? 'right' : 'bottom' })
+          }
+        >
           {dock === 'bottom' ? 'Dock right' : 'Dock bottom'}
         </button>
         <button
