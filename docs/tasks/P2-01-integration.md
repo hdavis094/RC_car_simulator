@@ -44,7 +44,7 @@ Everything in `docs/`; the Handoff sections of every Phase 1 brief.
 
 - [x] `pnpm verify` passes, including the v1 scenario and the Playwright demo test
 - [x] the v1 scenario passes 10 times in a row with seeds 1–10 (seed 1 is the gate; report the others)
-- [ ] CI is green on **both** `ubuntu-latest` and `macos-latest`, including the v1 scenario and the Playwright demo test. The v1 scenario's result (laps, collisions, serial output hash) is identical on both platforms for seed 1
+- [x] CI is green on **both** `ubuntu-latest` and `macos-latest`, including the v1 scenario and the Playwright demo test. The v1 scenario's result (laps, collisions, serial output hash) is identical on both platforms for seed 1. [CI for 9070b8a](https://github.com/hdavis094/RC_car_simulator/actions/runs/45498050993)
 - [x] `docs/DEMO.md` lists the setup steps for each platform
 - [ ] the user has walked through `docs/DEMO.md` and approved it
 
@@ -93,5 +93,6 @@ Phase 3 items.
   Seed 1 serial SHA-256 with both GCC and Clang on Linux was `e33b65d21406ad94b19bded7c0609c38f0c9510f58665679530e48061312466a`.
 - **Verification**: `pnpm verify` passed on Linux with 584 unit tests, the seed-1 scenario, both HAL compiler suites and all 10 Playwright tests. A Linux walkthrough confirmed an automatic lap without collisions, an external `nc` client switching to manual, and renderer reload closing the simulated car's mapped TCP port.
   - Both CI platforms matched the seed-1 fingerprint on the first run. The demo test's default five-second wait expired during startup. It now waits for the real running state, which also passed locally with a six-second build delay.
+  - Gemini's independent integration review found no blocking issues. The startup fix subsequently passed `pnpm verify` locally and in both CI jobs.
 - **Open questions**:
   - The user walkthrough, including a physical gamepad, is the final approval gate.
