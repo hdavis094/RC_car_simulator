@@ -1,6 +1,6 @@
 # P3-03 — Physics stage 2
 
-Status: in-progress
+Status: in-review
 Agent: Claude
 Branch: ws/p3-03
 Depends on: P2-01 integration (merged)
@@ -26,9 +26,9 @@ Read the stage-2 PRD and `packages/sim-core/src/api/{run,vehicle,scenario}.ts`. 
 
 ## Acceptance
 
-- [ ] `pnpm verify` passes.
-- [ ] Tests cover repeatability, centre-of-gravity shift, grip limits/slip, unloaded vs. loaded ADC voltage, and ESC brake/neutral/reverse transitions.
-- [ ] Stage-1 checks and the v1 scenario fingerprint still pass. A stage-2 CLI run completes with the selected model.
+- [x] `pnpm verify` passes.
+- [x] Tests cover repeatability, centre-of-gravity shift, grip limits/slip, unloaded vs. loaded ADC voltage, and ESC brake/neutral/reverse transitions.
+- [x] Stage-1 checks and the v1 scenario fingerprint still pass. A stage-2 CLI run completes with the selected model.
 
 ## Out of scope
 
@@ -37,6 +37,23 @@ Detailed tyre compound or thermal simulation and stage-1 retuning.
 ## Handoff
 
 - **Built**:
+  - `physicsStage` is honoured by `createRun`, `runScenario` and `rcsim run --physics-stage <1|2>`. The default is 1; any other value is rejected (CLI exit code 2).
+  - Placed part masses set the centre of gravity, wheel loads and rotational inertia (`vehicle/mass.ts`).
+  - Stage-2 tyres: Rapier does the suspension only; `vehicle/tyre.ts` applies slip-angle and drive/brake impulses inside a friction circle.
+  - Motor and pack solved together (`vehicle/powertrain.ts`). The voltage divider reads the sagging pack at 100 Hz.
+  - ESC brake, neutral, reverse (`actuators/gearbox.ts`). With reverse disabled it only brakes.
+  - `docs/PHYSICS.md`: model, parameters with dimensions, and what is not modelled.
+  - Tests include a stage-2 golden snapshot hash and a compiled sketch that reads the sag with `analogReadMilliVolts`.
+- **Verification** (Linux x86-64, Node 26.12.0): `pnpm verify` passes: 654 unit tests in 59 files, the hal and firmware suites, 1 scenario test and 10 Playwright tests. The stage-1 golden hash and `v1.expected.json` are unchanged. The starter firmware also completes the v1 course in stage 2 (2 laps, 0 collisions, against 3 laps in stage 1; run by hand, not gated). macOS was not run: CI has to confirm the new golden hash there. No physical ESP32 is involved in this task.
 - **Deviations from the brief**:
+  - Based on `bd055aa`, one docs-only commit after `f970f5f`. Worked on `t3/physics-stage-two`, the tool's branch, for the orchestrator to put on `ws/p3-03`.
+  - Beyond the brief: neutral must last one PWM frame to count between the two ESC taps, and stage 2 samples the divider at 100 Hz (stage 1 stays at 10 Hz).
+  - `createEscModel` takes an optional gearbox. The mount-point resolution moved from `sensors/pose.ts` to `vehicle/mount.ts`, shared with the mass model.
+  - Not modelled (see `docs/PHYSICS.md`): wheel inertia, ESC motor-speed feedback, state of charge, non-motor loads, creep-free parking on slopes.
+  - The 60 s CLI wall-time test failed once in a baseline run before any change (11.1 s against 10 s, load average about 12). It passed in `pnpm verify`.
 - **Contract change requests**:
+  - **Optional `readonly brake?: boolean`** on the `'drive'` variant of `ActuatorOutput` (`api/actuators.ts`) and on `VehicleCommand` (`api/vehicle.ts`). _Why_: braking and reverse are both a negative `motorDuty`, so the contract cannot say which. _Not blocking_: `vehicle/command.ts` adds exactly this field locally, set only while stage 2 brakes, so it already appears in `snapshot().car.command`. Once accepted, delete those types and the two casts that use `DriveOutput`.
 - **Open questions**:
+  - Orchestrator wiring: the desktop sim host still has to pass `physicsStage` to `createRun`.
+  - Should the second ESC tap wait for the motor to stop, as some real ESCs do? It needs speed feedback into the ESC model.
+  - A custom `createSensorModel` cannot see the pack voltage (`SensorContext` has no field for it). Only the built-in divider shows sag. Add one only if overrides need it.

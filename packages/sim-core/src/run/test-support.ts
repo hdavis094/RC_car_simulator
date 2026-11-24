@@ -2,6 +2,7 @@
 import { defaultCatalog, exampleCar, World, type Obstacle } from '@rcsim/schema';
 import type { ActuatorSource, ScriptedPwm } from '../api/actuator-source.ts';
 import type { Run } from '../api/run.ts';
+import type { PhysicsStage } from '../api/vehicle.ts';
 import { createScriptedSource } from '../scenario/scripted-source.ts';
 import { trackLibrary } from '../world/track-library.ts';
 import { createRun, type MeasuredRun } from './run.ts';
@@ -18,6 +19,7 @@ export interface TestRunOptions {
   readonly tickUs?: number;
   readonly timeline?: readonly ScriptedPwm[];
   readonly source?: ActuatorSource;
+  readonly physicsStage?: PhysicsStage;
   /** Remove the track walls (an open floor). */
   readonly noWalls?: boolean;
 }
@@ -51,6 +53,7 @@ export function testRun(options: TestRunOptions = {}): Promise<MeasuredRun> {
     seed: options.seed ?? 1,
     ...(options.tickUs !== undefined ? { tickUs: options.tickUs } : {}),
     source: options.source ?? createScriptedSource(options.timeline ?? []),
+    ...(options.physicsStage !== undefined ? { physicsStage: options.physicsStage } : {}),
   });
 }
 

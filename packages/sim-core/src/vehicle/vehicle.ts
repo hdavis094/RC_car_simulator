@@ -5,16 +5,13 @@ import type {
   World as RapierWorld,
 } from '@dimforge/rapier3d-deterministic-compat';
 import type { Pose, Quat, Vec3 } from '../api/math.ts';
-import {
-  WHEEL_ORDER,
-  type Vehicle,
-  type VehicleCommand,
-  type VehicleState,
-  type WheelState,
-} from '../api/vehicle.ts';
+import { WHEEL_ORDER, type Vehicle, type VehicleState, type WheelState } from '../api/vehicle.ts';
 import { GROUP, groups, type Rapier } from '../world/rapier.ts';
 import { quatMul, quatX, quatY, rotate } from '../world/quat.ts';
+import type { DriveCommand } from './command.ts';
 import type { VehicleParams } from './params.ts';
+import { brakeTorqueNm, motorLoad } from './powertrain.ts';
+import { tyreImpulse } from './tyre.ts';
 
 const GRAVITY = 9.81;
 
@@ -43,10 +40,21 @@ export interface VehicleStart {
   readonly yawDeg: number;
 }
 
+const cross = (a: Vec3, b: Vec3): Vec3 => [
+  a[1] * b[2] - a[2] * b[1],
+  a[2] * b[0] - a[0] * b[2],
+  a[0] * b[1] - a[1] * b[0],
+];
+const dot = (a: Vec3, b: Vec3): number => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+
 /**
  * The car: a rigid body with a Rapier ray-cast vehicle controller for the
  * four wheels. Ackermann steering on the front wheels, a DC-motor model
  * (stall torque, back-EMF) driving the driven wheels through the final drive.
+ *
+ * Stage 1 leaves the tyres to Rapier's controller. Stage 2 (docs/PHYSICS.md)
+ * uses the controller for the suspension alone and applies its own bounded
+ * tyre impulses, with the motor fed by a pack that sags under load.
  */
 export class RapierVehicle implements Vehicle {
   readonly body: RigidBody;
@@ -63,8 +71,9 @@ export class RapierVehicle implements Vehicle {
   readonly #hardPoints: Vec3[] = [];
   /** False until the suspension has first been queried (`beforeStep`): its hard points are unset before. */
   #queried = false;
-  #command: VehicleCommand = { steerAngleRad: 0, motorDuty: 0 };
-  #applied: VehicleCommand = this.#command;
+  #command: DriveCommand = { steerAngleRad: 0, motorDuty: 0 };
+  #applied: DriveCommand = this.#command;
+  #packV: number;
   #steerRad: [number, number, number, number] = [0, 0, 0, 0];
   #velocity: Vec3 = [0, 0, 0];
   #angularVelocity: Vec3 = [0, 0, 0];
@@ -76,6 +85,7 @@ export class RapierVehicle implements Vehicle {
     this.params = params;
     const { wheelbaseM: L, trackWidthM: W, wheelRadiusM: Rw, cogM } = params;
     this.#cog = cogM;
+    this.#packV = params.batteryV;
 
     // Body frame = centre-of-gravity frame. The chassis frame (origin on the ground
     // between the axles) is offset from it by -cog; `pose` undoes that.
@@ -84,11 +94,7 @@ export class RapierVehicle implements Vehicle {
     const cogWorld = rotate(rotation, cogM);
     const { bodyM } = params;
     const m = params.massKg;
-    const inertia = {
-      x: (m * (bodyM.height ** 2 + bodyM.length ** 2)) / 12,
-      y: (m * (bodyM.width ** 2 + bodyM.length ** 2)) / 12,
-      z: (m * (bodyM.width ** 2 + bodyM.height ** 2)) / 12,
-    };
+    const inertia = { ...params.inertiaKgM2 };
     this.body = world.createRigidBody(
       rapier.RigidBodyDesc.dynamic()
         .setTranslation(start.x + cogWorld[0], cogWorld[1], start.z + cogWorld[2])
@@ -121,8 +127,12 @@ export class RapierVehicle implements Vehicle {
       [-W / 2, L / 2],
       [W / 2, L / 2],
     ];
-    const frontShare = (L / 2 - cogM[2]) / L;
-    const leftShare = (W / 2 + cogM[0]) / W;
+    // Placed parts (stage 2) can put the centre of gravity outside the wheels;
+    // a wheel then carries nothing rather than a negative load.
+    const clampShare = (share: number): number =>
+      params.physicsStage === 2 ? Math.max(0, Math.min(1, share)) : share;
+    const frontShare = clampShare((L / 2 - cogM[2]) / L);
+    const leftShare = clampShare((W / 2 + cogM[0]) / W);
     const loads: number[] = [];
     this.#controller = world.createVehicleController(this.body);
     wheelXZ.forEach(([x, z], i) => {
@@ -148,7 +158,11 @@ export class RapierVehicle implements Vehicle {
       this.#controller.setWheelSuspensionRelaxation(i, TUNING.relaxationDamping);
       this.#controller.setWheelMaxSuspensionForce(i, TUNING.maxSuspensionForceN);
       this.#controller.setWheelFrictionSlip(i, TUNING.frictionSlip);
-      this.#controller.setWheelSideFrictionStiffness(i, TUNING.sideFrictionStiffness);
+      // Stage 2 applies the tyre forces itself.
+      this.#controller.setWheelSideFrictionStiffness(
+        i,
+        params.physicsStage === 2 ? 0 : TUNING.sideFrictionStiffness,
+      );
     });
     this.#loadN = loads;
     this.#wheelRest = wheelXZ.map(([x, z]): Vec3 => [x, Rw, z]);
@@ -161,8 +175,16 @@ export class RapierVehicle implements Vehicle {
     this.#velocity = [0, 0, 0];
   }
 
-  applyCommand(command: VehicleCommand): void {
+  applyCommand(command: DriveCommand): void {
     this.#command = command;
+  }
+
+  /**
+   * The battery's terminal voltage under the motor load of the last step, volts.
+   * The nominal voltage before the first step, and always in stage 1.
+   */
+  get packVolts(): number {
+    return this.#packV;
   }
 
   /** The chassis-frame origin's rotation and position. */
@@ -196,7 +218,13 @@ export class RapierVehicle implements Vehicle {
    * sure Rapier's spatial index holds those first.
    */
   beforeStep(dtS: number): void {
-    this.#drive(dtS);
+    this.#applied = this.#clamped(this.#command);
+    const [fl, fr] = this.#ackermann(this.#applied.steerAngleRad);
+    this.#steerRad = [fl, fr, 0, 0];
+    this.#controller.setWheelSteering(0, fl);
+    this.#controller.setWheelSteering(1, fr);
+    if (this.params.physicsStage === 2) this.#driveWithTyres(dtS);
+    else this.#drive(dtS);
     this.#cache = undefined;
   }
 
@@ -218,15 +246,9 @@ export class RapierVehicle implements Vehicle {
   }
 
   #drive(dtS: number): void {
-    const command = this.#clamped(this.#command);
-    this.#applied = command;
+    const command = this.#applied;
     const c = this.#controller;
     const p = this.params;
-
-    const [fl, fr] = this.#ackermann(command.steerAngleRad);
-    this.#steerRad = [fl, fr, 0, 0];
-    c.setWheelSteering(0, fl);
-    c.setWheelSteering(1, fr);
 
     // DC motor: torque falls linearly from the stall torque (scaled by duty) as
     // back-EMF rises to the duty-scaled no-load speed. Zero duty is open
@@ -244,15 +266,109 @@ export class RapierVehicle implements Vehicle {
       // Rolling resistance is a brake impulse limit: it opposes rolling without reversing it.
       c.setWheelBrake(i, TUNING.rollingResistance * (this.#loadN[i] ?? 0) * dtS);
     }
-    c.updateVehicle(dtS, undefined, groups(0xffff, GROUP.ground));
+    this.#querySuspension(dtS);
+  }
+
+  #querySuspension(dtS: number): void {
+    this.#controller.updateVehicle(dtS, undefined, groups(0xffff, GROUP.ground));
     this.#queried = true;
   }
 
-  #clamped(command: VehicleCommand): VehicleCommand {
+  /**
+   * The force the motor asks of each driven wheel, and the brake's resistance
+   * there, N. Also sets the pack voltage under that load. Motor speed follows
+   * the car's speed: the wheels have no inertia of their own.
+   */
+  #powertrain(): { driveN: number; brakeN: number } {
+    const p = this.params;
+    const { motorDuty: duty, brake } = this.#applied;
+    this.#packV = p.batteryV;
+    if (!p.motor || this.#driven.length === 0) return { driveN: 0, brakeN: 0 };
+    const motorSpeed = (this.#forwardSpeed / p.wheelRadiusM) * p.finalDriveRatio;
+    const toWheelN = p.finalDriveRatio / p.wheelRadiusM / this.#driven.length;
+    if (brake) {
+      return {
+        driveN: 0,
+        brakeN: brakeTorqueNm(p.motor, Math.abs(duty), motorSpeed) * toWheelN,
+      };
+    }
+    const pack = { openCircuitV: p.batteryV, resistanceOhm: p.batteryResistanceOhm };
+    const load = motorLoad(p.motor, pack, duty, motorSpeed);
+    this.#packV = load.packV;
+    return { driveN: load.torqueNm * toWheelN, brakeN: 0 };
+  }
+
+  /**
+   * Stage 2: queries the suspension (which pushes the car up), then gives each
+   * wheel on the ground its tyre impulse at the contact point.
+   */
+  #driveWithTyres(dtS: number): void {
+    const { driveN, brakeN } = this.#powertrain();
+    this.#querySuspension(dtS);
+
+    const c = this.#controller;
+    const body = this.body;
+    const r = body.rotation();
+    const rotation: Quat = [r.x, r.y, r.z, r.w];
+    const inverse: Quat = [-r.x, -r.y, -r.z, r.w];
+    const com = body.worldCom();
+    const { massKg, inertiaKgM2: inertia } = this.params;
+    const touching = [0, 1, 2, 3].filter((i) => c.wheelIsInContact(i));
+
+    // All four are worked out from the same velocities, then applied, so no
+    // wheel goes first. Each takes its share of the velocity it may cancel.
+    const impulses = touching.flatMap((i) => {
+      const at = c.wheelContactPoint(i);
+      const n = c.wheelContactNormal(i);
+      if (!at || !n) return [];
+      const normal: Vec3 = [n.x, n.y, n.z];
+      const heading = rotate(rotation, rotate(quatY(this.#steerRad[i] ?? 0), [0, 0, -1]));
+      // along the ground
+      const into = dot(heading, normal);
+      const flat: Vec3 = [
+        heading[0] - normal[0] * into,
+        heading[1] - normal[1] * into,
+        heading[2] - normal[2] * into,
+      ];
+      const length = Math.hypot(...flat);
+      if (length < 1e-6) return [];
+      const forward: Vec3 = [flat[0] / length, flat[1] / length, flat[2] / length];
+      const right = cross(forward, normal);
+      const velocity = body.velocityAtPoint(at);
+      const v: Vec3 = [velocity.x, velocity.y, velocity.z];
+      const arm: Vec3 = [at.x - com.x, at.y - com.y, at.z - com.z];
+      /** The mass an impulse along `direction` at the contact point has to move. */
+      const massAlong = (direction: Vec3): number => {
+        const [x, y, z] = rotate(inverse, cross(arm, direction));
+        const response = 1 / massKg + x ** 2 / inertia.x + y ** 2 / inertia.y + z ** 2 / inertia.z;
+        return 1 / response / touching.length;
+      };
+      const loadN = Math.max(0, c.wheelSuspensionForce(i) ?? 0);
+      const driven = this.#driven.includes(i);
+      const impulse = tyreImpulse({
+        loadN,
+        forwardMps: dot(v, forward),
+        rightMps: dot(v, right),
+        driveN: driven ? driveN : 0,
+        resistN: TUNING.rollingResistance * loadN + (driven ? brakeN : 0),
+        forwardMassKg: massAlong(forward),
+        rightMassKg: massAlong(right),
+        dtS,
+      });
+      const j = (axis: 0 | 1 | 2): number =>
+        forward[axis] * impulse.forward + right[axis] * impulse.right;
+      return [{ impulse: { x: j(0), y: j(1), z: j(2) }, at: { x: at.x, y: at.y, z: at.z } }];
+    });
+    for (const { impulse, at } of impulses) body.applyImpulseAtPoint(impulse, at, true);
+  }
+
+  #clamped(command: DriveCommand): DriveCommand {
     const max = this.params.maxSteerRad;
     return {
       steerAngleRad: Math.max(-max, Math.min(max, command.steerAngleRad)),
       motorDuty: Math.max(-1, Math.min(1, command.motorDuty)),
+      // Stage 1 has no brake.
+      ...(command.brake && this.params.physicsStage === 2 ? { brake: true } : {}),
     };
   }
 

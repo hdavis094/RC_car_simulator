@@ -6,7 +6,7 @@ import type {
 } from '@dimforge/rapier3d-deterministic-compat';
 import type { Obstacle, Track, World as WorldFile } from '@rcsim/schema';
 import type { Quat, Vec3 } from '../api/math.ts';
-import type { Vehicle, VehicleSpec } from '../api/vehicle.ts';
+import type { VehicleSpec } from '../api/vehicle.ts';
 import type {
   CollisionEvent,
   CreateWorld,
@@ -170,7 +170,7 @@ export class PhysicsWorld implements World {
     }
   }
 
-  createVehicle(spec: VehicleSpec): Vehicle {
+  createVehicle(spec: VehicleSpec): RapierVehicle {
     this.#live();
     if (this.#vehicle) throw new Error('this world already has a vehicle');
     const start = this.#file.start ?? this.track.start;

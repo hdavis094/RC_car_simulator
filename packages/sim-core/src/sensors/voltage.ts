@@ -2,7 +2,20 @@ import type { PartContext } from '../api/parts.ts';
 import type { SensorContext, SensorModel, SensorReading } from '../api/sensors.ts';
 import { dividerRatio } from '@rcsim/schema';
 
-export function createVoltageSensorModel(part: PartContext): SensorModel {
+/** The battery as it stands during the run: physics stage 2's sagging pack. */
+export interface LivePack {
+  /** Terminal voltage after the last physics step, volts. */
+  readonly packVolts: number;
+}
+
+/** Readings per second of a live pack, fast enough to see a launch pull it down. */
+const LIVE_RATE_HZ = 100;
+
+/**
+ * The analog voltage at a divider's OUT pin. With no `pack` (physics stage 1)
+ * the battery holds its nominal voltage and is read 10 times a second.
+ */
+export function createVoltageSensorModel(part: PartContext, pack?: LivePack): SensorModel {
   const definition = part.definition;
   if (!('behavior' in definition)) throw new Error(`${part.instance.instanceId} has no behavior`);
   const behavior = definition.behavior;
@@ -12,9 +25,7 @@ export function createVoltageSensorModel(part: PartContext): SensorModel {
   const params = behavior.params;
   const ratio = dividerRatio(params);
 
-  // Stage 1: constant pack voltage. packVoltage() is evaluated per reading so
-  // a stage-2 sag model can replace it without changing the call sites.
-  function findBatteryVoltage(): number {
+  function nominalVoltage(): number {
     for (const instance of part.car.parts) {
       const def = part.catalog.get(instance.partId);
       if (def && 'behavior' in def && def.behavior.template === 'battery') {
@@ -24,10 +35,13 @@ export function createVoltageSensorModel(part: PartContext): SensorModel {
     // Also check controller? Batteries are parts. If none, fail loudly.
     throw new Error(`${part.instance.instanceId}: no battery part found in car`);
   }
-  const packVoltage = (): number => findBatteryVoltage();
+  const packVoltage = (): number => {
+    const nominal = nominalVoltage(); // a divider with no battery is an error in either stage
+    return pack ? pack.packVolts : nominal;
+  };
 
-  // Rate: use the part's updateHz if it defines one, else 10 Hz.
-  const rateHz = (params as { updateHz?: number }).updateHz ?? 10;
+  // Rate: use the part's updateHz if it defines one, else by the kind of pack.
+  const rateHz = (params as { updateHz?: number }).updateHz ?? (pack ? LIVE_RATE_HZ : 10);
   let readIndex = 0;
 
   const model: SensorModel = {
