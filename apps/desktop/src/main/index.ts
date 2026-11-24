@@ -2,6 +2,7 @@ import { pathToFileURL } from 'node:url';
 import { app, BrowserWindow, dialog, Menu, session, shell } from 'electron';
 import { join, resolve } from 'node:path';
 import { registerIpc } from './ipc.ts';
+import { checkCompiler } from './compiler.ts';
 import { disposeRendererResources } from './renderer-lifecycle.ts';
 import { BuildService } from './services/build.ts';
 import { CatalogService } from './services/catalog.ts';
@@ -16,8 +17,16 @@ import { PtyService } from './services/pty.ts';
 const userDataDir = !app.isPackaged ? process.env['RCSIM_USER_DATA_DIR'] : undefined;
 if (userDataDir) app.setPath('userData', userDataDir);
 
+// Packaged apps have no system Node; run the HAL driver through Electron's own runtime.
+if (app.isPackaged) {
+  process.env['RCSIM_NODE'] = process.execPath;
+  process.env['RCSIM_HAL_CACHE'] = join(app.getPath('userData'), 'hal-build');
+}
+
 function createWindow(): BrowserWindow {
-  const root = resolve(__dirname, '../../../..');
+  const root = app.isPackaged
+    ? (process.resourcesPath ?? resolve(__dirname, '../../../..'))
+    : resolve(__dirname, '../../../..');
   const devServerUrl = !app.isPackaged ? process.env['ELECTRON_RENDERER_URL'] : undefined;
   const rendererFile = join(__dirname, '../renderer/index.html');
   const rendererUrl = devServerUrl ?? pathToFileURL(rendererFile).href;
@@ -56,7 +65,9 @@ function createWindow(): BrowserWindow {
   });
   window.webContents.on('will-navigate', (event) => event.preventDefault());
   const project = new ProjectService({
-    templateDir: join(root, 'packages/firmware-template'),
+    templateDir: app.isPackaged
+      ? join(root, 'firmware-template')
+      : join(root, 'packages/firmware-template'),
     recentFile: join(app.getPath('userData'), 'recent-projects.json'),
     pickFolder: async () => {
       const result = await dialog.showOpenDialog(window, {
@@ -69,8 +80,9 @@ function createWindow(): BrowserWindow {
   const catalog = new CatalogService(project);
   const build = new BuildService(
     project,
-    (!app.isPackaged ? process.env['RCSIM_BUILD_SIM'] : undefined) ??
-      join(root, 'packages/hal/bin/build-sim'),
+    ((!app.isPackaged ? process.env['RCSIM_BUILD_SIM'] : undefined) ?? app.isPackaged)
+      ? join(root, 'hal', 'bin', 'build-sim')
+      : join(root, 'packages/hal/bin/build-sim'),
   );
   const pty = new PtyService(project);
   const run = new SimService({
@@ -161,6 +173,10 @@ void app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) =>
     callback(false),
   );
+  const compiler = checkCompiler();
+  if (!compiler.ok) {
+    dialog.showErrorBox('C++ compiler required', compiler.message ?? 'No usable compiler found.');
+  }
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

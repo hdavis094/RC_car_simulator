@@ -80,9 +80,19 @@ export class BuildService implements BuildApi {
     const buildId = randomUUID();
     const started = performance.now();
     // No shell interpolation: project paths can contain spaces and shell metacharacters.
-    const child = spawn(this.driver, [dir], {
+    // A packaged app has no system Node, so the driver runs under Electron's runtime.
+    const runtime = process.env['RCSIM_NODE'];
+    const command = runtime || this.driver;
+    const args = runtime ? [this.driver, dir] : [dir];
+    const child = spawn(command, args, {
       cwd: dir,
-      env: { ...process.env, LC_ALL: 'C', LC_MESSAGES: 'C', LANGUAGE: 'C' },
+      env: {
+        ...process.env,
+        LC_ALL: 'C',
+        LC_MESSAGES: 'C',
+        LANGUAGE: 'C',
+        ...(runtime ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
+      },
       detached: true,
     });
     this.active = { id: buildId, child };

@@ -65,7 +65,10 @@ try {
     .update(process.env.CPPFLAGS || '')
     .update(readFileSync(path.join(hal, 'Makefile')));
   for (const dir of ['include', 'src', 'libraries']) sourceDigest(hash, dir);
-  const cache = path.join(hal, 'build', hash.digest('hex'));
+  const buildRoot = process.env.RCSIM_HAL_CACHE
+    ? path.resolve(process.env.RCSIM_HAL_CACHE)
+    : path.join(hal, 'build');
+  const cache = path.join(buildRoot, hash.digest('hex'));
   const sources = readdirSync(path.join(root, 'src'), { withFileTypes: true })
     .filter((entry) => entry.isFile() && entry.name.endsWith('.cpp'))
     .map((entry) => path.join(root, 'src', entry.name))
@@ -73,9 +76,9 @@ try {
   if (!sources.length) throw new Error('project src/ contains no .cpp files');
   mkdirSync(output, { recursive: true });
   if (!existsSync(path.join(cache, 'libhal.a'))) {
-    mkdirSync(path.join(hal, 'build'), { recursive: true });
-    removeStaleBuilds(path.join(hal, 'build'));
-    const temporary = mkdtempSync(path.join(hal, 'build', '.hal-'));
+    mkdirSync(buildRoot, { recursive: true });
+    removeStaleBuilds(buildRoot);
+    const temporary = mkdtempSync(path.join(buildRoot, '.hal-'));
     try {
       run(
         'make',

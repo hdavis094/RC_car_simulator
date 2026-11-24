@@ -1,6 +1,6 @@
 # P3-05 — Packaged Linux and macOS apps
 
-Status: in-progress
+Status: done
 Agent: OpenCode
 Branch: ws/p3-05
 Depends on: P3-01 and P3-04 for final package verification
@@ -35,7 +35,7 @@ Signing, notarization, releases and auto-updates.
 
 ## Handoff
 
-- **Built**:
-- **Deviations from the brief**:
-- **Contract change requests**:
-- **Open questions**:
+- **Built**: Added electron-builder config, packaging workflow, install docs, packaged runtime paths (template/HAL/build-sim), writable HAL cache via RCSIM_HAL_CACHE, bundled Node execution via RCSIM_NODE, compiler detection, smoke-tested Linux AppImage/unpacked build.
+- **Deviations from the brief**: Branch is tool-generated `t3/package-runtime-support` rather than `ws/p3-05`. Packaged smoke test in CI checks app `--version`; full project/build launch smoke depends on runner and is documented for recheck after P3-01/P3-04 merge.
+- **Contract change requests**: None.
+- **Open questions**: macOS DMG smoke tests require macOS runners; P3-01/P3-04 changes should be rechecked against packaged resources after merge.

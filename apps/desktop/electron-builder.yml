@@ -1,0 +1,37 @@
+appId: com.rcsim.desktop
+productName: Donkey Car Simulator
+executableName: donkey-car-simulator
+directories:
+  output: dist
+  buildResources: build
+files:
+  - out/**/*
+  - package.json
+asarUnpack:
+  - '**/*.node'
+extraResources:
+  - from: ../../packages/hal
+    to: hal
+    filter:
+      - bin/**/*
+      - include/**/*
+      - src/**/*
+      - libraries/**/*
+      - Makefile
+  - from: ../../packages/firmware-template
+    to: firmware-template
+linux:
+  target:
+    - AppImage
+  category: Development
+  maintainer: Donkey Car Simulator
+mac:
+  target:
+    - dmg
+  category: public.app-category.developer-tools
+dmg:
+  sign: false
+win:
+  target: []
+nsis:
+  oneClick: false
