@@ -14,7 +14,7 @@
     "typecheck": "tsc -p . && pnpm -r --parallel typecheck",
     "test:unit": "vitest run",
     "test:hal": "pnpm --filter @rcsim/hal test",
-    "test:scenarios": "pnpm --filter @rcsim/sim-core test:scenarios",
+    "test:scenarios": "pnpm --filter @rcsim/scenarios test",
     "test:e2e": "pnpm --filter @rcsim/desktop build && playwright test",
     "verify:fast": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test:unit && pnpm test:hal",
     "verify": "pnpm verify:fast && pnpm test:scenarios && pnpm test:e2e"

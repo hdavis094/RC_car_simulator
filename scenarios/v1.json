@@ -1,0 +1,8 @@
+{
+  "car": "../packages/firmware-template/car.json",
+  "world": "worlds/v1-cones.json",
+  "seconds": 60,
+  "seed": 1,
+  "control": "v1-control.json",
+  "assertions": ["collisions == 0", "laps >= 1"]
+}

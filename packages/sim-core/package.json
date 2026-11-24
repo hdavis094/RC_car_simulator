@@ -14,8 +14,7 @@
   },
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc -p .",
-    "test:scenarios": "node scripts/scenarios-placeholder.ts"
+    "typecheck": "tsc -p ."
   },
   "dependencies": {
     "@dimforge/rapier3d-deterministic-compat": "^0.21.0",
