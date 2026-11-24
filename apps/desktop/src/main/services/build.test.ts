@@ -140,7 +140,7 @@ describe('BuildService', () => {
     await expect
       .poll(() => events.find((event) => event.kind === 'done'))
       .toMatchObject({ ok: false });
-    await expect(build.start('esp32')).rejects.toThrow('[rcsim:not-implemented]');
+    await expect(build.start('esp32')).rejects.toThrow('[rcsim:not-found]');
   });
   it('terminates the active compiler when its renderer resources are disposed', async () => {
     const driver = join(dir, 'slow-build');

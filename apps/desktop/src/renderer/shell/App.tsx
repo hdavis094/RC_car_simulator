@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { Diagnostic, ProjectInfo, RcsimApi } from '../../shared/ipc.ts';
 import { parseIpcError } from '../../shared/ipc.ts';
 import { TerminalRoot } from '../terminal/index.ts';
+import { PlatformioActions } from '../terminal/PlatformioActions.tsx';
 import { useEditorStore } from '../terminal/editor-state.ts';
 import { WorkbenchRoot } from '../workbench/index.ts';
 import { useWorkbenchStore } from '../workbench/workbench-store.ts';
@@ -100,12 +101,13 @@ export function App({ api = window.rcsim }: { api?: RcsimApi }): ReactNode {
     }
     if (hasUnsavedChanges()) throw new Error('Some edits changed while saving. Try again.');
   };
-  const build = async (): Promise<void> => {
-    if (!project || buildStatus === 'building') return;
+  const build = async (start: () => Promise<{ readonly buildId: string }>): Promise<void> => {
+    if (!project || working || useSessionStore.getState().buildStatus === 'building') return;
+    setError('');
     useSessionStore.getState().startBuild();
     try {
       await saveProjectEdits();
-      const { buildId } = await api.build.start('sim');
+      const { buildId } = await start();
       useSessionStore.setState({ buildId });
     } catch (error) {
       report(error);
@@ -205,13 +207,21 @@ export function App({ api = window.rcsim }: { api?: RcsimApi }): ReactNode {
               Cancel build
             </button>
           ) : null}
+          {project && current === 'terminal' ? (
+            <PlatformioActions
+              hardware={api.hardware}
+              disabled={working || buildStatus === 'building'}
+              build={() => build(() => api.build.start('esp32'))}
+              report={report}
+            />
+          ) : null}
           <button
             type="button"
             className="primary"
             data-action="build"
             disabled={!project || working || buildStatus === 'building'}
             onClick={() => {
-              void build();
+              void build(() => api.build.start('sim'));
             }}
           >
             {buildStatus === 'building' ? 'Building…' : 'Build for Sim'}
@@ -269,7 +279,14 @@ export function App({ api = window.rcsim }: { api?: RcsimApi }): ReactNode {
           </div>
         </main>
         {project ? (
-          <BottomPanel api={api} projectDir={project.dir} jump={jump} tabs={worldDockTabs} />
+          <BottomPanel
+            api={api}
+            projectDir={project.dir}
+            jump={jump}
+            tabs={worldDockTabs}
+            flash={(port) => build(() => api.hardware.flash(port))}
+            flashDisabled={working || buildStatus === 'building'}
+          />
         ) : null}
       </div>
       <footer className="status-bar">

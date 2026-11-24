@@ -16,11 +16,15 @@ export function BottomPanel({
   projectDir,
   jump,
   tabs = [],
+  flash,
+  flashDisabled = false,
 }: {
   api?: RcsimApi;
   projectDir: string;
   jump: (diagnostic: Diagnostic) => void;
   tabs?: readonly DockTab[];
+  flash?: (port: string) => Promise<void>;
+  flashDisabled?: boolean;
 }) {
   const panel = useSessionStore((state) => state.panel);
   const open = useSessionStore((state) => state.panelOpen);
@@ -92,7 +96,12 @@ export function BottomPanel({
           <BuildOutput jump={jump} />
         </div>
         <div hidden={panel !== 'serial'} className="panel-page">
-          <SerialMonitor api={api} visible={open && panel === 'serial'} />
+          <SerialMonitor
+            api={api}
+            visible={open && panel === 'serial'}
+            {...(flash ? { flash } : {})}
+            flashDisabled={flashDisabled}
+          />
         </div>
         {shells.map((id) => (
           <div hidden={panel !== `shell-${id}`} className="panel-page" key={id}>
