@@ -1,6 +1,6 @@
 # P3-05 — Packaged Linux and macOS apps
 
-Status: in-progress
+Status: in-review
 Agent: OpenCode
 Branch: ws/p3-05
 Depends on: P3-01 and P3-04 for final package verification
@@ -11,7 +11,7 @@ Build a Linux x64 AppImage and unsigned macOS DMGs for Apple Silicon and Intel w
 
 ## Owned paths
 
-`apps/desktop/electron-builder*`, `apps/desktop/scripts/`, `apps/desktop/package.json`, `apps/desktop/src/main/` for packaged runtime paths and compiler detection, minimal `packages/hal/bin/build-sim` packaging support, `pnpm-lock.yaml`, `.github/workflows/package.yml`, `docs/INSTALL.md`. The worker also updates this brief's Handoff.
+`apps/desktop/electron-builder*`, `apps/desktop/scripts/`, `apps/desktop/package.json`, `apps/desktop/src/main/` for packaged runtime paths and compiler detection, minimal `packages/hal/bin/build-sim` packaging support, `pnpm-lock.yaml`, `pnpm-workspace.yaml`, `.github/workflows/package.yml`, `docs/INSTALL.md`. The worker also updates this brief's Handoff.
 
 ## Read first
 
@@ -35,7 +35,8 @@ Signing, notarization, releases and auto-updates.
 
 ## Handoff
 
-- **Built**:
-- **Deviations from the brief**:
-- **Contract change requests**:
-- **Open questions**:
+- **Built**: OpenCode added the electron-builder workflow and packaged resource paths. The follow-up includes the HAL build helpers, stages the HAL compile with relative Make targets, runs a real project and firmware smoke test from the bundle, uses current Apple Silicon and Intel runner labels, and prepares executable native PTY helpers.
+  - Linux x64 AppImage produced locally. The unpacked Linux package created a project in a path containing spaces, compiled it with the bundled Electron Node runtime and launched the starter firmware. CI checks the three architecture artifacts and runs the same package smoke test.
+- **Deviations from the brief**: The macOS binaries use ad-hoc signing and the DMG uses no Developer ID or notarization.
+- **Contract change requests**: None.
+- **Open questions**: Verify all package jobs with the completed Phase 3 dependency set.

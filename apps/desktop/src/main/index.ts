@@ -20,7 +20,7 @@ const userDataDir = !app.isPackaged ? process.env['RCSIM_USER_DATA_DIR'] : undef
 if (userDataDir) app.setPath('userData', userDataDir);
 
 function createWindow(): BrowserWindow {
-  const root = resolve(__dirname, '../../../..');
+  const root = app.isPackaged ? process.resourcesPath : resolve(__dirname, '../../../..');
   const devServerUrl = !app.isPackaged ? process.env['ELECTRON_RENDERER_URL'] : undefined;
   const rendererFile = join(__dirname, '../renderer/index.html');
   const rendererUrl = devServerUrl ?? pathToFileURL(rendererFile).href;
@@ -59,7 +59,9 @@ function createWindow(): BrowserWindow {
   });
   window.webContents.on('will-navigate', (event) => event.preventDefault());
   const project = new ProjectService({
-    templateDir: join(root, 'packages/firmware-template'),
+    templateDir: app.isPackaged
+      ? join(root, 'firmware-template')
+      : join(root, 'packages/firmware-template'),
     recentFile: join(app.getPath('userData'), 'recent-projects.json'),
     pickFolder: async () => {
       const result = await dialog.showOpenDialog(window, {
@@ -85,9 +87,13 @@ function createWindow(): BrowserWindow {
   });
   const build = new BuildService(
     project,
-    (!app.isPackaged ? process.env['RCSIM_BUILD_SIM'] : undefined) ??
-      join(root, 'packages/hal/bin/build-sim'),
+    app.isPackaged
+      ? join(root, 'hal', 'bin', 'build-sim')
+      : (process.env['RCSIM_BUILD_SIM'] ?? join(root, 'packages/hal/bin/build-sim')),
     platformio,
+    app.isPackaged
+      ? { executable: process.execPath, cacheDir: join(app.getPath('userData'), 'hal-build') }
+      : undefined,
   );
   const hardware = new HardwareService(platformio, build);
   const pty = new PtyService(project);

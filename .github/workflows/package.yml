@@ -1,0 +1,93 @@
+name: Package
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, 'ws/p3-05', 'ws/p3-integration']
+    paths:
+      - '.github/workflows/package.yml'
+      - 'apps/desktop/**'
+      - 'packages/**'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+
+concurrency:
+  group: package-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package-linux:
+    name: package (linux x64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: sudo apt-get update && sudo apt-get install -y xvfb clang
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @rcsim/desktop build
+      - run: pnpm --filter @rcsim/desktop exec electron-builder --linux AppImage --x64 --publish never
+        working-directory: apps/desktop
+      - name: Smoke test packaged firmware
+        run: xvfb-run -a node apps/desktop/scripts/smoke-packaged.mjs apps/desktop/dist/linux-unpacked/donkey-car-simulator
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Donkey-Car-Simulator-linux-x64
+          path: apps/desktop/dist/*.AppImage
+          if-no-files-found: error
+
+  package-macos-arm64:
+    name: package (macos arm64)
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @rcsim/desktop build
+      - run: pnpm --filter @rcsim/desktop exec electron-builder --mac dmg --arm64 --publish never
+        working-directory: apps/desktop
+      - name: Smoke test packaged firmware
+        run: |
+          APP=$(find apps/desktop/dist -path '*/Donkey Car Simulator.app/Contents/MacOS/*' -type f -print -quit)
+          test -n "$APP"
+          node apps/desktop/scripts/smoke-packaged.mjs "$APP"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Donkey-Car-Simulator-macos-arm64
+          path: apps/desktop/dist/*.dmg
+          if-no-files-found: error
+
+  package-macos-x64:
+    name: package (macos x64)
+    runs-on: macos-15-intel
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @rcsim/desktop build
+      - run: pnpm --filter @rcsim/desktop exec electron-builder --mac dmg --x64 --publish never
+        working-directory: apps/desktop
+      - name: Smoke test packaged firmware
+        run: |
+          APP=$(find apps/desktop/dist -path '*/Donkey Car Simulator.app/Contents/MacOS/*' -type f -print -quit)
+          test -n "$APP"
+          node apps/desktop/scripts/smoke-packaged.mjs "$APP"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Donkey-Car-Simulator-macos-x64
+          path: apps/desktop/dist/*.dmg
+          if-no-files-found: error

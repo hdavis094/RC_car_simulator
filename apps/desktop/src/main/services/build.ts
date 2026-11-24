@@ -81,16 +81,20 @@ export class BuildService implements BuildApi {
   readonly onEvent = this.events.subscribe;
   private readonly project: ProjectService;
   private readonly simDriver: string;
+  private readonly simRuntime:
+    { readonly executable: string; readonly cacheDir: string } | undefined;
   private readonly platformio: Pick<PlatformioService, 'requirePath'> | undefined;
 
   constructor(
     project: ProjectService,
     simDriver: string,
     platformio?: Pick<PlatformioService, 'requirePath'>,
+    simRuntime?: { readonly executable: string; readonly cacheDir: string },
   ) {
     this.project = project;
     this.simDriver = simDriver;
     this.platformio = platformio;
+    this.simRuntime = simRuntime;
   }
 
   async start(target: BuildTarget): Promise<{ readonly buildId: string }> {
@@ -98,7 +102,15 @@ export class BuildService implements BuildApi {
     if (target === 'esp32') return this.startPlatformio([]);
     const build = this.reserve();
     try {
-      return this.launch(build, this.simDriver, [build.dir], 'HAL build-sim');
+      if (!this.simRuntime) return this.launch(build, this.simDriver, [build.dir], 'HAL build-sim');
+      return this.launch(
+        build,
+        this.simRuntime.executable,
+        [this.simDriver, build.dir],
+        'HAL build-sim',
+        undefined,
+        { ELECTRON_RUN_AS_NODE: '1', RCSIM_HAL_CACHE: this.simRuntime.cacheDir },
+      );
     } catch (error) {
       this.active = undefined;
       throw error;
@@ -154,13 +166,20 @@ export class BuildService implements BuildApi {
     args: string[],
     driver: string,
     onFinished?: () => void,
+    envOverrides?: NodeJS.ProcessEnv,
   ): { readonly buildId: string } {
     const { dir, id: buildId } = build;
     const started = performance.now();
     // No shell interpolation: project paths can contain spaces and shell metacharacters.
     const child = spawn(executable, args, {
       cwd: dir,
-      env: { ...process.env, LC_ALL: 'C', LC_MESSAGES: 'C', LANGUAGE: 'C' },
+      env: {
+        ...process.env,
+        LC_ALL: 'C',
+        LC_MESSAGES: 'C',
+        LANGUAGE: 'C',
+        ...envOverrides,
+      },
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
