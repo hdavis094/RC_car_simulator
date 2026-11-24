@@ -52,7 +52,7 @@ Detailed tyre compound or thermal simulation and stage-1 retuning.
   - Not modelled (see `docs/PHYSICS.md`): wheel inertia, ESC motor-speed feedback, state of charge, non-motor loads, creep-free parking on slopes.
   - The 60 s CLI wall-time test failed once in a baseline run before any change (11.1 s against 10 s, load average about 12). It passed in `pnpm verify`.
 - **Contract change requests**:
-  - **Optional `readonly brake?: boolean`** on the `'drive'` variant of `ActuatorOutput` (`api/actuators.ts`) and on `VehicleCommand` (`api/vehicle.ts`). _Why_: braking and reverse are both a negative `motorDuty`, so the contract cannot say which. _Not blocking_: `vehicle/command.ts` adds exactly this field locally, set only while stage 2 brakes, so it already appears in `snapshot().car.command`. Once accepted, delete those types and the two casts that use `DriveOutput`.
+  - **Optional `readonly brake?: boolean`** on the `'drive'` variant of `ActuatorOutput` (`api/actuators.ts`) and on `VehicleCommand` (`api/vehicle.ts`). _Why_: braking and reverse are both a negative `motorDuty`, so the contract cannot say which. _Not blocking_: `vehicle/command.ts` adds exactly this field locally, set only while stage 2 brakes, so it already appears in `snapshot().car.command`. Once accepted, replace those local types with the contract ones and drop the cast in `run/run.ts`.
 - **Open questions**:
   - Orchestrator wiring: the desktop sim host still has to pass `physicsStage` to `createRun`.
   - Should the second ESC tap wait for the motor to stop, as some real ESCs do? It needs speed feedback into the ESC model.
