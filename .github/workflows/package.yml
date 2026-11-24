@@ -57,7 +57,7 @@ jobs:
         working-directory: apps/desktop
       - name: Smoke test packaged firmware
         run: |
-          APP=$(find apps/desktop/dist -path '*/Donkey Car Simulator.app/Contents/MacOS/*' -type f -print -quit)
+          APP=$(find apps/desktop/dist -path '*/Contents/MacOS/donkey-car-simulator' -type f -print -quit)
           test -n "$APP"
           node apps/desktop/scripts/smoke-packaged.mjs "$APP"
       - uses: actions/upload-artifact@v7
@@ -83,7 +83,7 @@ jobs:
         working-directory: apps/desktop
       - name: Smoke test packaged firmware
         run: |
-          APP=$(find apps/desktop/dist -path '*/Donkey Car Simulator.app/Contents/MacOS/*' -type f -print -quit)
+          APP=$(find apps/desktop/dist -path '*/Contents/MacOS/donkey-car-simulator' -type f -print -quit)
           test -n "$APP"
           node apps/desktop/scripts/smoke-packaged.mjs "$APP"
       - uses: actions/upload-artifact@v7
