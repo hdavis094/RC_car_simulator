@@ -12,7 +12,7 @@
 2. Open **Workbench**. Confirm the project has an ESP32, steering servo, ESC and motor, and distance sensors. Inspect the pin assignments and verify the wiring report shows **0 errors**.
 3. In **Terminal**, open `src/main.cpp` and inspect the starter sketch. Click **Build for Sim**. Wait for **Build: succeeded** and inspect the build output.
 4. In **3D World**, choose **Oval**, **1×** speed and seed **1**. Select **Cone** and place two cones at approximately `(2.2, -1.5)` and `(-2.6, 1.5)` metres in the X/Z plane. The placement coordinates and ground click let you use the fixed v1 layout. Save the layout if you want to reuse it.
-5. Click **Run**. In **Serial Monitor**, look for `Donkey Car starter firmware`. In **Network Console**, wait for **connected** and a telemetry line. The footer shows the mapped **Control port**.
+5. Click **Run** and wait for **Starting…** to change to **Pause**. In **Serial Monitor**, look for `Donkey Car starter firmware`. In **Network Console**, wait for **connected** and a telemetry line. The footer shows the mapped **Control port**.
 6. Let **Sim time** pass 3 s so the ESC is armed. Click **Auto**. Watch the car negotiate both cones, the lap counter increment and the collision counter stay at zero. You can also send `{"t":"mode","mode":"auto"}` from the Network Console.
 7. Click **Manual**. Focus the 3D World and use W/S to drive and A/D to steer. Connect a supported gamepad via USB or Bluetooth and press a button while the app is focused. The left stick steers and can also drive forward or reverse. On standard gamepads, the right and left triggers control forward and reverse. Verify the drive readout and car both respond. Release inputs to neutral, and use Space or **E-STOP** to stop the car.
 

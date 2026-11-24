@@ -452,7 +452,8 @@ export function WorldRoot({
     updateReadoutsDom,
   ]);
 
-  const isRunning = runInfo?.state === 'running' || runInfo?.state === 'starting';
+  const isStarting = runInfo?.state === 'starting';
+  const isRunning = runInfo?.state === 'running' || isStarting;
   const isPaused = runInfo?.state === 'paused';
   const editable = !isRunning;
   const sceneRunMode: SceneRunMode = isRunning ? 'running' : isPaused ? 'paused' : 'idle';
@@ -1156,9 +1157,10 @@ export function WorldRoot({
             type="button"
             className="primary"
             data-testid="run-play-pause-btn"
+            disabled={isStarting}
             onClick={() => void handleRunOrPause()}
           >
-            {isRunning ? 'Pause' : isPaused ? 'Resume' : 'Run'}
+            {isStarting ? 'Starting…' : isRunning ? 'Pause' : isPaused ? 'Resume' : 'Run'}
           </button>
           <button
             type="button"

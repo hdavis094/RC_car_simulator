@@ -128,8 +128,10 @@ test('v1 demo: new project, Workbench, Terminal build, 3D World run, telemetry, 
 
   // 5. Run
   await page.getByTestId('run-play-pause-btn').click();
-  await expect(page.getByTestId('run-play-pause-btn')).toHaveText('Pause', { timeout: 30_000 });
-  await expect(page.locator('footer.status-bar')).toContainText('Run: running');
+  await expect(page.locator('footer.status-bar')).toContainText('Run: running', {
+    timeout: 30_000,
+  });
+  await expect(page.getByTestId('run-play-pause-btn')).toHaveText('Pause');
 
   const dock = page.getByLabel('Shared bottom panel');
 

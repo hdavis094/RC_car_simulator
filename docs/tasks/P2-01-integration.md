@@ -69,6 +69,7 @@ Phase 3 items.
   - `docs/DEMO.md`, this handoff and `docs/tasks/P3-backlog.md` record the walkthrough, acceptance results and follow-ups.
 - **Deviations from the brief**:
   - The cone layout passed with the starter firmware's existing settings.
+  - Each Run uses the existing BuildService to compile the current project. The build driver caches the HAL library.
   - Scenario control still uses the existing loopback timeline. `STEP.tcpInput` and `ScenarioResult.diagnostics` are deferred.
   - The renderer keeps obstacle dimensions with a drift check pending a Node-free sim-core export.
 - **Contract change requests**:
@@ -90,6 +91,7 @@ Phase 3 items.
   | 10 | Pass | 3 | 0 |
 
   Seed 1 serial SHA-256 with both GCC and Clang on Linux was `e33b65d21406ad94b19bded7c0609c38f0c9510f58665679530e48061312466a`.
-- **Verification**: `pnpm verify` passed on Linux with 584 unit tests, the seed-1 scenario, both HAL compiler suites and all 10 Playwright tests.
+- **Verification**: `pnpm verify` passed on Linux with 584 unit tests, the seed-1 scenario, both HAL compiler suites and all 10 Playwright tests. A Linux walkthrough confirmed an automatic lap without collisions, an external `nc` client switching to manual, and renderer reload closing the simulated car's mapped TCP port.
+  - Both CI platforms matched the seed-1 fingerprint on the first run. The demo test's default five-second wait expired during startup. It now waits for the real running state, which also passed locally with a six-second build delay.
 - **Open questions**:
   - The user walkthrough, including a physical gamepad, is the final approval gate.
