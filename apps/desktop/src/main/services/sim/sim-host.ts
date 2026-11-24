@@ -156,6 +156,7 @@ export class SimHost {
         track: action.track,
         world: action.world,
         seed: action.info.seed,
+        ...(action.physicsStage === undefined ? {} : { physicsStage: action.physicsStage }),
         source,
       });
     } catch (error) {

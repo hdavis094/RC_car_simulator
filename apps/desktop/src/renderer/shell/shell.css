@@ -546,3 +546,23 @@ input {
     display: none;
   }
 }
+
+.preferences-panel,
+.first-run {
+  padding: 0.65rem 1rem;
+  border-bottom: 1px solid #2b3947;
+  background: #151e27;
+}
+
+.preferences-panel {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.7rem 1.25rem;
+}
+
+.preferences-panel label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}

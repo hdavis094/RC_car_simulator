@@ -1,5 +1,5 @@
 import type { Car, Catalog, Obstacle, Track, World } from '@rcsim/schema';
-import type { StateSnapshot } from '@rcsim/sim-core';
+import type { PhysicsStage, StateSnapshot } from '@rcsim/sim-core';
 import type { LogLine } from '@rcsim/sim-protocol';
 import type { RunInfo, RunSpeed } from '../../../shared/ipc.ts';
 
@@ -13,6 +13,7 @@ export type HostAction =
       readonly track: Track;
       readonly firmwarePath: string;
       readonly paused: boolean;
+      readonly physicsStage?: PhysicsStage;
     }
   | { readonly type: 'stop' | 'pause' | 'resume' | 'restartFirmware' | 'currentLayout' }
   | { readonly type: 'step'; readonly ticks: number }

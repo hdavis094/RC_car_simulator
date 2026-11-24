@@ -65,6 +65,13 @@ export class SimService implements RunApi {
     ) {
       fail('invalid', 'Expected an unsigned 32-bit seed.');
     }
+    if (
+      options.physicsStage !== undefined &&
+      options.physicsStage !== 1 &&
+      options.physicsStage !== 2
+    ) {
+      fail('invalid', 'Choose physics stage 1 or 2.');
+    }
     const speed = options.speed ?? 1;
     this.checkSpeed(speed);
     if (options.paused !== undefined && typeof options.paused !== 'boolean') {
@@ -123,6 +130,7 @@ export class SimService implements RunApi {
         track,
         firmwarePath,
         paused: options.paused ?? false,
+        ...(options.physicsStage === undefined ? {} : { physicsStage: options.physicsStage }),
       });
       start.signal.throwIfAborted();
       return result as RunInfo;
