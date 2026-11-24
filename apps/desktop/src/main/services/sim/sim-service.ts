@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { checkWiring, generateCarConfigHeader, type Obstacle, type World } from '@rcsim/schema';
 import type { StateSnapshot } from '@rcsim/sim-core';
-import type { LogLine } from '@rcsim/sim-protocol';
+import type { LogLine, NetFaults } from '@rcsim/sim-protocol';
 import {
   RUN_SPEEDS,
   type BuildApi,
@@ -203,6 +203,10 @@ export class SimService implements RunApi {
   async setSpeed(speed: RunSpeed): Promise<void> {
     this.checkSpeed(speed);
     await this.sendActive({ type: 'setSpeed', speed });
+  }
+
+  async setNetFaults(_faults: NetFaults): Promise<void> {
+    fail('not-implemented', 'Network faults are not available yet.');
   }
 
   private checkSpeed(speed: RunSpeed): void {

@@ -9,7 +9,7 @@ import {
 import { errorText, fail } from './services/errors.ts';
 
 export type MainServices = Pick<RcsimApi, 'project' | 'catalog' | 'build' | 'pty'> &
-  Partial<Pick<RcsimApi, 'run' | 'worldEdit' | 'control'>>;
+  Partial<Pick<RcsimApi, 'run' | 'worldEdit' | 'control' | 'hardware' | 'phoneControl'>>;
 
 function isAppUrl(url: string, rendererUrl: string): boolean {
   try {
@@ -47,10 +47,10 @@ export function registerIpc(
           !isAppUrl(event.senderFrame?.url ?? '', rendererUrl)
         )
           fail('invalid', 'Untrusted IPC sender.');
-        if (!members)
-          fail('not-implemented', `${service}.${method} is not implemented yet (P2-01).`);
+        if (!members?.[method])
+          fail('not-implemented', `${service}.${method} is not implemented yet.`);
         try {
-          return await members[method]?.apply(implementation, args);
+          return await members[method].apply(implementation, args);
         } catch (error) {
           const message = errorText(error);
           if (message.includes('[rcsim:')) throw error;

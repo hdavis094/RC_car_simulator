@@ -25,6 +25,7 @@ import {
   type Diagnostic,
   type FileChange,
   type ProjectInfo,
+  type PhoneControlSession,
   type RcsimApi,
   type RunInfo,
   type RunSpeed,
@@ -124,6 +125,9 @@ export function createFakeRcsimApi(options: FakeApiOptions = {}): FakeApi {
     fileChange: new Set() as Listeners<[FileChange]>,
     catalog: new Set() as Listeners<[CatalogListing]>,
     build: new Set() as Listeners<[BuildEvent]>,
+    serialPort: new Set() as Listeners<[string | null]>,
+    serialData: new Set() as Listeners<[string]>,
+    phoneStatus: new Set() as Listeners<[PhoneControlSession | null]>,
     ptyData: new Set() as Listeners<[string, string]>,
     ptyExit: new Set() as Listeners<[string, number]>,
     snapshot: new Set() as Listeners<[StateSnapshot]>,
@@ -178,6 +182,9 @@ export function createFakeRcsimApi(options: FakeApiOptions = {}): FakeApi {
   };
 
   let run: RunInfo | null = null;
+  let serialPort: string | null = null;
+  let platformioPath: string | null = null;
+  let phoneControl: PhoneControlSession | null = null;
   const setRun = (next: RunInfo | null): void => {
     run = next;
     if (next) fire(ev.status, next);
@@ -318,6 +325,59 @@ export function createFakeRcsimApi(options: FakeApiOptions = {}): FakeApi {
       },
       onEvent: (listener) => subscribe(ev.build, listener),
     },
+    hardware: {
+      async platformioPath() {
+        return platformioPath;
+      },
+      async installPlatformio() {
+        record('hardware', 'installPlatformio', []);
+        platformioPath = '/opt/platformio/bin/pio';
+      },
+      async listSerialPorts() {
+        return [];
+      },
+      async openSerial(port, baudRate) {
+        record('hardware', 'openSerial', [port, baudRate]);
+        serialPort = port;
+        fire(ev.serialPort, port);
+      },
+      async closeSerial() {
+        record('hardware', 'closeSerial', []);
+        serialPort = null;
+        fire(ev.serialPort, null);
+      },
+      async serialPort() {
+        return serialPort;
+      },
+      async writeSerial(text) {
+        record('hardware', 'writeSerial', [text]);
+        if (serialPort === null)
+          throw new Error(ipcErrorMessage('not-found', 'No USB serial port is connected.'));
+      },
+      async flash(port) {
+        record('hardware', 'flash', [port]);
+        return api.build.start('esp32');
+      },
+      onSerialData: (listener) => subscribe(ev.serialData, listener),
+      onSerialPort: (listener) => subscribe(ev.serialPort, listener),
+    },
+    phoneControl: {
+      async start() {
+        record('phoneControl', 'start', []);
+        phoneControl = { urls: ['http://127.0.0.1:41334/#demo'], expiresAt: Date.now() + 60_000 };
+        fire(ev.phoneStatus, phoneControl);
+        return clone(phoneControl);
+      },
+      async stop() {
+        record('phoneControl', 'stop', []);
+        phoneControl = null;
+        fire(ev.phoneStatus, null);
+      },
+      async status() {
+        return clone(phoneControl);
+      },
+      onStatus: (listener) => subscribe(ev.phoneStatus, listener),
+    },
     pty: {
       async spawn(spawnOptions) {
         record('pty', 'spawn', [spawnOptions]);
@@ -383,6 +443,10 @@ export function createFakeRcsimApi(options: FakeApiOptions = {}): FakeApi {
       async setSpeed(speed: RunSpeed) {
         record('run', 'setSpeed', [speed]);
         setRun({ ...needRun(), speed });
+      },
+      async setNetFaults(faults) {
+        record('run', 'setNetFaults', [faults]);
+        needRun();
       },
       async info() {
         return clone(run);

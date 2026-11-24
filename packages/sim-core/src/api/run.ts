@@ -5,6 +5,7 @@ import type { CreateActuatorModel } from './actuators.ts';
 import type { SimClock } from './clock.ts';
 import type { CreateSensorModel } from './sensors.ts';
 import type { StateSnapshot } from './snapshot.ts';
+import type { PhysicsStage } from './vehicle.ts';
 import type { World } from './world.ts';
 
 /** `ready` before the first tick, `running` once stepped, `ended` when the source ended or `stop()` ran. */
@@ -21,6 +22,7 @@ export interface RunOptions {
   readonly seed: number;
   /** Default 1000. */
   readonly tickUs?: number;
+  readonly physicsStage?: PhysicsStage;
   readonly source: ActuatorSource;
   /** Model factories; defaults are sim-core's own (P1-A actuators, P1-B sensors). Override to fake a neighbour. */
   readonly createActuatorModel?: CreateActuatorModel;

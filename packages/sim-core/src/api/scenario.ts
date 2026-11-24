@@ -1,4 +1,5 @@
 import type { RunEnd } from './run.ts';
+import type { PhysicsStage } from './vehicle.ts';
 
 /** The numbers a scenario can assert on. */
 export const SCENARIO_METRICS = [
@@ -27,6 +28,7 @@ export interface ScenarioSpec {
   readonly seconds: number;
   readonly seed: number;
   readonly tickUs?: number;
+  readonly physicsStage?: PhysicsStage;
   /** Scripted PWM timeline (JSON array of ScriptedPwm). */
   readonly script?: string;
   /** Firmware binary built by hal's build-sim (P1-H). */

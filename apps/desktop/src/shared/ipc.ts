@@ -18,8 +18,8 @@ import type {
   Mode,
   Telemetry,
 } from '@rcsim/control-protocol/messages';
-import type { RunEnd, StateSnapshot } from '@rcsim/sim-core/api';
-import type { LogLine, NetProto } from '@rcsim/sim-protocol';
+import type { PhysicsStage, RunEnd, StateSnapshot } from '@rcsim/sim-core/api';
+import type { LogLine, NetFaults, NetProto } from '@rcsim/sim-protocol';
 
 export type Unsubscribe = () => void;
 
@@ -118,6 +118,22 @@ export interface BuildApi {
   onEvent(listener: (event: BuildEvent) => void): Unsubscribe;
 }
 
+// ── hardware ───────────────────────────────────────────────────────────────
+
+export interface HardwareApi {
+  platformioPath(): Promise<string | null>;
+  installPlatformio(): Promise<void>;
+  listSerialPorts(): Promise<readonly string[]>;
+  openSerial(port: string, baudRate?: number): Promise<void>;
+  closeSerial(): Promise<void>;
+  serialPort(): Promise<string | null>;
+  writeSerial(text: string): Promise<void>;
+  /** Uploads firmware to a selected port and reports progress through build.onEvent. */
+  flash(port: string): Promise<{ readonly buildId: string }>;
+  onSerialData(listener: (text: string) => void): Unsubscribe;
+  onSerialPort(listener: (port: string | null) => void): Unsubscribe;
+}
+
 // ── pty ────────────────────────────────────────────────────────────────────
 
 export interface PtyApi {
@@ -153,6 +169,8 @@ export interface RunStartOptions {
   readonly speed?: RunSpeed;
   /** Start paused at tick 0. Default false. */
   readonly paused?: boolean;
+  /** Defaults to stage 1 when omitted. */
+  readonly physicsStage?: PhysicsStage;
 }
 
 export interface RunInfo {
@@ -185,6 +203,8 @@ export interface RunApi {
   /** Reboots the firmware while the world carries on, like pressing EN on the ESP32. */
   restartFirmware(): Promise<void>;
   setSpeed(speed: RunSpeed): Promise<void>;
+  /** Replaces network fault settings at the next simulation tick. */
+  setNetFaults(faults: NetFaults): Promise<void>;
   info(): Promise<RunInfo | null>;
   /** Text to the firmware's Serial RX (the Serial Monitor's send line). */
   sendSerial(text: string): Promise<void>;
@@ -254,6 +274,20 @@ export interface ControlApi {
   onRaw(listener: (line: string, direction: 'in' | 'out') => void): Unsubscribe;
 }
 
+// ── phone-control ──────────────────────────────────────────────────────────
+
+export interface PhoneControlSession {
+  readonly urls: readonly string[];
+  readonly expiresAt: number;
+}
+
+export interface PhoneControlApi {
+  start(): Promise<PhoneControlSession>;
+  stop(): Promise<void>;
+  status(): Promise<PhoneControlSession | null>;
+  onStatus(listener: (session: PhoneControlSession | null) => void): Unsubscribe;
+}
+
 // ── the whole API ──────────────────────────────────────────────────────────
 
 export interface RcsimApi {
@@ -261,10 +295,12 @@ export interface RcsimApi {
   readonly project: ProjectApi;
   readonly catalog: CatalogApi;
   readonly build: BuildApi;
+  readonly hardware: HardwareApi;
   readonly pty: PtyApi;
   readonly run: RunApi;
   readonly worldEdit: WorldEditApi;
   readonly control: ControlApi;
+  readonly phoneControl: PhoneControlApi;
 }
 
 export type ServiceName = Exclude<keyof RcsimApi, 'platform'>;
@@ -292,6 +328,16 @@ export const IPC_METHODS = {
   ],
   catalog: ['list', 'saveCustomPart'],
   build: ['start', 'cancel'],
+  hardware: [
+    'platformioPath',
+    'installPlatformio',
+    'listSerialPorts',
+    'openSerial',
+    'closeSerial',
+    'serialPort',
+    'writeSerial',
+    'flash',
+  ],
   pty: ['spawn', 'write', 'resize', 'kill'],
   run: [
     'start',
@@ -301,6 +347,7 @@ export const IPC_METHODS = {
     'step',
     'restartFirmware',
     'setSpeed',
+    'setNetFaults',
     'info',
     'sendSerial',
   ],
@@ -316,6 +363,7 @@ export const IPC_METHODS = {
     'currentLayout',
   ],
   control: ['connect', 'disconnect', 'drive', 'releaseDrive', 'setMode', 'estop', 'sendRaw'],
+  phoneControl: ['start', 'stop', 'status'],
 } as const satisfies { readonly [S in ServiceName]: readonly MethodKeys<RcsimApi[S]>[] };
 
 /**
@@ -327,10 +375,12 @@ export const IPC_EVENTS = {
   project: ['onFileChange'],
   catalog: ['onChange'],
   build: ['onEvent'],
+  hardware: ['onSerialData', 'onSerialPort'],
   pty: ['onData', 'onExit'],
   run: ['onSnapshot', 'onSerial', 'onLog', 'onStatus'],
   worldEdit: [],
   control: ['onState', 'onMessage', 'onRaw'],
+  phoneControl: ['onStatus'],
 } as const satisfies { readonly [S in ServiceName]: readonly EventKeys<RcsimApi[S]>[] };
 
 export const ipcChannel = (service: ServiceName, member: string): string => `${service}:${member}`;

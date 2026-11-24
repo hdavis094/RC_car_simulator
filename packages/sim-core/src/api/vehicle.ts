@@ -1,10 +1,14 @@
 import type { Car, Catalog } from '@rcsim/schema';
 import type { Pose, Quat, Vec3 } from './math.ts';
 
+/** Stage 1 is the default for existing headless runs. */
+export type PhysicsStage = 1 | 2;
+
 /** What the vehicle is built from. */
 export interface VehicleSpec {
   readonly car: Car;
   readonly catalog: Catalog;
+  readonly physicsStage?: PhysicsStage;
 }
 
 /**

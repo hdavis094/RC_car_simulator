@@ -18,6 +18,7 @@ export type {
 } from './world.ts';
 export {
   WHEEL_ORDER,
+  type PhysicsStage,
   type Vehicle,
   type VehicleCommand,
   type VehicleSpec,
