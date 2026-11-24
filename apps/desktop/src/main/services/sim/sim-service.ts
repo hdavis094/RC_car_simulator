@@ -205,8 +205,38 @@ export class SimService implements RunApi {
     await this.sendActive({ type: 'setSpeed', speed });
   }
 
-  async setNetFaults(_faults: NetFaults): Promise<void> {
-    fail('not-implemented', 'Network faults are not available yet.');
+  async setNetFaults(faults: NetFaults): Promise<void> {
+    if (!faults || typeof faults !== 'object' || Array.isArray(faults)) {
+      fail('invalid', 'Expected network fault settings.');
+    }
+    const { latencyUs, lossPpm, dropout } = faults;
+    if (
+      typeof latencyUs !== 'number' ||
+      !Number.isInteger(latencyUs) ||
+      latencyUs < 0 ||
+      latencyUs > 0xffff_ffff
+    ) {
+      fail('invalid', 'Expected latencyUs as an unsigned 32-bit integer.');
+    }
+    if (
+      typeof lossPpm !== 'number' ||
+      !Number.isInteger(lossPpm) ||
+      lossPpm < 0 ||
+      lossPpm > 1_000_000
+    ) {
+      fail('invalid', 'Expected lossPpm as an integer between 0 and 1000000.');
+    }
+    if (typeof dropout !== 'boolean') {
+      fail('invalid', 'Expected dropout as a boolean.');
+    }
+    await this.sendActive({
+      type: 'setNetFaults',
+      faults: {
+        latencyUs: latencyUs === 0 ? 0 : latencyUs,
+        lossPpm: lossPpm === 0 ? 0 : lossPpm,
+        dropout,
+      },
+    });
   }
 
   private checkSpeed(speed: RunSpeed): void {

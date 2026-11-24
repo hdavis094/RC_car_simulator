@@ -17,6 +17,20 @@ export {
   type RawConsoleEntry,
 } from './NetworkConsole.tsx';
 export {
+  DEFAULT_NET_FAULTS,
+  DEFAULT_NETWORK_FAULT_DRAFT,
+  MAX_LATENCY_US,
+  MAX_LOSS_PERCENT,
+  MAX_LOSS_PPM,
+  NetworkFaultControls,
+  canApplyNetFaults,
+  formatNetFaultsSummary,
+  parseNetworkFaultDraft,
+  type NetworkFaultControlsProps,
+  type NetworkFaultDraft,
+  type ParseNetworkFaultResult,
+} from './NetworkFaultControls.tsx';
+export {
   WorldR3FScene,
   WorldScene,
   applyOverlayMarkerElementPose,

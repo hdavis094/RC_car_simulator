@@ -1,0 +1,9 @@
+{
+  "car": "../packages/firmware-template/car.json",
+  "world": "network-dropout-world.json",
+  "seconds": 5.5,
+  "seed": 1,
+  "control": "network-dropout-control.json",
+  "dropoutAtUs": 4010000,
+  "assertions": ["collisions == 0", "distanceM > 0.5", "maxSpeedMps > 0.5"]
+}

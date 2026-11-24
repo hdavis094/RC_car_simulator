@@ -103,6 +103,9 @@ export class SimHost {
           this.schedule(session);
         }
         return;
+      case 'setNetFaults':
+        run.setNetFaults(action.faults);
+        return;
       case 'sendSerial':
         run.sendSerial(new TextEncoder().encode(action.text));
         return;

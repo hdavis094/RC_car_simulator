@@ -1,6 +1,6 @@
 # P3-02 — Network fault injection
 
-Status: in-progress
+Status: done
 Agent: Gemini
 Branch: ws/p3-02
 Depends on: P2-01 integration (merged)
@@ -25,9 +25,9 @@ Read `NetFaults` in `packages/sim-protocol`, `Run.setNetFaults`, `RunApi.setNetF
 
 ## Acceptance
 
-- [ ] `pnpm verify` passes.
-- [ ] UI and service tests cover unit conversion, invalid values, reset and paused application.
-- [ ] The headless scenario demonstrates pre-dropout motion/drive and neutral after dropout. It uses the existing sim time and seeded behavior.
+- [x] `pnpm verify` passes.
+- [x] UI and service tests cover unit conversion, invalid values, reset and paused application.
+- [x] The headless scenario demonstrates pre-dropout motion/drive and neutral after dropout. It uses the existing sim time and seeded behavior.
 
 ## Out of scope
 
@@ -36,6 +36,11 @@ New network protocol fields and real-hardware network faults.
 ## Handoff
 
 - **Built**:
+  - Wired `run.setNetFaults` through `apps/desktop/src/main/services/sim/sim-service.ts`, `host-protocol.ts`, and `sim-host.ts` to `Run.setNetFaults`, with IPC validation for unsigned 32-bit integer `latencyUs`, integer `lossPpm` (`0..1_000_000`), and boolean `dropout`, plus paused-run queueing that takes effect on the next step/resume. Added unit tests in `sim-host.test.ts` and `sim-service.test.ts`.
+  - Added `apps/desktop/src/renderer/world/NetworkFaultControls.tsx` (and unit/integration tests in `NetworkFaultControls.test.tsx`) with minimal hookup in `WorldRoot.tsx` and re-exports in `index.ts`. Converts latency (`ms` → integer `µs`) and packet loss (`%` → integer `ppm`), toggles dropout, provides a clear Reset, displays availability and paused-queue status, validates inputs before IPC, and surfaces IPC errors via `role="alert"`.
+  - Added the headless `scenarios/network-dropout*` scenario (`network-dropout.json`, `network-dropout-world.json`, `network-dropout-control.json`, `network-dropout.ts`, `network-dropout.test.ts`) running in the `pnpm test:scenarios` gate alongside the unchanged seed-1 v1 scenario. Builds and runs the real starter firmware with a held 20 Hz manual drive stream, injects dropout at 4.010 s sim time, verifies pre-dropout motion and non-neutral PWM (`1640 µs` ESC / `1475 µs` steering), verifies the 500 ms failsafe neutralizes both actuators to `1500 µs` and logs `failsafe: no drive for 500 ms` at `4.500 s` sim time, holds neutral while drive commands continue, and repeats bit-identically with seed 1.
+  - Documented the feature and headless scenario in `docs/NETWORK-FAULTS.md`.
 - **Deviations from the brief**:
-- **Contract change requests**:
-- **Open questions**:
+  - Committed on the tool-provided worktree branch `t3/network-fault-simulation` (per dispatch instructions) rather than creating `ws/p3-02` directly.
+- **Contract change requests**: None.
+- **Open questions**: None.
