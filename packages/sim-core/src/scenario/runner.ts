@@ -122,6 +122,9 @@ export async function runScenario(
   if (!Number.isFinite(spec.seconds) || spec.seconds < 0) {
     throw new ScenarioInputError(`seconds must be a non-negative number, got ${spec.seconds}`);
   }
+  if (spec.physicsStage !== undefined && ![1, 2].includes(spec.physicsStage)) {
+    throw new ScenarioInputError(`physicsStage must be 1 or 2, got ${spec.physicsStage}`);
+  }
   const at = (file: string): string => path.resolve(io.cwd ?? process.cwd(), file);
   const car = parseWith(Car, await readJson(at(spec.car), 'car'), `car "${spec.car}"`);
   const world = await readWorld(spec.world, io);
@@ -175,6 +178,7 @@ export async function runScenario(
     track,
     seed: spec.seed,
     ...(spec.tickUs !== undefined ? { tickUs: spec.tickUs } : {}),
+    ...(spec.physicsStage !== undefined ? { physicsStage: spec.physicsStage } : {}),
     source,
   });
   const serial = createHash('sha256');

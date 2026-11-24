@@ -1,9 +1,18 @@
+import type { CreateActuatorModel } from '../api/actuators.ts';
 import type { CreateSensorModel } from '../api/sensors.ts';
-import { createActuatorModel } from '../actuators/index.ts';
-import { createSensorModel as createRealSensorModel } from '../sensors/index.ts';
+import type { PhysicsStage } from '../api/vehicle.ts';
+import { createActuatorModel, createStageTwoActuatorModel } from '../actuators/index.ts';
+import { createSensorModel, createStageTwoSensorModel, type LivePack } from '../sensors/index.ts';
 
 /**
- * The model factories a Run uses unless the caller overrides them.
+ * The model factories a Run uses unless the caller overrides them, for the
+ * selected physics stage. `pack` is the vehicle's battery.
  */
-export const defaultActuatorModel = createActuatorModel;
-export const defaultSensorModel: CreateSensorModel = (part) => createRealSensorModel(part);
+export function defaultModels(
+  stage: PhysicsStage,
+  pack: LivePack,
+): { actuator: CreateActuatorModel; sensor: CreateSensorModel } {
+  return stage === 2
+    ? { actuator: createStageTwoActuatorModel, sensor: createStageTwoSensorModel(pack) }
+    : { actuator: createActuatorModel, sensor: createSensorModel };
+}

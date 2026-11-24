@@ -117,6 +117,23 @@ describe('rcsim run', () => {
     expect(c.result?.metrics).toEqual(a.result?.metrics); // no randomness reaches the physics yet
   });
 
+  it('runs the physics stage --physics-stage selects, stage 1 by default', async () => {
+    const args = [...base, '--seconds', '5', '--script', 'into-cone.json'];
+    const unset = await rcsim(...args);
+    const one = await rcsim(...args, '--physics-stage', '1');
+    const two = await rcsim(...args, '--physics-stage', '2');
+    const again = await rcsim(...args, '--physics-stage', '2');
+    for (const r of [unset, one, two, again]) {
+      expect(r.err).toBe('');
+      expect(r.code).toBe(0);
+      expect(r.result?.metrics.simSeconds).toBe(5);
+      expect(r.result?.metrics.distanceM).toBeGreaterThan(0.5);
+    }
+    expect(one.result?.snapshotHash).toBe(unset.result?.snapshotHash);
+    expect(two.result?.snapshotHash).not.toBe(one.result?.snapshotHash);
+    expect(again.result?.snapshotHash).toBe(two.result?.snapshotHash);
+  });
+
   it('exits 2 for bad arguments and bad inputs, with a message on stderr', async () => {
     const cases: [string[], RegExp][] = [
       [['run', '--world', 'world.json', '--seconds', '1'], /--car is required/],
@@ -173,6 +190,14 @@ describe('rcsim run', () => {
         [...base, '--seconds', '1', '--script', 'idle.json', '--firmware', 'fw'],
         /--script or --firmware, not both/,
       ],
+      [
+        [...base, '--seconds', '1', '--script', 'idle.json', '--physics-stage', '3'],
+        /--physics-stage must be 1 or 2, got "3"/,
+      ],
+      [
+        [...base, '--seconds', '1', '--script', 'idle.json', '--physics-stage', ''],
+        /must be 1 or 2/,
+      ],
       [['fly'], /unknown command/],
       [['run', '--bogus'], /bogus/],
     ];
@@ -192,6 +217,23 @@ describe('rcsim run', () => {
 });
 
 describe('runScenario', () => {
+  it('rejects a physics stage other than 1 or 2', async () => {
+    await expect(
+      runScenario(
+        {
+          car: 'car.json',
+          world: 'world.json',
+          seconds: 1,
+          seed: 1,
+          physicsStage: 3 as 2,
+          script: 'idle.json',
+          assertions: [],
+        },
+        { cwd: dir },
+      ),
+    ).rejects.toThrow(ScenarioInputError);
+  });
+
   it('rejects a tick length that is not a positive whole number of microseconds', async () => {
     for (const tickUs of [0, -1, 1.5, Number.NaN]) {
       await expect(
@@ -240,6 +282,22 @@ describe('the rcsim executable', () => {
     // Hosted runners contend with other Vitest workers and have exceeded
     // the local 10 s budget on both Linux and macOS.
     expect(wallS).toBeLessThan(process.env['CI'] ? 20 : 10);
+  }, 30_000);
+
+  it('completes a stage-2 run with the selected model', () => {
+    const run = (...extra: string[]): ScenarioResult => {
+      const r = spawnSync(
+        process.execPath,
+        [bin, ...base, '--seconds', '5', '--script', 'into-cone.json', ...extra],
+        { cwd: dir, encoding: 'utf8' },
+      );
+      expect(r.stderr).toBe('');
+      expect(r.status).toBe(0);
+      return JSON.parse(r.stdout) as ScenarioResult;
+    };
+    const two = run('--physics-stage', '2', '--assert', 'distance > 0.5');
+    expect(two.end).toEqual({ kind: 'stopped' });
+    expect(two.snapshotHash).not.toBe(run().snapshotHash);
   }, 30_000);
 
   it('exits non-zero for a failed assertion', () => {

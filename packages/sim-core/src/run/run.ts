@@ -17,8 +17,9 @@ import { deviceKindOf, partContexts } from '../api/stubs/fake-run.ts';
 import type { RngStreams } from '../api/clock.ts';
 import { TickClock, createRngStreams } from '../clock/index.ts';
 import { LapCounter } from '../world/lap-counter.ts';
+import type { DriveOutput } from '../vehicle/command.ts';
 import { createPhysicsWorld, type PhysicsWorld } from '../world/world.ts';
-import { defaultActuatorModel, defaultSensorModel } from './default-models.ts';
+import { defaultModels } from './default-models.ts';
 
 const ACTUATOR_TEMPLATES = new Set(['servo', 'esc-motor']);
 const SENSOR_TEMPLATES = new Set(['distance-raycast', 'imu', 'voltage-divider']);
@@ -82,9 +83,12 @@ async function assemble(
   rng: RngStreams,
   world: PhysicsWorld,
 ): Promise<MeasuredRun> {
-  const vehicle = world.createVehicle({ car: options.car, catalog: options.catalog });
-  const createActuator = options.createActuatorModel ?? defaultActuatorModel;
-  const createSensor = options.createSensorModel ?? defaultSensorModel;
+  const physicsStage = options.physicsStage ?? 1;
+  // Rejects an unknown physics stage.
+  const vehicle = world.createVehicle({ car: options.car, catalog: options.catalog, physicsStage });
+  const defaults = defaultModels(physicsStage, vehicle);
+  const createActuator = options.createActuatorModel ?? defaults.actuator;
+  const createSensor = options.createSensorModel ?? defaults.sensor;
 
   const contexts = partContexts(options, rng);
   // Only wired parts get models, so every reading maps to a device.
@@ -209,12 +213,13 @@ async function assemble(
     // 3. actuators → vehicle
     let steerAngleRad = 0;
     let motorDuty = 0;
+    let brake: boolean | undefined;
     for (const actuator of actuators) {
       const out = actuator.update(t1Us);
       if (out.kind === 'steering') steerAngleRad = out.steerAngleRad;
-      else motorDuty = out.motorDuty;
+      else ({ motorDuty, brake } = out as DriveOutput);
     }
-    vehicle.applyCommand({ steerAngleRad, motorDuty });
+    vehicle.applyCommand({ steerAngleRad, motorDuty, ...(brake ? { brake } : {}) });
     // 4. physics; collisions and laps counted
     const events = world.step(clock.tickUs / 1_000_000, t1Us);
     collisions += events.collisions.length;

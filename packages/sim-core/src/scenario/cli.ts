@@ -1,6 +1,7 @@
 import { parseArgs } from 'node:util';
 import { ActuatorSourceEnded } from '../api/actuator-source.ts';
 import { parseAssertion, type ScenarioSpec } from '../api/scenario.ts';
+import type { PhysicsStage } from '../api/vehicle.ts';
 import { ScenarioInputError, readWorld, runScenario, type ScenarioIo } from './runner.ts';
 
 const USAGE = `usage: rcsim run --car <car.json> --world <world.json> --seconds <n> [options]
@@ -14,6 +15,8 @@ const USAGE = `usage: rcsim run --car <car.json> --world <world.json> --seconds 
                              (optional "port", or "line" for raw text; "everyMs" with "untilUs" repeats)
   --seed <n>                 seed for all randomness (default: the world file's)
   --tick-us <n>              tick length in microseconds (default 1000)
+  --physics-stage <1|2>      vehicle model (default 1). 2 adds tyre grip and slip, placed
+                             part masses, battery sag and ESC braking (docs/PHYSICS.md)
   --assert <expr>            assertion, repeatable: "collisions == 0", "laps >= 1",
                              "maxSpeed < 3" (metrics: collisions, laps, maxSpeed, distance,
                              simSeconds; speeds in m/s, distances in metres)
@@ -40,6 +43,7 @@ export async function main(argv: readonly string[], io: CliIo = {}): Promise<num
         seconds: { type: 'string' },
         seed: { type: 'string' },
         'tick-us': { type: 'string' },
+        'physics-stage': { type: 'string' },
         script: { type: 'string' },
         firmware: { type: 'string' },
         control: { type: 'string' },
@@ -79,6 +83,13 @@ export async function main(argv: readonly string[], io: CliIo = {}): Promise<num
       return value;
     };
 
+    const physicsStage = (text: string): PhysicsStage => {
+      if (text !== '1' && text !== '2') {
+        throw new ScenarioInputError(`--physics-stage must be 1 or 2, got "${text}"`);
+      }
+      return text === '1' ? 1 : 2;
+    };
+
     const spec: ScenarioSpec = {
       car: need('car'),
       world: need('world'),
@@ -89,6 +100,9 @@ export async function main(argv: readonly string[], io: CliIo = {}): Promise<num
           : (await readWorld(need('world'), io)).seed,
       ...(values['tick-us'] !== undefined
         ? { tickUs: number('tick-us', values['tick-us'], { integer: true, positive: true }) }
+        : {}),
+      ...(values['physics-stage'] !== undefined
+        ? { physicsStage: physicsStage(values['physics-stage']) }
         : {}),
       ...(values.script !== undefined ? { script: values.script } : {}),
       ...(values.firmware !== undefined ? { firmware: values.firmware } : {}),
