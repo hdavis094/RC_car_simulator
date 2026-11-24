@@ -8,7 +8,8 @@ import {
 } from '../shared/ipc.ts';
 import { errorText, fail } from './services/errors.ts';
 
-export type MainServices = Pick<RcsimApi, 'project' | 'catalog' | 'build' | 'pty'>;
+export type MainServices = Pick<RcsimApi, 'project' | 'catalog' | 'build' | 'pty'> &
+  Partial<Pick<RcsimApi, 'run' | 'worldEdit' | 'control'>>;
 
 function isAppUrl(url: string, rendererUrl: string): boolean {
   try {

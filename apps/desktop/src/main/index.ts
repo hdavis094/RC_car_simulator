@@ -5,6 +5,10 @@ import { registerIpc } from './ipc.ts';
 import { disposeRendererResources } from './renderer-lifecycle.ts';
 import { BuildService } from './services/build.ts';
 import { CatalogService } from './services/catalog.ts';
+import { ControlService } from './services/control/control-service.ts';
+import { SimService } from './services/sim/sim-service.ts';
+import { spawnUtilityHost } from './services/sim/utility-host.ts';
+import { WorldEditService } from './services/world-edit/world-edit-service.ts';
 import { ProjectService } from './services/project.ts';
 import { PtyService } from './services/pty.ts';
 
@@ -69,11 +73,35 @@ function createWindow(): BrowserWindow {
       join(root, 'packages/hal/bin/build-sim'),
   );
   const pty = new PtyService(project);
-  const removeIpc = registerIpc(window, { project, catalog, build, pty }, rendererUrl);
-  const removeLifecycle = disposeRendererResources(window.webContents, [build, pty]);
+  const run = new SimService({
+    project,
+    build,
+    catalog,
+    spawnHost: () => spawnUtilityHost(join(__dirname, 'sim-host.js')),
+  });
+  const control = new ControlService({ onRunStatus: run.onStatus });
+  const worldEdit = new WorldEditService({ project, sim: run });
+  const removeIpc = registerIpc(
+    window,
+    { project, catalog, build, pty, run, control, worldEdit },
+    rendererUrl,
+  );
+  const stopRun = (): void => {
+    run.dispose();
+    control.reset();
+  };
+  const removeLifecycle = disposeRendererResources(window.webContents, [
+    build,
+    pty,
+    { dispose: stopRun },
+  ]);
+  app.on('before-quit', stopRun);
   window.on('closed', () => {
     removeIpc();
     removeLifecycle();
+    app.off('before-quit', stopRun);
+    run.dispose();
+    control.dispose();
     build.dispose();
     pty.dispose();
     catalog.dispose();

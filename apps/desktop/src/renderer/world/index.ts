@@ -62,9 +62,6 @@ export {
   type WorldSceneData,
 } from './scene-data.ts';
 export {
-  BUILTIN_OVAL_TRACK,
-  BUILTIN_TECHNICAL_TRACK,
-  BUILTIN_TRACKS,
   buildTrackSurfaceGeometry,
   generateTrackMeshData,
   offsetTrackLoop,

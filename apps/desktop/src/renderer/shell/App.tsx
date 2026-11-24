@@ -1,9 +1,11 @@
+import { DEFAULT_PORT } from '@rcsim/control-protocol/messages';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { Diagnostic, ProjectInfo, RcsimApi } from '../../shared/ipc.ts';
 import { parseIpcError } from '../../shared/ipc.ts';
 import { TerminalRoot } from '../terminal/index.ts';
 import { useEditorStore } from '../terminal/editor-state.ts';
 import { WorkbenchRoot } from '../workbench/index.ts';
+import { useWorkbenchStore } from '../workbench/workbench-store.ts';
 import { WorldRoot, createWorldDockTabs } from '../world/index.ts';
 import { BottomPanel } from './BottomPanel.tsx';
 import { ENVIRONMENTS, useEnvironmentStore, type Environment } from './environment-store.ts';
@@ -29,6 +31,9 @@ export function App({ api = window.rcsim }: { api?: RcsimApi }): ReactNode {
   const buildStatus = useSessionStore((state) => state.buildStatus);
   const buildId = useSessionStore((state) => state.buildId);
   const run = useSessionStore((state) => state.run);
+  const controlPort = run?.netMappings.find(
+    (mapping) => mapping.proto === 'tcp' && mapping.firmwarePort === DEFAULT_PORT,
+  )?.hostPort;
   const documents = useEditorStore((state) => state.documents);
   const active = useEditorStore((state) => state.active);
   const report = (error: unknown): void => setError(parseIpcError(error).message);
@@ -73,6 +78,7 @@ export function App({ api = window.rcsim }: { api?: RcsimApi }): ReactNode {
     try {
       const next = create && dir ? await api.project.create(dir) : await api.project.open(dir);
       if (next) {
+        if (run && run.state !== 'ended') await api.run.stop().catch(report);
         useEditorStore.getState().reset();
         useSessionStore.getState().reset();
         setProject(next);
@@ -86,11 +92,19 @@ export function App({ api = window.rcsim }: { api?: RcsimApi }): ReactNode {
       setWorking(false);
     }
   };
+  const saveProjectEdits = async (): Promise<void> => {
+    await useEditorStore.getState().saveAll(api);
+    const workbench = useWorkbenchStore.getState();
+    if (workbench.dirty && !(await workbench.saveCar())) {
+      throw new Error('Save the car project in the Workbench before continuing.');
+    }
+    if (hasUnsavedChanges()) throw new Error('Some edits changed while saving. Try again.');
+  };
   const build = async (): Promise<void> => {
     if (!project || buildStatus === 'building') return;
     useSessionStore.getState().startBuild();
     try {
-      await useEditorStore.getState().saveAll(api);
+      await saveProjectEdits();
       const { buildId } = await api.build.start('sim');
       useSessionStore.setState({ buildId });
     } catch (error) {
@@ -245,13 +259,13 @@ export function App({ api = window.rcsim }: { api?: RcsimApi }): ReactNode {
       <div className="workspace" key={project?.dir ?? 'no-project'}>
         <main>
           <div className="environment-page" hidden={current !== 'workbench'}>
-            <WorkbenchRoot />
+            <WorkbenchRoot api={api} />
           </div>
           <div className="environment-page" hidden={current !== 'terminal'}>
             <TerminalRoot api={api} {...(project ? { projectDir: project.dir } : {})} />
           </div>
           <div className="environment-page" hidden={current !== 'world'}>
-            <WorldRoot api={api} />
+            <WorldRoot api={api} prepareRun={saveProjectEdits} controlConnectsAutomatically />
           </div>
         </main>
         {project ? (
@@ -264,6 +278,7 @@ export function App({ api = window.rcsim }: { api?: RcsimApi }): ReactNode {
           Build: {buildStatus}
         </span>
         <span>Run: {run?.state ?? 'idle'}</span>
+        {controlPort !== undefined ? <span>Control port {controlPort}</span> : null}
         <span className="status-end">
           {project ? 'Car project' : 'Open or create a car project to begin'}
           <span className="platform">{api.platform === 'darwin' ? 'macOS' : 'Linux'}</span>

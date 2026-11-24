@@ -38,7 +38,6 @@ import {
   type CameraMode,
   type OrbitCameraState,
 } from './scene-data.ts';
-import { BUILTIN_OVAL_TRACK, BUILTIN_TRACKS } from './track-mesh.ts';
 import { WorldScene, type EditorTool, type SceneRunMode } from './WorldScene.tsx';
 
 const DEFAULT_WORLD_FILE: WorldFile = {
@@ -164,6 +163,8 @@ export function createWorldDockTabs(api?: RcsimApi): readonly DockTab[] {
 export interface WorldRootProps {
   readonly api?: RcsimApi;
   readonly initialWorld?: WorldFile;
+  readonly prepareRun?: () => Promise<void>;
+  readonly controlConnectsAutomatically?: boolean;
   /**
    * When true, mounts a standalone `BottomPanel` containing `createWorldDockTabs(api)`.
    * Defaults to `false` (in `App.tsx`, the shell mounts World's dock tabs directly in its shared `BottomPanel`).
@@ -172,19 +173,26 @@ export interface WorldRootProps {
 }
 
 /** Root of the 3D World environment (P1-F). */
-export function WorldRoot({ api, initialWorld, showDock = false }: WorldRootProps = {}): ReactNode {
+export function WorldRoot({
+  api,
+  initialWorld,
+  prepareRun,
+  controlConnectsAutomatically = false,
+  showDock = false,
+}: WorldRootProps = {}): ReactNode {
   const resolvedApi = api ?? window.rcsim;
   primeControlLinkTracker(resolvedApi);
 
   const [interpolator] = useState<SnapshotInterpolator>(() => new SnapshotInterpolator());
   const latestSnapshotRef = useRef<StateSnapshot | null>(null);
+  const viewportRef = useRef<HTMLDivElement>(null);
   const simTimeRef = useRef<HTMLSpanElement>(null);
   const lapCounterRef = useRef<HTMLSpanElement>(null);
   const collisionCountRef = useRef<HTMLSpanElement>(null);
 
-  const [trackIds, setTrackIds] = useState<readonly string[]>(['oval', 'technical']);
-  const [track, setTrack] = useState<Track>(BUILTIN_OVAL_TRACK);
-  const trackRef = useRef<Track>(track);
+  const [trackIds, setTrackIds] = useState<readonly string[]>([]);
+  const [track, setTrack] = useState<Track | null>(null);
+  const trackRef = useRef<Track | null>(track);
   const [worldFile, setWorldFile] = useState<WorldFile>(() =>
     ensureWorldObstacleIds(initialWorld ?? DEFAULT_WORLD_FILE),
   );
@@ -258,52 +266,39 @@ export function WorldRoot({ api, initialWorld, showDock = false }: WorldRootProp
   }, []);
 
   const updateReadoutsDom = useCallback((snapshot: StateSnapshot): void => {
+    if (viewportRef.current) {
+      const [x, , z] = snapshot.car.pose.position;
+      viewportRef.current.dataset['carX'] = String(x);
+      viewportRef.current.dataset['carZ'] = String(z);
+    }
     const simTimeSeconds = (snapshot.timeUs / 1_000_000).toFixed(3);
-    if (simTimeRef.current) {
-      simTimeRef.current.innerHTML = `<strong>Sim time:</strong> ${simTimeSeconds} s`;
-    }
-    if (lapCounterRef.current) {
-      lapCounterRef.current.innerHTML = `<strong>Laps:</strong> ${snapshot.laps.count}`;
-    }
-    if (collisionCountRef.current) {
+    const time = simTimeRef.current?.lastChild;
+    const laps = lapCounterRef.current?.lastChild;
+    const collisions = collisionCountRef.current?.lastChild;
+    if (time) time.textContent = ` ${simTimeSeconds} s`;
+    if (laps) laps.textContent = ` ${snapshot.laps.count}`;
+    if (collisions) {
       const lastSuffix = snapshot.collisions.last ? ` (${snapshot.collisions.last})` : '';
-      collisionCountRef.current.innerHTML = `<strong>Collisions:</strong> ${snapshot.collisions.count}${lastSuffix}`;
+      collisions.textContent = ` ${snapshot.collisions.count}${lastSuffix}`;
     }
   }, []);
 
   const resetSnapshotState = useCallback(
-    (nextWorld: WorldFile = worldFileRef.current, nextTrack: Track = trackRef.current): void => {
+    (nextWorld: WorldFile = worldFileRef.current, nextTrack = trackRef.current): void => {
       latestSnapshotRef.current = null;
       interpolator.reset();
-      updateReadoutsDom(defaultSnapshotForWorld(nextWorld, nextTrack));
+      if (nextTrack) updateReadoutsDom(defaultSnapshotForWorld(nextWorld, nextTrack));
     },
     [interpolator, updateReadoutsDom],
   );
 
   const loadTrackById = useCallback(
     async (id: string, options?: { readonly resetInterpolator?: boolean }): Promise<Track> => {
-      try {
-        const loaded = await resolvedApi.worldEdit.loadTrack(id);
-        trackRef.current = loaded;
-        setTrack(loaded);
-        if (options?.resetInterpolator) {
-          resetSnapshotState(worldFileRef.current, loaded);
-        }
-        return loaded;
-      } catch (err) {
-        const parsed = parseIpcError(err);
-        // TODO(P2-01): remove when worldEdit is wired
-        const fallback = BUILTIN_TRACKS[id] ?? BUILTIN_OVAL_TRACK;
-        trackRef.current = fallback;
-        setTrack(fallback);
-        if (options?.resetInterpolator) {
-          resetSnapshotState(worldFileRef.current, fallback);
-        }
-        if (parsed.code !== 'not-implemented') {
-          setErrorMessage(parsed.message);
-        }
-        return fallback;
-      }
+      const loaded = await resolvedApi.worldEdit.loadTrack(id);
+      trackRef.current = loaded;
+      setTrack(loaded);
+      if (options?.resetInterpolator) resetSnapshotState(worldFileRef.current, loaded);
+      return loaded;
     },
     [resetSnapshotState, resolvedApi],
   );
@@ -311,6 +306,7 @@ export function WorldRoot({ api, initialWorld, showDock = false }: WorldRootProp
   const ensureControlConnected = useCallback(
     async (options?: { readonly force?: boolean }): Promise<boolean> => {
       if (controlConnectedRef.current) return true;
+      if (controlConnectsAutomatically) return false;
       if (connectInFlightRef.current) return connectInFlightRef.current;
 
       const now = performance.now();
@@ -343,7 +339,7 @@ export function WorldRoot({ api, initialWorld, showDock = false }: WorldRootProp
       connectInFlightRef.current = promise;
       return promise;
     },
-    [resolvedApi],
+    [controlConnectsAutomatically, resolvedApi],
   );
 
   // Discover tracks, layouts, and initial run state
@@ -366,14 +362,7 @@ export function WorldRoot({ api, initialWorld, showDock = false }: WorldRootProp
       })
       .catch((err) => {
         if (!alive) return;
-        const parsed = parseIpcError(err);
-        // TODO(P2-01): remove when worldEdit is wired
-        const fallback = BUILTIN_TRACKS[worldFileRef.current.trackId] ?? BUILTIN_OVAL_TRACK;
-        trackRef.current = fallback;
-        setTrack(fallback);
-        if (parsed.code !== 'not-implemented') {
-          setErrorMessage(parsed.message);
-        }
+        reportError(err);
       });
 
     void resolvedApi.worldEdit
@@ -414,7 +403,11 @@ export function WorldRoot({ api, initialWorld, showDock = false }: WorldRootProp
         resetSnapshotState();
       }
       if (info.trackId) {
-        void loadTrackById(info.trackId, { resetInterpolator: info.state === 'ended' });
+        if (trackRef.current?.id !== info.trackId) {
+          void loadTrackById(info.trackId, { resetInterpolator: info.state === 'ended' }).catch(
+            reportError,
+          );
+        }
       }
       if (
         (info.state === 'running' || info.state === 'starting' || info.state === 'paused') &&
@@ -455,6 +448,7 @@ export function WorldRoot({ api, initialWorld, showDock = false }: WorldRootProp
     loadTrackById,
     resetSnapshotState,
     resolvedApi,
+    reportError,
     updateReadoutsDom,
   ]);
 
@@ -464,14 +458,12 @@ export function WorldRoot({ api, initialWorld, showDock = false }: WorldRootProp
   const sceneRunMode: SceneRunMode = isRunning ? 'running' : isPaused ? 'paused' : 'idle';
 
   // Build structural scene data from editor worldFile and track (does not depend on 60 Hz snapshots)
-  const baseSnapshot = useMemo<StateSnapshot>(
-    () => defaultSnapshotForWorld(worldFile, track),
-    [track, worldFile],
-  );
-
   const sceneData = useMemo(
-    () => buildWorldSceneData(baseSnapshot, track, selectedObstacleId),
-    [baseSnapshot, selectedObstacleId, track],
+    () =>
+      track
+        ? buildWorldSceneData(defaultSnapshotForWorld(worldFile, track), track, selectedObstacleId)
+        : null,
+    [worldFile, selectedObstacleId, track],
   );
 
   const sendDriveCommand = useCallback(
@@ -1009,6 +1001,7 @@ export function WorldRoot({ api, initialWorld, showDock = false }: WorldRootProp
     setErrorMessage('');
     try {
       if (!runInfo || runInfo.state === 'ended') {
+        await prepareRun?.();
         const prevState = runInfoRef.current?.state;
         const nextWorld: WorldFile = { ...worldFileRef.current, seed };
         const started = await resolvedApi.run.start({ world: nextWorld, seed, speed });
@@ -1083,19 +1076,7 @@ export function WorldRoot({ api, initialWorld, showDock = false }: WorldRootProp
           // Use local worldFile when no active live layout in main
         }
       }
-      const validated = World.parse(payload);
-      try {
-        await resolvedApi.worldEdit.save(targetPath, validated);
-      } catch (saveErr) {
-        if (parseIpcError(saveErr).code === 'not-implemented') {
-          await resolvedApi.project.writeFile(
-            targetPath,
-            `${JSON.stringify(validated, null, 2)}\n`,
-          );
-        } else {
-          throw saveErr;
-        }
-      }
+      await resolvedApi.worldEdit.save(targetPath, World.parse(payload));
       setStatusMessage(`Saved ${targetPath}`);
       const layouts = await resolvedApi.worldEdit
         .listLayouts()
@@ -1113,17 +1094,7 @@ export function WorldRoot({ api, initialWorld, showDock = false }: WorldRootProp
     setStatusMessage('');
     try {
       const targetPath = normalizeLayoutPath(pathToLoad);
-      let parsedWorld: WorldFile;
-      try {
-        parsedWorld = World.parse(await resolvedApi.worldEdit.load(targetPath));
-      } catch (loadErr) {
-        if (parseIpcError(loadErr).code === 'not-implemented') {
-          const raw = await resolvedApi.project.readFile(targetPath);
-          parsedWorld = World.parse(JSON.parse(raw));
-        } else {
-          throw loadErr;
-        }
-      }
+      const parsedWorld = World.parse(await resolvedApi.worldEdit.load(targetPath));
       const loaded = ensureWorldObstacleIds(parsedWorld);
       worldFileRef.current = loaded;
       setWorldFile(loaded);
@@ -1689,23 +1660,26 @@ export function WorldRoot({ api, initialWorld, showDock = false }: WorldRootProp
       ) : null}
 
       {/* 3D World Scene Viewport */}
-      <WorldScene
-        sceneData={sceneData}
-        cameraMode={cameraMode}
-        orbitState={orbitState}
-        onOrbitChange={setOrbitState}
-        interpolator={interpolator}
-        runMode={sceneRunMode}
-        active={isWorldActive}
-        editable={editable}
-        activeTool={activeTool}
-        selectedObstacleId={selectedObstacleId}
-        onSelectObstacle={setSelectedObstacleId}
-        onPlaceObstacleAt={handlePlaceObstacleAt}
-        onMoveObstacleTo={handleMoveObstacleTo}
-        onRotateObstacleTo={handleRotateObstacleTo}
-        onObstacleDragEnd={handleObstacleDragEnd}
-      />
+      {sceneData ? (
+        <WorldScene
+          viewportRef={viewportRef}
+          sceneData={sceneData}
+          cameraMode={cameraMode}
+          orbitState={orbitState}
+          onOrbitChange={setOrbitState}
+          interpolator={interpolator}
+          runMode={sceneRunMode}
+          active={isWorldActive}
+          editable={editable}
+          activeTool={activeTool}
+          selectedObstacleId={selectedObstacleId}
+          onSelectObstacle={setSelectedObstacleId}
+          onPlaceObstacleAt={handlePlaceObstacleAt}
+          onMoveObstacleTo={handleMoveObstacleTo}
+          onRotateObstacleTo={handleRotateObstacleTo}
+          onObstacleDragEnd={handleObstacleDragEnd}
+        />
+      ) : null}
 
       {/* Optional standalone BottomPanel when showDock is explicitly passed in tests */}
       {showDock ? (

@@ -129,7 +129,7 @@ test('a real shell runs pwd in the car project and survives environment and dock
   await page.getByRole('button', { name: 'Close shell', exact: true }).click();
 });
 
-test('the sandbox exposes exactly the contract and stubs reject with not-implemented', async () => {
+test('the sandbox exposes exactly the contract and starts with no active run', async () => {
   const page = await app.firstWindow();
   expect(await page.evaluate(() => typeof require)).toBe('undefined');
   expect(await page.evaluate(() => typeof Reflect.get(window, 'process'))).toBe('undefined');
@@ -144,15 +144,7 @@ test('the sandbox exposes exactly the contract and stubs reject with not-impleme
   for (const service of Object.keys(IPC_METHODS) as (keyof typeof IPC_METHODS)[]) {
     expect(keys[service]).toEqual([...IPC_METHODS[service], ...IPC_EVENTS[service]].sort());
   }
-  const message = await page.evaluate(async () => {
-    try {
-      await window.rcsim.run.info();
-      return '';
-    } catch (error) {
-      return String(error);
-    }
-  });
-  expect(parseIpcError(message).code).toBe('not-implemented');
+  expect(await page.evaluate(() => window.rcsim.run.info())).toBeNull();
   // Recent projects survive a renderer reload. Current project remains in main.
   await page.reload();
   await expect(page.getByRole('combobox', { name: 'Recent projects' })).toContainText(projectDir);
@@ -187,7 +179,7 @@ test('file watching reloads a clean editor and preserves a dirty editor on exter
   await expect(editor).toContainText('changed again');
 });
 
-test('Serial Monitor receives the run serial stream, keeps history between tabs, and reports the send stub', async () => {
+test('Serial Monitor keeps run output between tabs and explains when no simulation is running', async () => {
   const page = await app.firstWindow();
   await page.getByRole('tab', { name: 'Serial Monitor', exact: true }).click();
   await app.evaluate(({ BrowserWindow }) => {
@@ -201,7 +193,7 @@ test('Serial Monitor receives the run serial stream, keeps history between tabs,
   await page.getByRole('textbox', { name: 'Serial send line' }).fill('status');
   await page.getByRole('button', { name: 'Send', exact: true }).click();
   await expect(
-    page.getByRole('alert').filter({ hasText: 'run.sendSerial is not implemented' }),
+    page.getByRole('alert').filter({ hasText: 'Start a simulation first.' }),
   ).toBeVisible();
   await page.getByRole('button', { name: 'Clear', exact: true }).click();
   await expect(page.getByLabel('Serial output')).not.toContainText('Firmware ready');

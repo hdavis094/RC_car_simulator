@@ -2,18 +2,10 @@
 // @vitest-environment jsdom
 /* eslint-disable no-restricted-imports */
 import ReactThreeTestRenderer from '@react-three/test-renderer';
-import {
-  SCHEMA_VERSION,
-  Track,
-  defaultCatalog,
-  exampleCar,
-  type World as WorldFile,
-} from '@rcsim/schema';
+import { SCHEMA_VERSION, defaultCatalog, exampleCar, type World as WorldFile } from '@rcsim/schema';
 import { OBSTACLE_SIZES, createRun, createScriptedSource, trackLibrary } from '@rcsim/sim-core';
 import { WHEEL_ORDER, type Quat, type StateSnapshot } from '@rcsim/sim-core/api';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import * as THREE from 'three';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFakeRcsimApi } from '../../shared/fake-api.ts';
@@ -21,8 +13,6 @@ import { ipcErrorMessage } from '../../shared/ipc.ts';
 import { useEnvironmentStore } from '../shell/environment-store.ts';
 import { useSessionStore } from '../shell/session.ts';
 import {
-  BUILTIN_OVAL_TRACK,
-  BUILTIN_TECHNICAL_TRACK,
   DEFAULT_ORBIT_CAMERA,
   MAX_CONSOLE_ENTRIES,
   NetworkConsole,
@@ -338,7 +328,7 @@ describe('3D World environment (P1-F)', () => {
         seed: 1,
         obstacles: [{ id: 'cone-1', type: 'cone', positionM: { x: 1, z: -2 }, yawDeg: 0 }],
       },
-      BUILTIN_OVAL_TRACK,
+      trackLibrary.load('oval'),
     );
 
     const prev: StateSnapshot = {
@@ -436,7 +426,7 @@ describe('3D World environment (P1-F)', () => {
     fireEvent.change(screen.getByLabelText('Placement yaw (deg)'), {
       target: { value: '20' },
     });
-    const ground = screen.getByTestId('world-ground');
+    const ground = await screen.findByTestId('world-ground');
     fireEvent.pointerDown(ground, { button: 0, clientX: 480, clientY: 240 });
     fireEvent.pointerUp(ground);
 
@@ -540,7 +530,7 @@ describe('3D World environment (P1-F)', () => {
     ).toBe('cone-5');
   });
 
-  it('aligns the pointer overlay and ground raycast at 16:9 aspect ratio (1600×900)', () => {
+  it('aligns the pointer overlay and ground raycast at 16:9 aspect ratio (1600×900)', async () => {
     const ovalTrack = trackLibrary.load('oval');
     const trackMesh = generateTrackMeshData(ovalTrack);
     const initialWorld: WorldFile = {
@@ -576,7 +566,7 @@ describe('3D World environment (P1-F)', () => {
     );
     const expectedUV = groundPointToViewportUV({ x: 2.4, z: -2.0 }, 1600 / 900, camTransform);
 
-    const marker = screen.getByTestId('obstacle-marker-cone-1');
+    const marker = await screen.findByTestId('obstacle-marker-cone-1');
     expect(marker.style.left).toBe(`${Math.min(96, Math.max(4, expectedUV.u * 100))}%`);
     expect(marker.style.top).toBe(`${Math.min(96, Math.max(4, expectedUV.v * 100))}%`);
 
@@ -1044,21 +1034,11 @@ describe('3D World environment (P1-F)', () => {
     expect(connectSpy).toHaveBeenCalledTimes(2);
   });
 
-  it('keeps renderer track fallbacks and OBSTACLE_DIMENSIONS identical to sim-core assets and OBSTACLE_SIZES', () => {
-    const ovalPath = resolve(__dirname, '../../../../../packages/sim-core/assets/tracks/oval.json');
-    const technicalPath = resolve(
-      __dirname,
-      '../../../../../packages/sim-core/assets/tracks/technical.json',
-    );
-    const simCoreOval = Track.parse(JSON.parse(readFileSync(ovalPath, 'utf8')));
-    const simCoreTechnical = Track.parse(JSON.parse(readFileSync(technicalPath, 'utf8')));
-
-    expect(BUILTIN_OVAL_TRACK).toEqual(simCoreOval);
-    expect(BUILTIN_TECHNICAL_TRACK).toEqual(simCoreTechnical);
+  it('keeps renderer obstacle dimensions identical to sim-core', () => {
     expect(OBSTACLE_DIMENSIONS).toEqual(OBSTACLE_SIZES);
   });
 
-  it('rejects path traversal and paths outside worlds/ in normalizeLayoutPath and validates with World.parse before save fallback writes', async () => {
+  it('rejects path traversal and paths outside worlds/ in normalizeLayoutPath and validates the layout before attempting to save', async () => {
     expect(normalizeLayoutPath('oval-cones')).toBe('worlds/oval-cones.json');
     expect(normalizeLayoutPath('worlds/custom.json')).toBe('worlds/custom.json');
     expect(() => normalizeLayoutPath('../outside.json')).toThrow(/Invalid layout path/);
@@ -1068,12 +1048,7 @@ describe('3D World environment (P1-F)', () => {
     expect(() => normalizeLayoutPath('other-dir/file.json')).toThrow(/Invalid layout path/);
 
     const fake = createFakeWithRealTracks();
-    fake.api.worldEdit.save = vi
-      .fn()
-      .mockRejectedValue(
-        new Error(ipcErrorMessage('not-implemented', 'worldEdit.save not implemented')),
-      );
-    const writeFileSpy = vi.spyOn(fake.api.project, 'writeFile');
+    const saveSpy = vi.spyOn(fake.api.worldEdit, 'save');
 
     const invalidWorld = {
       schemaVersion: SCHEMA_VERSION,
@@ -1089,7 +1064,7 @@ describe('3D World environment (P1-F)', () => {
     await waitFor(() => {
       expect(screen.getByRole('alert')).toBeDefined();
     });
-    expect(writeFileSpy).not.toHaveBeenCalled();
+    expect(saveSpy).not.toHaveBeenCalled();
     unmount();
 
     render(<WorldRoot api={fake.api} />);
@@ -1100,16 +1075,16 @@ describe('3D World environment (P1-F)', () => {
     await waitFor(() => {
       expect(screen.getByRole('alert').textContent).toContain('Invalid layout path');
     });
-    expect(writeFileSpy).not.toHaveBeenCalled();
+    expect(saveSpy).not.toHaveBeenCalled();
 
     fireEvent.change(screen.getByLabelText('Layout path'), {
-      target: { value: 'worlds/valid-fallback.json' },
+      target: { value: 'worlds/valid.json' },
     });
     fireEvent.click(screen.getByTestId('world-save-btn'));
     await waitFor(() => {
-      expect(writeFileSpy).toHaveBeenCalledWith(
-        'worlds/valid-fallback.json',
-        expect.stringContaining('"trackId": "oval"'),
+      expect(saveSpy).toHaveBeenCalledWith(
+        'worlds/valid.json',
+        expect.objectContaining({ trackId: 'oval' }),
       );
     });
   });
@@ -1640,7 +1615,7 @@ describe('3D World environment (P1-F)', () => {
     expect(screen.queryByRole('tab', { name: 'Network Console' })).toBeNull();
 
     // 2. data-ready is 'fallback' (not 'true') when WebGL is unavailable in jsdom
-    const viewport = screen.getByTestId('world-viewport');
+    const viewport = await screen.findByTestId('world-viewport');
     expect(viewport.getAttribute('data-ready')).toBe('fallback');
     expect(viewport.getAttribute('data-active')).toBe('false');
 
@@ -1854,7 +1829,7 @@ describe('3D World environment (P1-F)', () => {
     expect(fake.calls.some((c) => c.service === 'control' && c.method === 'disconnect')).toBe(true);
   });
 
-  it('CI fixes: passes pointer events through existing obstacle markers while a placement tool is active, deselects on Escape, keeps editor toolbar single-row, and probes WebGL creation errors', () => {
+  it('CI fixes: passes pointer events through existing obstacle markers while a placement tool is active, deselects on Escape, keeps editor toolbar single-row, and probes WebGL creation errors', async () => {
     const fake = createFakeWithRealTracks();
     render(<WorldRoot api={fake.api} />);
 
@@ -1863,7 +1838,7 @@ describe('3D World environment (P1-F)', () => {
 
     // Select Cone tool and place cone-1
     fireEvent.click(screen.getByTestId('palette-tool-cone'));
-    const ground = screen.getByTestId('world-ground');
+    const ground = await screen.findByTestId('world-ground');
     fireEvent.pointerDown(ground, { button: 0, clientX: 420, clientY: 280 });
     fireEvent.pointerUp(ground);
 

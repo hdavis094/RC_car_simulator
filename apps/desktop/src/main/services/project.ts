@@ -48,7 +48,7 @@ export class ProjectService implements ProjectApi {
   }
 
   /** Reject traversal and symlinks outside the project, including new-file parents. */
-  async resolvePath(path: string): Promise<string> {
+  async resolvePath(path: string, directory?: 'worlds'): Promise<string> {
     const root = this.requireProject().dir;
     if (
       typeof path !== 'string' ||
@@ -60,12 +60,15 @@ export class ProjectService implements ProjectApi {
       fail('invalid', 'Expected a project-relative path with / separators.');
     }
     const target = resolve(root, path);
+    const scope = directory === 'worlds' ? join(root, directory) : root;
     if (!inside(root, target) || target === root) fail('invalid', 'Path escapes the car project.');
     let ancestor = target;
     for (;;) {
       try {
         const actual = await realpath(ancestor);
-        if (!inside(root, actual)) fail('invalid', 'Symlink escapes the car project.');
+        if (!inside(scope, resolve(actual, relative(ancestor, target)))) {
+          fail('invalid', directory ? 'Path escapes worlds/.' : 'Symlink escapes the car project.');
+        }
         break;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
@@ -140,10 +143,13 @@ export class ProjectService implements ProjectApi {
     await mkdir(root, { recursive: true });
     await cp(this.options.templateDir, root, {
       recursive: true,
-      filter: (source) =>
-        !['node_modules', 'package.json', 'README.md', '.git', '.rcsim', '.pio'].includes(
-          basename(source),
-        ),
+      filter: (source) => {
+        const entry = relative(this.options.templateDir, source);
+        return (
+          !entry ||
+          ['car.json', 'platformio.ini', 'include', 'src'].includes(entry.split(sep)[0] ?? '')
+        );
+      },
     });
     try {
       await stat(join(root, 'car.json'));
@@ -228,12 +234,12 @@ export class ProjectService implements ProjectApi {
     await visit(root);
     return entries;
   }
-  async readFile(path: string): Promise<string> {
-    return readFile(await this.resolvePath(path), 'utf8');
+  async readFile(path: string, directory?: 'worlds'): Promise<string> {
+    return readFile(await this.resolvePath(path, directory), 'utf8');
   }
-  async writeFile(path: string, content: string): Promise<void> {
+  async writeFile(path: string, content: string, directory?: 'worlds'): Promise<void> {
     if (typeof content !== 'string') fail('invalid', 'File content must be text.');
-    const target = await this.resolvePath(path);
+    const target = await this.resolvePath(path, directory);
     await mkdir(dirname(target), { recursive: true });
     await writeFile(target, content, 'utf8');
   }

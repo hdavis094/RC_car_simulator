@@ -10,6 +10,7 @@ import {
   type ErrorInfo,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
+  type RefObject,
   type WheelEvent as ReactWheelEvent,
 } from 'react';
 import * as THREE from 'three';
@@ -792,6 +793,7 @@ export function WorldR3FScene({
 export type EditorTool = 'select' | ObstacleType;
 
 export interface WorldSceneProps {
+  readonly viewportRef?: RefObject<HTMLDivElement | null>;
   readonly sceneData: WorldSceneData;
   readonly cameraMode: CameraMode;
   readonly orbitState: OrbitCameraState;
@@ -818,6 +820,7 @@ export interface WorldSceneProps {
 }
 
 export function WorldScene({
+  viewportRef: sharedViewportRef,
   sceneData,
   cameraMode,
   orbitState,
@@ -834,7 +837,8 @@ export function WorldScene({
   onRotateObstacleTo,
   onObstacleDragEnd,
 }: WorldSceneProps): ReactNode {
-  const viewportRef = useRef<HTMLDivElement>(null);
+  const localViewportRef = useRef<HTMLDivElement>(null);
+  const viewportRef = sharedViewportRef ?? localViewportRef;
   const liveCameraRef = useRef<THREE.Camera | null>(null);
   const markerElementRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const [canvasReady, setCanvasReady] = useState(false);
@@ -882,7 +886,7 @@ export function WorldScene({
     const observer = new ResizeObserver(() => updateSize());
     observer.observe(el);
     return () => observer.disconnect();
-  }, []);
+  }, [viewportRef]);
 
   const cameraTransform = useMemo(() => {
     const sampled = runMode === 'idle' ? null : interpolator.latest();
@@ -944,7 +948,7 @@ export function WorldScene({
         yawDeg: obs.yawDeg,
       });
     }
-  }, [cameraTransform, sceneData.obstacles, viewportSize]);
+  }, [cameraTransform, sceneData.obstacles, viewportRef, viewportSize]);
 
   const getViewportRect = (): {
     readonly left: number;

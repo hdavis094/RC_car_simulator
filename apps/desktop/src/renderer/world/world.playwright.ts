@@ -7,12 +7,7 @@ import { access, copyFile, mkdir, mkdtemp, readFile, realpath, rm } from 'node:f
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import {
-  BUILTIN_OVAL_TRACK,
-  computeCameraTransform,
-  generateTrackMeshData,
-  groundPointToViewportUV,
-} from './index.ts';
+import { computeCameraTransform, generateTrackMeshData, groundPointToViewportUV } from './index.ts';
 
 const desktop = resolve(__dirname, '../../..');
 const executablePath = createRequire(join(desktop, 'package.json'))('electron') as string;
@@ -224,7 +219,9 @@ test('renders the 3D World oval track WebGL canvas, places three cones, saves wo
 
   const pointerLayer = page.getByTestId('world-ground');
 
-  const trackMesh = generateTrackMeshData(BUILTIN_OVAL_TRACK);
+  const trackMesh = generateTrackMeshData(
+    await page.evaluate(() => window.rcsim.worldEdit.loadTrack('oval')),
+  );
   const topDownCamera = computeCameraTransform(
     'top-down',
     { position: [carX, 0, carZ], rotation: [0, 0, 0, 1] },

@@ -15,6 +15,12 @@ describe('ProjectService and CatalogService', () => {
     const templateDir = join(dir, 'template');
     await mkdir(join(templateDir, 'src'), { recursive: true });
     await writeFile(join(templateDir, 'src/main.cpp'), 'void setup() {}\nvoid loop() {}\n');
+    await mkdir(join(templateDir, 'include'));
+    await writeFile(join(templateDir, 'platformio.ini'), '[env:esp32dev]\n');
+    await writeFile(join(templateDir, 'package.json'), '{}');
+    await mkdir(join(templateDir, 'scripts'));
+    await mkdir(join(templateDir, 'test'));
+    await mkdir(join(templateDir, '.rcsim'));
     project = new ProjectService({
       templateDir,
       recentFile: join(dir, 'settings/recent.json'),
@@ -32,6 +38,21 @@ describe('ProjectService and CatalogService', () => {
     const info = await project.create(join(dir, 'My car'));
     expect(info.dir).toBe(join(dir, 'My car'));
     expect(await project.readFile('src/main.cpp')).toContain('void setup()');
+    expect(await project.readFile('platformio.ini')).toContain('[env:esp32dev]');
+    expect((await project.listFiles()).map((entry) => entry.path)).toEqual([
+      'car.json',
+      'include',
+      'include/car_config.h',
+      'platformio.ini',
+      'src',
+      'src/main.cpp',
+    ]);
+    await expect(readFile(join(info.dir, 'package.json'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    for (const folder of ['scripts', 'test', '.rcsim']) {
+      await expect(realpath(join(info.dir, folder))).rejects.toMatchObject({ code: 'ENOENT' });
+    }
     expect(await project.readFile('include/car_config.h')).toBe(
       generateCarConfigHeader(exampleCar, defaultCatalog),
     );
@@ -81,6 +102,19 @@ describe('ProjectService and CatalogService', () => {
     await expect(readFile(outside, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     await project.writeFile('new/nested/file.txt', 'inside');
     expect(await project.readFile('new/nested/file.txt')).toBe('inside');
+  });
+
+  it('keeps layout access inside worlds/ even through in-project symlinks', async () => {
+    const info = await project.create(join(dir, 'car'));
+    await project.writeFile('worlds/nested/layout.json', '{}', 'worlds');
+    await symlink('../car.json', join(info.dir, 'worlds/link.json'));
+    await expect(project.readFile('worlds/link.json', 'worlds')).rejects.toThrow(
+      'Path escapes worlds/',
+    );
+    await expect(project.writeFile('worlds/link.json', '{}', 'worlds')).rejects.toThrow(
+      'Path escapes worlds/',
+    );
+    expect((await project.readCar()).ok).toBe(true);
   });
 
   it('opens the project when recents cannot be persisted', async () => {
